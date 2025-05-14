@@ -1,0 +1,18 @@
+# Rust build artifacts
+/target
+
+# Python virtual environment
+venv/
+
+# VS Code settings and caches
+.vscode/
+*.code-workspace
+
+# Optional: Node modules (if needed)
+/node_modules
+
+# macOS system files
+.DS_Store
+
+# Env files
+.env

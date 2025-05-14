@@ -1,13 +1,11 @@
 use crate::dex::http_utils::HttpRateLimiter;
 use crate::dex::quote::{DexClient, Quote}; // Use the shared Quote
-use anyhow::{anyhow, Result};
+use anyhow::anyhow;
 use async_trait::async_trait;
 use log::{error, warn};
 use reqwest::Client;
-use serde::{Deserialize, Serialize};
-use solana_sdk::pubkey::Pubkey;
+use serde::Deserialize;
 use std::env;
-use std::str::FromStr;
 use std::time::Instant;
 use once_cell::sync::Lazy;
 use std::time::Duration;

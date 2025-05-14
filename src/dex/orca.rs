@@ -5,11 +5,11 @@ use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use log::{error, warn};
 use reqwest::Client;
-use serde::Deserialize; // Keep Deserialize for API responses
+ // Keep Deserialize for API responses
 use solana_sdk::pubkey::Pubkey;
 use std::env;
 use std::str::FromStr;
-use std::sync::Arc; // For better logging
+ // For better logging
 use std::time::Instant; // For accurate latency measurement
 
 #[derive(Debug, Clone)]

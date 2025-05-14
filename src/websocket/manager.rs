@@ -3,7 +3,6 @@ use crate::solana::websocket::SolanaWebsocketManager;
 use crate::websocket::handlers::parse_account_update;
 use crate::websocket::market_data::CryptoDataProvider;
 use crate::solana::websocket::RawAccountUpdate;
-use crate::arbitrage::calculator::is_profitable;
 use log::{info, warn};
 use solana_sdk::pubkey::Pubkey;
 use std::collections::HashMap;
@@ -65,7 +64,7 @@ impl ArbitrageEngine {
 
             tokio::spawn(async move {
                 while let Ok(update) = receiver.recv().await {
-                    let mut guard = pools.write().await;
+                    let guard = pools.write().await;
                     if let RawAccountUpdate::Account { pubkey, data, .. } = &update {
                         use solana_account_decoder::{UiAccount, UiAccountData, UiAccountEncoding};
                         use solana_client::rpc_response::RpcKeyedAccount;

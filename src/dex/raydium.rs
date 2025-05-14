@@ -6,7 +6,7 @@ use async_trait::async_trait;
 use once_cell::sync::Lazy;
 use log::{error, warn};
 use reqwest::Client;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use solana_sdk::pubkey::Pubkey;
 use std::env;
 use std::str::FromStr;

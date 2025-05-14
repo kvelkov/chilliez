@@ -10,7 +10,6 @@ pub mod whirlpool;
 pub mod http_utils;
 
 pub use crate::dex::quote::DexClient;
-use crate::dex::quote::Quote;
 use log::info;
 use std::sync::Arc;
 
@@ -19,7 +18,6 @@ use crate::dex::meteora::MeteoraClient;
 use crate::dex::orca::OrcaClient;
 use crate::dex::phoenix::PhoenixClient;
 use crate::dex::raydium::RaydiumClient;
-use crate::dex::whirlpool::WhirlpoolClient;
 
 /// Synchronously get all DEX client instances.
 /// Each client is boxed as a trait object.

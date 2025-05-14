@@ -1,4 +1,3 @@
-use crate::arbitrage::calculator::is_profitable;
 use crate::dex::pool::{DexType, PoolInfo};
 use crate::solana::websocket::{SolanaWebsocketManager, RawAccountUpdate};
 use crate::websocket::market_data::CryptoDataProvider;
@@ -81,7 +80,7 @@ impl ArbitrageEngine {
                                 let parsed_update = AccountUpdate { pubkey, reserve_a, reserve_b };
                                 let mut guard = pools.write().await;
                                 if let Some(pool_arc) = guard.get_mut(&parsed_update.pubkey) {
-                                    let mut pool = Arc::make_mut(pool_arc);
+                                    let pool = Arc::make_mut(pool_arc);
                                     pool.token_a.reserve = parsed_update.reserve_a;
                                     pool.token_b.reserve = parsed_update.reserve_b;
                                 }

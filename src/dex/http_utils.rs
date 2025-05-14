@@ -2,8 +2,7 @@
 //! Shared async HTTP utility for rate limiting, exponential backoff, and fallback logic for DEX API requests.
 
 use anyhow::{anyhow, Result};
-use futures::future::BoxFuture;
-use log::{error, warn};
+use log::warn;
 use reqwest::{Client, RequestBuilder, Response};
 use std::sync::Arc;
 use std::time::Duration;

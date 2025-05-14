@@ -30,7 +30,7 @@ async fn main() -> anyhow::Result<()> {
 
     check_and_print_env_vars();
 
-    let mut metrics = Metrics::new();
+    let metrics = Metrics::new();
     let dex_clients = get_all_clients_arc().await;
 
     // ✅ Ensure `pools` matches expected type: `Arc<RwLock<HashMap<Pubkey, Arc<PoolInfo>>>>`

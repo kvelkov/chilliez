@@ -39,6 +39,17 @@ pub struct PoolToken {
     pub reserve: u64,
 }
 
+impl Default for PoolToken {
+    fn default() -> Self {
+        PoolToken {
+            mint: Pubkey::default(),
+            symbol: String::new(),
+            decimals: 0,
+            reserve: 0,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub enum DexType {
     Raydium,

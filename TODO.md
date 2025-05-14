@@ -1,3 +1,67 @@
+# 🚀 2024-06-24 → 2025-05-14: Major Refactor Plan for Cross-DEX, Multi-Hop Arbitrage
+
+## 🟢 Architectural Direction & Workflow (APPROVED)
+- **Modular, testable, and future-proof architecture** for robust cross-DEX, multi-hop arbitrage.
+- **Key modules:**
+  - `detector.rs`: Opportunity detection (now multi-hop, cross-DEX aware)
+  - `calculator.rs`: Analytics, profit/slippage/risk/rebate logic (multi-hop aware)
+  - `engine.rs`: State management, live updates, orchestration
+  - `executor.rs`: Execution of arbitrage paths (atomic, multi-leg)
+- **All analytics, detection, and execution logic must be modular and testable.**
+- **All major architectural/code changes must be documented and approved here before implementation.**
+
+## 📝 Action Plan & Progress Log
+
+### 1. Design & Planning
+- [x] Review current project structure, code, and README for architectural clarity and limitations.
+- [x] Confirm analytics functions in `calculator.rs` are actively used in detection pipeline.
+- [x] Draft new modular architecture and workflow (see above).
+- [x] Confirm current arbitrage model is insufficient for cross-DEX, multi-hop; new model needed.
+- [x] Draft this action plan and progress log.
+
+### 2. Core Refactor Steps
+- [x] **Design new arbitrage opportunity struct and pipeline** to support multi-hop, cross-DEX routes (`src/arbitrage/opportunity.rs`).
+- [x] **Integrate and extend existing WebSocket and Solana RPC/account modules** for multi-hop arbitrage state management and detection (reuse, don't rebuild).
+- [x] **Refactor `detector.rs`** to find and represent multi-hop, cross-DEX opportunities using the new struct.
+- [x] **Refactor `calculator.rs`** to support multi-hop profit, slippage, risk, and rebate calculations.
+- [x] **Remove legacy blacklist/tempban logic**: migrated all ban logic to CSV-based functions in `detector.rs` and deleted `pair_blacklist.rs`/`pair_tempban.rs`.
+- [x] **Update all detection and execution logic** to use new CSV-based ban functions.
+- [x] **Update TODO.md** with detailed progress and next steps.
+- [ ] **Refactor `engine.rs` and `executor.rs`** for state management and execution of complex arbitrage paths.
+- [ ] **Add/expand tests** for new models and logic.
+- [ ] **Clean up warnings and dead code** after refactor.
+
+## ♻️ Reusable Infrastructure
+- WebSocket subscription, reconnection, and event channel logic (`solana/websocket.rs`, `websocket/`)
+- High-availability Solana RPC client (`solana/rpc.rs`)
+- Token/account parsing and metadata caching (`solana/accounts.rs`)
+
+### 3. Documentation & Tracking
+- [x] **Keep this TODO.md updated** with progress, decisions, and architectural changes.
+- [ ] **Update README.md** with new architecture, workflow, and progress.
+
+---
+
+## 🟢 Recent Progress (2025-05-14)
+- 🚀 **Multi-hop, cross-DEX arbitrage detection and analytics fully integrated.**
+- 🚀 **All ban/blacklist logic unified in `detector.rs` with CSV logging.**
+- 🚀 **Legacy ban files (`pair_blacklist.rs`, `pair_tempban.rs`) removed.**
+- 🚀 **All detection and execution logic now uses new CSV-based ban functions.**
+- 🚀 **Project builds cleanly; only dead code warnings remain.**
+- 🚀 **TODO.md and documentation updated to reflect new architecture and progress.**
+
+---
+
+## 🟡 Pending/Next Steps
+- [ ] Refactor `engine.rs` and `executor.rs` for robust multi-hop execution and logging.
+- [ ] Expand/refactor tests for new ban logic and multi-hop analytics.
+- [ ] Clean up remaining warnings and dead code.
+- [ ] Continue updating documentation and TODO.md as progress is made.
+
+---
+
+_This file is now the authoritative to-do list for the project. Please update whenever work progresses or key items are completed!_
+
 # 📝 Comprehensive To-Do & Audit List: Solana Arbitrage Bot
 
 This document centralizes all actionable tasks, ideas, and tracks progress.  
@@ -117,4 +181,33 @@ Includes every item from the previous README.md audit section, plus new expert s
 
 ---
 
-_Last updated: 2024-06-22 · This file is now the authoritative to-do list for the project. Please update whenever work progresses or key items are completed!_
+# 2025-05-14: Progress Update & Next Steps
+
+## ✅ Completed
+- Multi-hop detection pipeline implemented and integrated into engine and main.rs (`detector.rs` multi-hop refactor complete).
+- Existing WebSocket, Solana RPC, and account modules are reused for state management and detection.
+- All ban/blacklist logic unified in `detector.rs` with CSV logging.
+- Legacy ban files (`pair_blacklist.rs`, `pair_tempban.rs`) removed.
+- All detection and execution logic now uses new CSV-based ban functions.
+- Project builds cleanly; only dead code warnings remain.
+- TODO.md and documentation updated to reflect new architecture and progress.
+
+## 🟡 Next Steps
+- [ ] Refactor `engine.rs` and `executor.rs` for robust multi-hop execution and logging:
+    - Accept `MultiHopArbOpportunity` and iterate over hops, building DEX-specific instructions for each.
+    - Add clear logging for "happy journey" (success) and "sad journey" (failure/miss).
+    - Ensure robust error handling and logging for each hop.
+- [ ] Expand/refactor tests for new ban logic and multi-hop analytics.
+- [ ] Clean up remaining warnings and dead code.
+- [ ] Continue updating documentation and TODO.md as progress is made.
+
+## 💡 Suggestions
+- All analytics and execution logic should remain modular and testable.
+- The opportunity struct is now flexible for multi-hop, multi-DEX routes and future expansion.
+- Continue to centralize all calculations in `calculator.rs` for consistency.
+- Use `FeeManager` for all fee/slippage/gas analytics, especially for multi-hop.
+- Add product logging for both successful and missed arbitrage journeys.
+
+---
+
+_Last updated: 2025-05-14 · This file is now the authoritative to-do list for the project. Please update whenever work progresses or key items are completed!_

@@ -1,18 +1,20 @@
-pub mod websocket;
 mod arbitrage;
 mod config;
 mod dex;
 mod error;
 mod metrics;
 mod solana;
+pub mod websocket;
 
-use arbitrage::dynamic_threshold::{VolatilityTracker, recommended_min_profit_threshold};
-
+use arbitrage::dynamic_threshold::{recommended_min_profit_threshold, VolatilityTracker};
 use arbitrage::engine::ArbitrageEngine;
+use arbitrage::executor::ArbitrageExecutor;
 use config::check_and_print_env_vars;
 use dex::get_all_clients_arc;
+use futures::future::join_all;
 use metrics::Metrics;
 use solana::rpc::SolanaRpcClient;
+use solana_sdk::signature::read_keypair_file;
 use std::collections::HashMap;
 use std::env;
 use std::sync::Arc;
@@ -20,8 +22,6 @@ use std::time::Duration;
 use tokio::signal;
 use tokio::sync::RwLock;
 use tokio::time::interval;
-use arbitrage::executor::ArbitrageExecutor;
-use solana_sdk::signature::read_keypair_file;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -59,12 +59,15 @@ async fn main() -> anyhow::Result<()> {
 
     // Create the raw Solana RpcClient for ArbitrageExecutor
     let rpc_url = std::env::var("RPC_URL").unwrap_or_else(|_| primary_endpoint.to_string());
-    let rpc_client = Arc::new(solana_client::nonblocking::rpc_client::RpcClient::new(rpc_url));
+    let rpc_client = Arc::new(solana_client::nonblocking::rpc_client::RpcClient::new(
+        rpc_url,
+    ));
 
     let paper_trading = env::var("PAPER_TRADING").unwrap_or_else(|_| "false".to_string());
     let simulation_mode = paper_trading.to_lowercase() == "true";
 
-    let wallet_path = env::var("TRADER_WALLET_KEYPAIR_PATH").expect("TRADER_WALLET_KEYPAIR_PATH must be set");
+    let wallet_path =
+        env::var("TRADER_WALLET_KEYPAIR_PATH").expect("TRADER_WALLET_KEYPAIR_PATH must be set");
     let wallet = Arc::new(read_keypair_file(wallet_path).expect("Failed to read keypair file"));
 
     // Create ArbitrageExecutor with simulation_mode and correct RpcClient type
@@ -77,7 +80,7 @@ async fn main() -> anyhow::Result<()> {
     );
 
     let arbitrage_engine = Arc::new(ArbitrageEngine::new(
-        pools,
+        pools.clone(),
         min_profit_threshold,
         max_slippage,
         tx_fee_lamports,
@@ -87,7 +90,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Initialize volatility tracker with a window of 20 samples
     let mut volatility_tracker = VolatilityTracker::new(20);
-    
+
     // Spawn a background task to update dynamic threshold periodically
     let engine_handle = arbitrage_engine.clone();
     let threshold_task = tokio::spawn(async move {
@@ -95,7 +98,7 @@ async fn main() -> anyhow::Result<()> {
         loop {
             intv.tick().await;
             // Example: Sample most recent price (stub: 1.0, replace with real price)
-            let simulated_price = 1.0;  // TODO: Pull from actual price feed!
+            let simulated_price = 1.0; // TODO: Pull from actual price feed!
             volatility_tracker.add_price(simulated_price);
             let vol = volatility_tracker.volatility();
             let new_threshold = recommended_min_profit_threshold(vol);
@@ -104,11 +107,33 @@ async fn main() -> anyhow::Result<()> {
         }
     });
 
+    // --- Multi-hop arbitrage detection via engine ---
+    // Example: Run multi-hop detection once at startup (replace with loop or event-driven in production)
+    let multihop_opps = arbitrage_engine.discover_multihop_opportunities().await;
+    println!(
+        "Found {} multi-hop arbitrage opportunities (engine)",
+        multihop_opps.len()
+    );
+    let profitable_opps: Vec<_> = multihop_opps
+        .into_iter()
+        .filter(|opp| opp.is_profitable(min_profit_threshold))
+        .collect();
+    let exec_futs = profitable_opps.iter().map(|opp| {
+        let executor = &executor;
+        async move {
+            match executor.execute_multihop(opp).await {
+                Ok(sig) => println!("Executed multi-hop trade: txid={}", sig),
+                Err(e) => eprintln!("Failed to execute multi-hop trade: {}", e),
+            }
+        }
+    });
+    join_all(exec_futs).await;
+
     // Wait for shutdown signal
     signal::ctrl_c()
         .await
         .expect("Failed to listen for shutdown");
-    
+
     // Cancel the threshold update task
     threshold_task.abort();
 

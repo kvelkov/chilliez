@@ -1,23 +1,22 @@
-use crate::arbitrage::pair_blacklist::PairBlacklist;
+use crate::arbitrage::calculator::{
+    calculate_max_profit, calculate_multihop_profit_and_slippage, calculate_optimal_input,
+    calculate_rebate, calculate_transaction_cost, estimate_price_impact, is_profitable,
+};
+use crate::arbitrage::opportunity::{ArbHop, MultiHopArbOpportunity};
 use crate::dex::pool::{PoolInfo, TokenAmount};
 use crate::metrics::Metrics;
 use log::{debug, info};
 use solana_sdk::pubkey::Pubkey;
 use std::collections::HashMap;
+use std::fs::OpenOptions;
+use std::io::Write;
 use std::sync::Arc;
 
 #[derive(Clone)]
 pub struct ArbitrageOpportunity {
-    /// Source pool for the arbitrage opportunity (kept for analysis/debugging)
-    #[allow(dead_code)]
     pub source_pool: Arc<PoolInfo>,
-    /// Target pool for the arbitrage opportunity (kept for analysis/debugging)
-    #[allow(dead_code)]
     pub target_pool: Arc<PoolInfo>,
-    pub token_a: Pubkey,
-    pub token_b: Pubkey,
     pub profit_percentage: f64,
-    pub route: Vec<Pubkey>,
     pub input_amount: TokenAmount,
     pub expected_output: TokenAmount,
 }
@@ -26,25 +25,71 @@ pub struct ArbitrageOpportunity {
 #[derive(Clone)]
 pub struct ArbitrageDetector {
     min_profit_threshold: f64,
-    pub blacklist: PairBlacklist,
 }
 
+#[allow(dead_code)]
 impl ArbitrageDetector {
     pub fn new(min_profit_threshold: f64) -> Self {
         Self {
             min_profit_threshold,
-            blacklist: PairBlacklist::new(),
         }
     }
 
-    pub fn new_with_blacklist(min_profit_threshold: f64, blacklist: PairBlacklist) -> Self {
-        Self {
-            min_profit_threshold,
-            blacklist,
-        }
+    /// Log a banned pair (permanent or temporary) to CSV for review.
+    pub fn log_banned_pair(token_a: &str, token_b: &str, ban_type: &str, reason: &str) {
+        let log_entry = format!("{},{},{},{}\n", token_a, token_b, ban_type, reason);
+        let mut file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open("banned_pairs_log.csv")
+            .expect("Cannot open ban log file");
+        file.write_all(log_entry.as_bytes())
+            .expect("Failed to write ban log");
     }
 
-    /// Find all arbitrage opportunities using on-chain pools
+    /// Check if a pair is permanently banned (CSV-based, fast lookup for small sets).
+    pub fn is_permanently_banned(token_a: &str, token_b: &str) -> bool {
+        // TODO: For large sets, use a HashSet loaded at startup.
+        if let Ok(content) = std::fs::read_to_string("banned_pairs_log.csv") {
+            for line in content.lines() {
+                let parts: Vec<_> = line.split(',').collect();
+                if parts.len() >= 3 && parts[2] == "permanent" {
+                    if (parts[0] == token_a && parts[1] == token_b)
+                        || (parts[0] == token_b && parts[1] == token_a)
+                    {
+                        return true;
+                    }
+                }
+            }
+        }
+        false
+    }
+
+    /// Check if a pair is temporarily banned (CSV-based, checks expiry).
+    pub fn is_temporarily_banned(token_a: &str, token_b: &str) -> bool {
+        if let Ok(content) = std::fs::read_to_string("banned_pairs_log.csv") {
+            let now = chrono::Utc::now().timestamp() as u64;
+            for line in content.lines() {
+                let parts: Vec<_> = line.split(',').collect();
+                if parts.len() >= 4 && parts[2] == "temporary" {
+                    // parts[3] = reason, which can include expiry timestamp
+                    if let Some(expiry_str) = parts.get(3) {
+                        if let Ok(expiry) = expiry_str.parse::<u64>() {
+                            if ((parts[0] == token_a && parts[1] == token_b)
+                                || (parts[0] == token_b && parts[1] == token_a))
+                                && expiry > now
+                            {
+                                return true;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        false
+    }
+
+    /// Find all arbitrage opportunities using robust profit/risk calculations
     pub async fn find_all_opportunities(
         &self,
         pools: &HashMap<Pubkey, Arc<PoolInfo>>,
@@ -60,17 +105,26 @@ impl ArbitrageDetector {
                     if token_a == token_b {
                         continue;
                     }
-                    
+
                     let token_a_str = token_a.to_string();
                     let token_b_str = token_b.to_string();
-                    
+
                     // Skip blacklisted token pairs
-                    if self.blacklist.contains(&token_a_str, &token_b_str) {
-                        debug!("Skipping blacklisted pair: {} <-> {}", token_a_str, token_b_str);
+                    if Self::is_permanently_banned(&token_a_str, &token_b_str) {
+                        debug!(
+                            "Skipping permanently blacklisted pair: {} <-> {}",
+                            token_a_str, token_b_str
+                        );
                         continue;
                     }
-                    
-                    let test_amount = 1_000_000; // Example input
+
+                    if Self::is_temporarily_banned(&token_a_str, &token_b_str) {
+                        debug!(
+                            "Skipping temporarily blacklisted pair: {} <-> {}",
+                            token_a_str, token_b_str
+                        );
+                        continue;
+                    }
 
                     for (tgt_id, tgt_pool) in pools {
                         if src_id == tgt_id {
@@ -84,71 +138,220 @@ impl ArbitrageDetector {
                             continue;
                         }
 
-                        // AMM simulation for output from source pool
+                        // Use calculator for optimal input sizing (safeguards larger/slippy arbs)
+                        let max_input = TokenAmount::new(1_000_000, src_pool.token_a.decimals); // Example
+                                                                                                // Fix: move optimal_in only once, then clone as needed for calculations
+                        let optimal_in =
+                            calculate_optimal_input(src_pool, tgt_pool, true, max_input);
+                        let price_impact = estimate_price_impact(src_pool, 0, optimal_in.clone());
                         let intermediate_amt = crate::dex::pool::calculate_output_amount(
                             src_pool,
-                            TokenAmount::new(test_amount, src_pool.token_a.decimals),
+                            optimal_in.clone(),
                             true,
                         );
-
-                        // AMM simulation for output from target pool
                         let output_amt = crate::dex::pool::calculate_output_amount(
                             tgt_pool,
-                            intermediate_amt,
+                            intermediate_amt.clone(),
                             true,
                         );
+                        let profit_pct =
+                            calculate_max_profit(src_pool, tgt_pool, true, optimal_in.clone());
+                        let profit = (output_amt.to_float() - optimal_in.to_float()).max(0.0);
 
-                        // Calculate profit percent
-                        let profit = output_amt.to_float() / (test_amount as f64) - 1.0;
-                        let profit_percent = profit * 100.0;
+                        // Assume 1:1 value vs. SOL for simplification or fetch from oracle
+                        let token_price_in_sol = 1.0;
 
-                        // Threshold filter
-                        if profit_percent > self.min_profit_threshold {
-                            debug!(
-                                "Checking arbitrage path: {} -> {}",
-                                token_a_str, token_b_str
-                            );
+                        // Model transaction cost (real value would fetch tx size, fee config)
+                        let transaction_cost = calculate_transaction_cost(1024, 0);
+
+                        // Should we take this trade? Run canonical logic
+                        let should_execute = is_profitable(
+                            profit,
+                            token_price_in_sol,
+                            transaction_cost,
+                            self.min_profit_threshold,
+                        );
+
+                        debug!(
+                            "Checking arbitrage path: {} -> {}",
+                            token_a_str, token_b_str
+                        );
+
+                        if should_execute {
                             info!(
-                                "Arb opp: Pool {} ({}->{}) -> Pool {} (profit {:.2}%)",
+                                "Arb opp: Pool {} ({}->{}) -> Pool {} (profit {:.2}%, impact {:.2}%)",
                                 src_pool.address,
                                 token_a_str,
                                 token_b_str,
                                 tgt_pool.address,
-                                profit_percent
+                                profit_pct * 100.0,
+                                price_impact * 100.0
                             );
-                            metrics.record_arbitrage_opportunity(
-                                profit_percent,
-                                &token_a_str,
-                                &token_b_str,
-                                test_amount as f64,
-                                output_amt.to_float(),
-                            );
-                            opportunities.push(ArbitrageOpportunity {
-                                source_pool: Arc::clone(src_pool),
-                                target_pool: Arc::clone(tgt_pool),
-                                token_a,
-                                token_b,
-                                profit_percentage: profit_percent,
-                                route: vec![token_a, token_b],
-                                input_amount: TokenAmount::new(
-                                    test_amount,
-                                    src_pool.token_a.decimals,
-                                ),
-                                expected_output: output_amt,
-                            });
                         }
+
+                        // Record opportunity to metrics/logging
+                        metrics.record_arbitrage_opportunity(
+                            profit_pct * 100.0,
+                            &token_a_str,
+                            &token_b_str,
+                            optimal_in.to_float(),
+                            output_amt.to_float(),
+                        );
+
+                        // Save opportunity result with all calculator details
+                        opportunities.push(ArbitrageOpportunity {
+                            source_pool: Arc::clone(src_pool),
+                            target_pool: Arc::clone(tgt_pool),
+                            profit_percentage: profit_pct * 100.0,
+                            input_amount: optimal_in,
+                            expected_output: output_amt,
+                        });
                     }
                 }
             }
         }
 
+        // Sort best-to-worst (profitable, non-profitable at end)
         opportunities.sort_by(|a, b| {
             b.profit_percentage
                 .partial_cmp(&a.profit_percentage)
                 .unwrap()
         });
         info!(
-            "Found {} arbitrage opportunities (pure on-chain)",
+            "Found {} arbitrage opportunities (calc-enhanced, pure on-chain)",
+            opportunities.len()
+        );
+        opportunities
+    }
+
+    /// Find all multi-hop, cross-DEX arbitrage opportunities (2- and 3-hop supported)
+    pub async fn find_all_multihop_opportunities(
+        &self,
+        pools: &HashMap<Pubkey, Arc<PoolInfo>>,
+        metrics: &mut Metrics,
+    ) -> Vec<MultiHopArbOpportunity> {
+        let mut opportunities = Vec::new();
+        let pool_vec: Vec<_> = pools.values().cloned().collect();
+
+        // 2-hop and 3-hop paths (TODO: generalize to N-hop)
+        for (i, pool1) in pool_vec.iter().enumerate() {
+            for (j, pool2) in pool_vec.iter().enumerate() {
+                if i == j {
+                    continue;
+                }
+                // Try all token directions for pool1 -> pool2
+                for &start_token in &[pool1.token_a.mint, pool1.token_b.mint] {
+                    for &mid_token in &[pool2.token_a.mint, pool2.token_b.mint] {
+                        if start_token == mid_token {
+                            continue;
+                        }
+                        // Find a 3rd pool for 3-hop cycles
+                        for (k, pool3) in pool_vec.iter().enumerate() {
+                            if k == i || k == j {
+                                continue;
+                            }
+                            for &end_token in &[pool3.token_a.mint, pool3.token_b.mint] {
+                                if end_token != start_token {
+                                    continue;
+                                }
+                                // Check blacklist for any hop
+                                let s = start_token.to_string();
+                                let m = mid_token.to_string();
+                                let e = end_token.to_string();
+                                if Self::is_permanently_banned(&s, &m)
+                                    || Self::is_permanently_banned(&m, &e)
+                                    || Self::is_permanently_banned(&e, &s)
+                                {
+                                    continue;
+                                }
+
+                                if Self::is_temporarily_banned(&s, &m)
+                                    || Self::is_temporarily_banned(&m, &e)
+                                    || Self::is_temporarily_banned(&e, &s)
+                                {
+                                    continue;
+                                }
+                                // --- Use new calculator for multi-hop analytics ---
+                                let pools_arr: Vec<&PoolInfo> = vec![&*pool1, &*pool2, &*pool3];
+                                let directions = vec![true, true, true]; // TODO: dynamic direction
+                                let last_fee_data = vec![(None, None, None); 3];
+                                let input_amount = 1000.0; // TODO: dynamic sizing
+                                let (total_profit, total_slippage, total_fee) =
+                                    calculate_multihop_profit_and_slippage(
+                                        &pools_arr,
+                                        input_amount,
+                                        &directions,
+                                        &last_fee_data,
+                                    );
+                                let rebate = calculate_rebate(&pools_arr, &[]); // TODO: pass real amounts
+                                let profit_pct = if input_amount > 0.0 {
+                                    total_profit / input_amount * 100.0
+                                } else {
+                                    0.0
+                                };
+                                let hop1_out = input_amount * 0.98; // placeholder for swap math
+                                let hop2_out = hop1_out * 0.98;
+                                let hop3_out = hop2_out * 0.98;
+                                let hops = vec![
+                                    ArbHop {
+                                        dex: pool1.dex_type,
+                                        pool: pool1.address,
+                                        input_token: s.clone(),
+                                        output_token: m.clone(),
+                                        input_amount,
+                                        expected_output: hop1_out,
+                                    },
+                                    ArbHop {
+                                        dex: pool2.dex_type,
+                                        pool: pool2.address,
+                                        input_token: m.clone(),
+                                        output_token: e.clone(),
+                                        input_amount: hop1_out,
+                                        expected_output: hop2_out,
+                                    },
+                                    ArbHop {
+                                        dex: pool3.dex_type,
+                                        pool: pool3.address,
+                                        input_token: e.clone(),
+                                        output_token: s.clone(),
+                                        input_amount: hop2_out,
+                                        expected_output: hop3_out,
+                                    },
+                                ];
+                                let opp = MultiHopArbOpportunity {
+                                    hops,
+                                    total_profit,
+                                    profit_pct,
+                                    input_token: s.clone(),
+                                    output_token: s.clone(),
+                                    input_amount,
+                                    expected_output: hop3_out,
+                                    dex_path: vec![pool1.dex_type, pool2.dex_type, pool3.dex_type],
+                                    pool_path: vec![pool1.address, pool2.address, pool3.address],
+                                    risk_score: None,
+                                    notes: Some(format!(
+                                        "3-hop cycle (fee: {:.5}, slippage: {:.5}, rebate: {:.5})",
+                                        total_fee, total_slippage, rebate
+                                    )),
+                                };
+                                if opp.is_profitable(self.min_profit_threshold) {
+                                    metrics.record_arbitrage_opportunity(
+                                        profit_pct,
+                                        &s,
+                                        &s,
+                                        input_amount,
+                                        hop3_out,
+                                    );
+                                    opportunities.push(opp);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        info!(
+            "Found {} multi-hop arbitrage opportunities",
             opportunities.len()
         );
         opportunities

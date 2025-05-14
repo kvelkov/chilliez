@@ -1,5 +1,8 @@
+use crate::arbitrage::detector::ArbitrageDetector;
+use crate::arbitrage::opportunity::MultiHopArbOpportunity;
 use crate::dex::pool::{DexType, PoolInfo};
-use crate::solana::websocket::{SolanaWebsocketManager, RawAccountUpdate};
+use crate::metrics::Metrics;
+use crate::solana::websocket::{RawAccountUpdate, SolanaWebsocketManager};
 use crate::websocket::market_data::CryptoDataProvider;
 use crate::websocket::types::AccountUpdate;
 use log::{info, warn};
@@ -72,12 +75,22 @@ impl ArbitrageEngine {
             tokio::spawn(async move {
                 while let Ok(update) = receiver.recv().await {
                     match update {
-                        RawAccountUpdate::Account { pubkey, data, timestamp: _ } => {
+                        RawAccountUpdate::Account {
+                            pubkey,
+                            data,
+                            timestamp: _,
+                        } => {
                             // Directly parse AccountUpdate from data and pubkey
                             if data.len() >= 16 {
-                                let reserve_a = u64::from_le_bytes(data[0..8].try_into().unwrap_or_default());
-                                let reserve_b = u64::from_le_bytes(data[8..16].try_into().unwrap_or_default());
-                                let parsed_update = AccountUpdate { pubkey, reserve_a, reserve_b };
+                                let reserve_a =
+                                    u64::from_le_bytes(data[0..8].try_into().unwrap_or_default());
+                                let reserve_b =
+                                    u64::from_le_bytes(data[8..16].try_into().unwrap_or_default());
+                                let parsed_update = AccountUpdate {
+                                    pubkey,
+                                    reserve_a,
+                                    reserve_b,
+                                };
                                 let mut guard = pools.write().await;
                                 if let Some(pool_arc) = guard.get_mut(&parsed_update.pubkey) {
                                     let pool = Arc::make_mut(pool_arc);
@@ -102,5 +115,16 @@ impl ArbitrageEngine {
                 info!("Price feed test: SOL = {:.4}", price);
             }
         }
+    }
+
+    /// Discover and return all multi-hop arbitrage opportunities using the new detector
+    pub async fn discover_multihop_opportunities(&self) -> Vec<MultiHopArbOpportunity> {
+        let mut metrics = Metrics::new();
+        let min_profit = self.get_min_profit_threshold().await;
+        let detector = ArbitrageDetector::new(min_profit);
+        let pools_guard = self.pools.read().await;
+        detector
+            .find_all_multihop_opportunities(&*pools_guard, &mut metrics)
+            .await
     }
 }

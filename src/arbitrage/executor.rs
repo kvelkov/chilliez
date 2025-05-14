@@ -1,4 +1,5 @@
 use crate::arbitrage::detector::ArbitrageOpportunity;
+use crate::arbitrage::opportunity::MultiHopArbOpportunity;
 use crate::dex::pool::{DexType, PoolInfo, TokenAmount}; // Re-added TokenAmount import
 use anyhow::{anyhow, Result};
 use log::{error, info};
@@ -124,6 +125,109 @@ impl ArbitrageExecutor {
             Err(e) => {
                 error!("Failed to execute arbitrage: {}", e);
                 Err(anyhow!("Transaction failed: {}", e))
+            }
+        }
+    }
+
+    /// Execute a multi-hop arbitrage opportunity asynchronously (atomic if possible)
+    pub async fn execute_multihop(&self, opportunity: &MultiHopArbOpportunity) -> Result<String> {
+        let start_time = Instant::now();
+        info!(
+            "Executing multi-hop arbitrage: {} hops, profit {:.4}%",
+            opportunity.hops.len(),
+            opportunity.profit_pct
+        );
+
+        // Build instructions for all hops
+        let mut instructions = Vec::new();
+        for (i, hop) in opportunity.hops.iter().enumerate() {
+            match hop.dex {
+                DexType::Raydium => {
+                    instructions.push(self.create_raydium_swap_instruction(
+                        &PoolInfo {
+                            address: hop.pool,
+                            name: format!("hop{}_raydium", i),
+                            token_a: Default::default(),
+                            token_b: Default::default(),
+                            fee_numerator: 0,
+                            fee_denominator: 0,
+                            last_update_timestamp: 0,
+                            dex_type: DexType::Raydium,
+                        },
+                        &TokenAmount::new(hop.input_amount as u64, 6),
+                        true, // TODO: direction
+                    )?);
+                }
+                DexType::Orca => {
+                    instructions.push(self.create_orca_swap_instruction(
+                        &PoolInfo {
+                            address: hop.pool,
+                            name: format!("hop{}_orca", i),
+                            token_a: Default::default(),
+                            token_b: Default::default(),
+                            fee_numerator: 0,
+                            fee_denominator: 0,
+                            last_update_timestamp: 0,
+                            dex_type: DexType::Orca,
+                        },
+                        &TokenAmount::new(hop.input_amount as u64, 6),
+                        true, // TODO: direction
+                    )?);
+                }
+                _ => return Err(anyhow!("Unsupported DEX type in multi-hop")),
+            }
+        }
+
+        if self.simulation_mode {
+            info!(
+                "SIMULATION: Would execute multi-hop transaction with {} instructions",
+                instructions.len()
+            );
+            let xml_entry = format!(
+                "<multihop-trade>\n  <timestamp>{}</timestamp>\n  <profit_pct>{:.4}</profit_pct>\n  <hops>{}</hops>\n  <result>simulated</result>\n</multihop-trade>\n",
+                chrono::Utc::now().to_rfc3339(),
+                opportunity.profit_pct,
+                opportunity.hops.len()
+            );
+            let mut file = OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open("simulated_trades.xml")?;
+            file.write_all(xml_entry.as_bytes())?;
+            return Ok("simulation-multihop-txid-placeholder".to_string());
+        }
+
+        let recent_blockhash = self.rpc_client.get_latest_blockhash().await?;
+        let transaction = Transaction::new_signed_with_payer(
+            &instructions,
+            Some(&self.wallet.pubkey()),
+            &[&*self.wallet],
+            recent_blockhash,
+        );
+        let transaction_with_fee = if self.priority_fee > 0 {
+            self.add_priority_fee(transaction, self.priority_fee)?
+        } else {
+            transaction
+        };
+        if start_time.elapsed() > self.max_timeout {
+            return Err(anyhow!("Transaction preparation exceeded timeout"));
+        }
+        match self
+            .rpc_client
+            .send_and_confirm_transaction(&transaction_with_fee)
+            .await
+        {
+            Ok(signature) => {
+                let elapsed = start_time.elapsed();
+                info!(
+                    "Multi-hop arbitrage executed successfully in {:?}: {}",
+                    elapsed, signature
+                );
+                Ok(signature.to_string())
+            }
+            Err(e) => {
+                error!("Failed to execute multi-hop arbitrage: {}", e);
+                Err(anyhow!("Multi-hop transaction failed: {}", e))
             }
         }
     }

@@ -31,11 +31,13 @@ pub trait DexClient: Send + Sync {
     fn get_name(&self) -> &str; // Returns the name of the DEX implementation
 }
 
+#[allow(dead_code)]
 impl Quote {
+    /// Returns the profit in base units (output - input)
     pub fn profit(&self) -> i64 {
         self.output_amount as i64 - self.input_amount as i64
     }
-
+    /// Returns the profit as a percentage of input
     pub fn profit_pct(&self) -> f64 {
         if self.input_amount == 0 {
             0.0
@@ -44,16 +46,20 @@ impl Quote {
                 * 100.0
         }
     }
-
-    // Converts output_amount to f64 considering decimals
+    /// Returns the output amount as a float, given the token decimals
     pub fn output_as_float(&self, decimals: u8) -> f64 {
         self.output_amount as f64 / 10f64.powi(decimals as i32)
     }
-
-    // Converts input_amount to f64 considering decimals
+    /// Returns the input amount as a float, given the token decimals
     pub fn input_as_float(&self, decimals: u8) -> f64 {
         self.input_amount as f64 / 10f64.powi(decimals as i32)
     }
+}
+
+#[allow(dead_code)]
+impl dyn DexClient {
+    // These trait methods are required for DEX pool integration and dynamic dispatch.
+    // They may be called via trait objects or in downstream modules.
 }
 
 use anyhow::Result;

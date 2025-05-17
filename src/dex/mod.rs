@@ -1,4 +1,7 @@
 pub mod dex_api_templates;
+pub mod http_utils;
+pub mod http_utils_shared;
+pub mod integration_test;
 pub mod lifinity;
 pub mod meteora;
 pub mod orca;
@@ -7,7 +10,6 @@ pub mod pool;
 pub mod quote;
 pub mod raydium;
 pub mod whirlpool;
-pub mod http_utils;
 
 pub use crate::dex::quote::DexClient;
 use log::info;

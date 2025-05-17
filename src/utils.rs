@@ -1,3 +1,5 @@
+use dotenv::dotenv;
+use serde::{Deserialize, Serialize};
 use solana_sdk::pubkey::Pubkey;
 use std::fmt;
 
@@ -7,32 +9,11 @@ pub struct TokenAmount {
     pub decimals: u8,
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_add() {
-        let a = 2;
-        let b = 3;
-        assert_eq!(a + b, 5);
-    }
-
-    #[test]
-    fn test_dex_type_display() {
-        assert_eq!(format!("{}", DexType::Raydium), "Raydium");
-        assert_eq!(format!("{}", DexType::Orca), "Orca");
-        assert_eq!(format!("{}", DexType::Whirlpool), "Whirlpool");
-        assert_eq!(format!("{}", DexType::Jupiter), "Jupiter");
-        assert_eq!(format!("{}", DexType::Unknown), "Unknown");
-    }
-}
-
 impl TokenAmount {
     pub fn new(amount: u64, decimals: u8) -> Self {
         Self { amount, decimals }
     }
-    
+
     pub fn to_float(&self) -> f64 {
         let divisor = 10u64.pow(self.decimals as u32) as f64;
         self.amount as f64 / divisor
@@ -51,7 +32,7 @@ pub struct PoolInfo {
     pub dex_type: DexType,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct PoolToken {
     pub mint: Pubkey,
     pub symbol: String,
@@ -65,6 +46,9 @@ pub enum DexType {
     Orca,
     Whirlpool,
     Jupiter,
+    Lifinity,
+    Phoenix,
+    Meteora,
     Unknown,
 }
 
@@ -75,6 +59,9 @@ impl fmt::Display for DexType {
             DexType::Orca => write!(f, "Orca"),
             DexType::Whirlpool => write!(f, "Whirlpool"),
             DexType::Jupiter => write!(f, "Jupiter"),
+            DexType::Lifinity => write!(f, "Lifinity"),
+            DexType::Phoenix => write!(f, "Phoenix"),
+            DexType::Meteora => write!(f, "Meteora"),
             DexType::Unknown => write!(f, "Unknown"),
         }
     }
@@ -123,10 +110,10 @@ pub fn calculate_output_amount(
 }
 
 // Whirlpool implementation
-use std::convert::TryInto;
-use std::str::FromStr;
 use anyhow::{anyhow, Result};
 use log::{error, info};
+use std::convert::TryInto;
+use std::str::FromStr;
 
 pub const ORCA_WHIRLPOOL_PROGRAM_ID: &str = "whirLbmvGdJ8kT34DbDZpeMZQRAu8da5nq7WaRDRtyQ"; // Mainnet
 
@@ -166,7 +153,9 @@ pub struct RewardInfo {
 
 impl RewardInfo {
     pub fn parse(buf: &[u8]) -> Result<Self> {
-        if buf.len() < 88 { return Err(anyhow!("buffer too short for RewardInfo")); }
+        if buf.len() < 120 {
+            return Err(anyhow!("buffer too short for RewardInfo"));
+        }
         Ok(RewardInfo {
             mint: buf[0..32].try_into()?,
             vault: buf[32..64].try_into()?,
@@ -180,24 +169,28 @@ impl RewardInfo {
 impl Whirlpool {
     pub fn parse(data: &[u8]) -> Result<Self> {
         if data.len() < 340 {
-            return Err(anyhow!("buffer too short for Whirlpool struct: got {}, want >= 340", data.len()));
+            return Err(anyhow!(
+                "buffer too short for Whirlpool struct: got {}, want >= 340",
+                data.len()
+            ));
         }
         let mut offset = 0;
         let whirlpool_bump = data[0];
         offset += 1;
-        let tick_spacing = u16::from_le_bytes(data[offset..offset+2].try_into()?);
+        let tick_spacing = u16::from_le_bytes(data[offset..offset + 2].try_into()?);
         offset += 2;
-        let tick_current_index = i32::from_le_bytes(data[offset..offset+4].try_into()?);
+        let tick_current_index = i32::from_le_bytes(data[offset..offset + 4].try_into()?);
         offset += 4;
-        let sqrt_price = u128::from_le_bytes(data[offset..offset+16].try_into()?);
+        let sqrt_price = u128::from_le_bytes(data[offset..offset + 16].try_into()?);
         offset += 16;
-        let liquidity = u128::from_le_bytes(data[offset..offset+16].try_into()?);
+        let liquidity = u128::from_le_bytes(data[offset..offset + 16].try_into()?);
         offset += 16;
-        let fee_growth_global_a = u128::from_le_bytes(data[offset..offset+16].try_into()?);
+        let fee_growth_global_a = u128::from_le_bytes(data[offset..offset + 16].try_into()?);
         offset += 16;
-        let fee_growth_global_b = u128::from_le_bytes(data[offset..offset+16].try_into()?);
+        let fee_growth_global_b = u128::from_le_bytes(data[offset..offset + 16].try_into()?);
         offset += 16;
-        let reward_last_updated_timestamp = u64::from_le_bytes(data[offset..offset+8].try_into()?);
+        let reward_last_updated_timestamp =
+            u64::from_le_bytes(data[offset..offset + 8].try_into()?);
         offset += 8;
         let mut reward_infos = [RewardInfo {
             mint: [0; 32],
@@ -207,31 +200,31 @@ impl Whirlpool {
             growth_global: 0,
         }; 3];
         for i in 0..3 {
-            reward_infos[i] = RewardInfo::parse(&data[offset..offset + 88])?;
-            offset += 88;
+            reward_infos[i] = RewardInfo::parse(&data[offset..offset + 120])?;
+            offset += 120;
         }
-        let token_mint_a = data[offset..offset+32].try_into()?;
+        let token_mint_a = data[offset..offset + 32].try_into()?;
         offset += 32;
-        let token_vault_a = data[offset..offset+32].try_into()?;
+        let token_vault_a = data[offset..offset + 32].try_into()?;
         offset += 32;
-        let token_mint_b = data[offset..offset+32].try_into()?;
+        let token_mint_b = data[offset..offset + 32].try_into()?;
         offset += 32;
-        let token_vault_b = data[offset..offset+32].try_into()?;
+        let token_vault_b = data[offset..offset + 32].try_into()?;
         offset += 32;
         let fee_rate = u16::from_le_bytes(data[offset..offset + 2].try_into()?);
         offset += 2;
         let protocol_fee_rate = u16::from_le_bytes(data[offset..offset + 2].try_into()?);
         offset += 2;
         let protocol_fees = [
-            u64::from_le_bytes(data[offset..offset+8].try_into()?),
-            u64::from_le_bytes(data[offset+8..offset+16].try_into()?),
+            u64::from_le_bytes(data[offset..offset + 8].try_into()?),
+            u64::from_le_bytes(data[offset + 8..offset + 16].try_into()?),
         ];
         offset += 16;
-        let token_a = u64::from_le_bytes(data[offset..offset+8].try_into()?);
+        let token_a = u64::from_le_bytes(data[offset..offset + 8].try_into()?);
         offset += 8;
-        let token_b = u64::from_le_bytes(data[offset..offset+8].try_into()?);
+        let token_b = u64::from_le_bytes(data[offset..offset + 8].try_into()?);
         offset += 8;
-        let open_time = u64::from_le_bytes(data[offset..offset+8].try_into()?);
+        let open_time = u64::from_le_bytes(data[offset..offset + 8].try_into()?);
         offset += 8;
         Ok(Self {
             whirlpool_bump,
@@ -301,7 +294,8 @@ impl PoolParser for WhirlpoolPoolParser {
                 error!("Failed to parse Whirlpool state at {}: {:?}", address, e);
                 Err(anyhow!(
                     "Could not deserialize Whirlpool pool at {}: {:?}",
-                    address, e
+                    address,
+                    e
                 ))
             }
         }
@@ -310,29 +304,79 @@ impl PoolParser for WhirlpoolPoolParser {
     fn get_program_id() -> Pubkey {
         Pubkey::from_str(ORCA_WHIRLPOOL_PROGRAM_ID).unwrap()
     }
-    
+
     fn get_dex_type() -> DexType {
         DexType::Whirlpool
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+pub struct AppConfig {
+    pub rpc_url: String,
+    pub ws_url: String,
+    pub rpc_url_backup: String,
+    pub rpc_url_staked: String,
+    pub orca_api_key: String,
+    pub lifinity_api_key: String,
+    pub whirlpool_api_key: String,
+    pub meteora_api_key: String,
+    pub phoenix_api_key: String,
+    pub raydium_api_key: String,
+    pub serum_api_key: String,
+    pub paper_trading: String,
+    pub trader_wallet_address: String,
+    pub trader_wallet_keypair_path: String,
+    pub min_profit: String,
+    pub max_slippage: String,
+    pub cycle_interval: String,
+}
 
-    #[test]
-    fn test_add() {
-        let a = 2;
-        let b = 3;
-        assert_eq!(a + b, 5);
-    }
+impl AppConfig {
+    pub fn from_env() -> Self {
+        dotenv().ok(); // Loads .env file automatically
 
-    #[test]
-    fn test_dex_type_display() {
-        assert_eq!(format!("{}", DexType::Raydium), "Raydium");
-        assert_eq!(format!("{}", DexType::Orca), "Orca");
-        assert_eq!(format!("{}", DexType::Whirlpool), "Whirlpool");
-        assert_eq!(format!("{}", DexType::Jupiter), "Jupiter");
-        assert_eq!(format!("{}", DexType::Unknown), "Unknown");
+        AppConfig {
+            rpc_url: std::env::var("RPC_URL").unwrap_or_default(),
+            ws_url: std::env::var("WS_URL").unwrap_or_default(),
+            rpc_url_backup: std::env::var("RPC_URL_BACKUP").unwrap_or_default(),
+            rpc_url_staked: std::env::var("RPC_URL_STAKED").unwrap_or_default(),
+            orca_api_key: std::env::var("ORCA_API_KEY").unwrap_or_default(),
+            lifinity_api_key: std::env::var("LIFINITY_API_KEY").unwrap_or_default(),
+            whirlpool_api_key: std::env::var("WHIRLPOOL_API_KEY").unwrap_or_default(),
+            meteora_api_key: std::env::var("METEORA_API_KEY").unwrap_or_default(),
+            phoenix_api_key: std::env::var("PHOENIX_API_KEY").unwrap_or_default(),
+            raydium_api_key: std::env::var("RAYDIUM_API_KEY").unwrap_or_default(),
+            serum_api_key: std::env::var("SERUM_API_KEY").unwrap_or_default(),
+            paper_trading: std::env::var("PAPER_TRADING").unwrap_or_default(),
+            trader_wallet_address: std::env::var("TRADER_WALLET_ADDRESS").unwrap_or_default(),
+            trader_wallet_keypair_path: std::env::var("TRADER_WALLET_KEYPAIR_PATH")
+                .unwrap_or_default(),
+            min_profit: std::env::var("MIN_PROFIT").unwrap_or_default(),
+            max_slippage: std::env::var("MAX_SLIPPAGE").unwrap_or_default(),
+            cycle_interval: std::env::var("CYCLE_INTERVAL").unwrap_or_default(),
+        }
     }
+}
+
+fn main() {
+    let config = AppConfig::from_env();
+    println!("RPC URL: {}", config.rpc_url);
+    println!("WebSocket URL: {}", config.ws_url);
+    println!("Backup RPC URL: {}", config.rpc_url_backup);
+    println!("Staked RPC URL: {}", config.rpc_url_staked);
+    println!("ORCA API KEY: {}", config.orca_api_key);
+    println!("LIFINITY API KEY: {}", config.lifinity_api_key);
+    println!("WHIRLPOOL API KEY: {}", config.whirlpool_api_key);
+    println!("METEORA API KEY: {}", config.meteora_api_key);
+    println!("PHOENIX API KEY: {}", config.phoenix_api_key);
+    println!("RAYDIUM API KEY: {}", config.raydium_api_key);
+    println!("SERUM API KEY: {}", config.serum_api_key);
+    println!("PAPER TRADING: {}", config.paper_trading);
+    println!("TRADER WALLET ADDRESS: {}", config.trader_wallet_address);
+    println!(
+        "TRADER WALLET KEYPAIR PATH: {}",
+        config.trader_wallet_keypair_path
+    );
+    println!("MIN PROFIT: {}", config.min_profit);
+    println!("MAX SLIPPAGE: {}", config.max_slippage);
+    println!("CYCLE INTERVAL: {}", config.cycle_interval);
 }

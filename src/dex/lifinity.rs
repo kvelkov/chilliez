@@ -1,5 +1,5 @@
 use crate::dex::http_utils::HttpRateLimiter;
-use crate::dex::pool::{DexType, PoolInfo, PoolParser, PoolToken};
+use crate::utils::{PoolInfo, PoolToken, DexType, PoolParser};
 use crate::dex::quote::{DexClient, Quote as CanonicalQuote};
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
@@ -55,6 +55,10 @@ impl LifinityClient {
             req = req.header("api-key", &self.api_key);
         }
         req
+    }
+
+    pub fn get_api_key(&self) -> &str {
+        &self.api_key
     }
 }
 
@@ -172,5 +176,14 @@ impl PoolParser for LifinityPoolParser {
 
     fn get_dex_type() -> DexType {
         DexType::Lifinity
+    }
+}
+
+impl LifinityPoolParser {
+    pub fn parse_pool_data(address: Pubkey, data: &[u8]) -> anyhow::Result<PoolInfo> {
+        <Self as PoolParser>::parse_pool_data(address, data)
+    }
+    pub fn get_program_id() -> Pubkey {
+        <Self as PoolParser>::get_program_id()
     }
 }

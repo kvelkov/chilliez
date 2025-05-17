@@ -1,0 +1,16 @@
+[package]
+name = "rust-chatgpt-cli"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+atty = "0.2.14"
+chatgpt_rs = { version = "1.1.4", features = ["streams", "postcard", "json"] }
+clap = "3.0.0-beta.5"
+futures = "0.3"
+futures-util = "0.3"
+reqwest = { version = "0.11", features = ["json", "stream"] }
+serde_json = "1.0"
+tokio = { version = "1", features = ["full"] }

@@ -1,17 +1,18 @@
+use crate::arbitrage::headers_with_api_key;
 use crate::dex::http_utils::HttpRateLimiter;
-use crate::dex::pool::{DexType, PoolInfo, PoolParser, PoolToken};
 use crate::dex::quote::{DexClient, Quote};
+use crate::utils::{DexType, PoolInfo, PoolParser, PoolToken};
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use log::{error, warn};
+use once_cell::sync::Lazy;
 use reqwest::Client;
 use serde::Deserialize;
 use solana_sdk::pubkey::Pubkey;
 use std::env;
 use std::str::FromStr;
-use std::time::Instant; // For measuring request latency
-use once_cell::sync::Lazy;
 use std::time::Duration;
+use std::time::Instant; // For measuring request latency
 
 static WHIRLPOOL_RATE_LIMITER: Lazy<HttpRateLimiter> = Lazy::new(|| {
     HttpRateLimiter::new(
@@ -53,12 +54,8 @@ impl WhirlpoolClient {
         }
     }
 
-    pub fn build_request_with_api_key(&self, url: &str) -> reqwest::RequestBuilder {
-        let mut req = self.http_client.get(url);
-        if !self.api_key.is_empty() {
-            req = req.header("api-key", &self.api_key);
-        }
-        req
+    pub fn get_api_key(&self) -> &str {
+        &self.api_key
     }
 }
 
@@ -70,13 +67,18 @@ impl DexClient for WhirlpoolClient {
         output_token: &str,
         amount: u64,
     ) -> anyhow::Result<Quote> {
+        // Use the rate limiter's get_with_backoff to wrap the HTTP request
         let url = format!(
             "https://api.orca.so/whirlpools/quote?inputMint={}&outputMint={}&amount={}",
             input_token, output_token, amount
         );
         let request_start_time = Instant::now();
         let response = WHIRLPOOL_RATE_LIMITER
-            .get_with_backoff(&self.http_client, &url, |u| self.build_request_with_api_key(u))
+            .get_with_backoff(&self.http_client, &url, |u| {
+                self.http_client
+                    .get(u)
+                    .headers(headers_with_api_key("WHIRLPOOL_API_KEY"))
+            })
             .await?;
         let request_duration_ms = request_start_time.elapsed().as_millis() as u64;
         let status = response.status();
@@ -201,5 +203,14 @@ impl PoolParser for WhirlpoolPoolParser {
 
     fn get_dex_type() -> DexType {
         DexType::Whirlpool
+    }
+}
+
+impl WhirlpoolPoolParser {
+    pub fn parse_pool_data(address: Pubkey, data: &[u8]) -> anyhow::Result<PoolInfo> {
+        <Self as PoolParser>::parse_pool_data(address, data)
+    }
+    pub fn get_program_id() -> Pubkey {
+        <Self as PoolParser>::get_program_id()
     }
 }

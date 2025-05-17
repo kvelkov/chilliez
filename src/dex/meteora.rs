@@ -1,14 +1,15 @@
+use crate::arbitrage::headers_with_api_key;
 use crate::dex::http_utils::HttpRateLimiter;
 use crate::dex::quote::{DexClient, Quote};
 use anyhow::anyhow;
 use async_trait::async_trait;
 use log::{error, warn};
+use once_cell::sync::Lazy;
 use reqwest::Client;
 use serde::Deserialize;
 use std::env;
 use std::time::Duration;
 use std::time::Instant;
-use once_cell::sync::Lazy;
 
 // Define a struct that matches Meteora's API response for a quote
 #[derive(Deserialize, Debug)]
@@ -51,12 +52,8 @@ impl MeteoraClient {
         }
     }
 
-    pub fn build_request_with_api_key(&self, url: &str) -> reqwest::RequestBuilder {
-        let mut req = self.http_client.get(url);
-        if !self.api_key.is_empty() {
-            req = req.header("api-key", &self.api_key);
-        }
-        req
+    pub fn get_api_key(&self) -> &str {
+        &self.api_key
     }
 }
 
@@ -68,13 +65,18 @@ impl DexClient for MeteoraClient {
         output_token: &str,
         amount: u64,
     ) -> anyhow::Result<Quote> {
+        // Use the rate limiter's get_with_backoff to wrap the HTTP request
         let url = format!(
             "https://api.meteora.ag/v1/quote?inputMint={}&outputMint={}&amount={}",
             input_token, output_token, amount
         );
         let request_start_time = Instant::now();
         let response = METEORA_RATE_LIMITER
-            .get_with_backoff(&self.http_client, &url, |u| self.build_request_with_api_key(u))
+            .get_with_backoff(&self.http_client, &url, |u| {
+                self.http_client
+                    .get(u)
+                    .headers(headers_with_api_key("METEORA_API_KEY"))
+            })
             .await?;
         let request_duration_ms = request_start_time.elapsed().as_millis() as u64;
         if response.status().is_success() {
@@ -109,7 +111,10 @@ impl DexClient for MeteoraClient {
                     })
                 }
                 Err(e) => {
-                    error!("Failed to deserialize Meteora quote from URL {}: {:?}. Check MeteoraApiResponse struct against actual API output.", url, e);
+                    error!(
+                        "Failed to deserialize Meteora quote from URL {}: {:?}.",
+                        url, e
+                    );
                     Err(anyhow!(
                         "Failed to deserialize Meteora quote from {}. Error: {}",
                         url,

@@ -1,8 +1,9 @@
 use crate::arbitrage::detector::ArbitrageDetector;
+use crate::arbitrage::fee_manager::{FeeManager, XYKSlippageModel};
 use crate::arbitrage::opportunity::MultiHopArbOpportunity;
-use crate::dex::pool::{DexType, PoolInfo};
 use crate::metrics::Metrics;
 use crate::solana::websocket::{RawAccountUpdate, SolanaWebsocketManager};
+use crate::utils::PoolInfo;
 use crate::websocket::market_data::CryptoDataProvider;
 use crate::websocket::types::AccountUpdate;
 use log::{info, warn};
@@ -10,20 +11,6 @@ use solana_sdk::pubkey::Pubkey;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-
-#[derive(Debug, Clone)]
-pub struct ArbOpportunity {
-    pub route: Vec<Pubkey>,
-    pub profit_percentage: f64,
-    pub input_token: String,
-    pub output_token: String,
-    pub input_amount: f64,
-    pub expected_output: f64,
-    #[allow(dead_code)]
-    pub dex_path: Vec<DexType>,
-}
-
-// ArbOpportunity implementation removed in favor of using the canonical is_profitable function
 
 pub struct ArbitrageEngine {
     pools: Arc<RwLock<HashMap<Pubkey, Arc<PoolInfo>>>>,
@@ -62,6 +49,11 @@ impl ArbitrageEngine {
     /// Get the current min_profit_threshold value
     pub async fn get_min_profit_threshold(&self) -> f64 {
         *self.min_profit_threshold.read().await
+    }
+
+    /// Returns true if the given slippage and fee are within engine's configured limits
+    pub fn should_execute_trade(&self, slippage: f64, fee_lamports: u64) -> bool {
+        slippage <= self.max_slippage && fee_lamports <= self.tx_fee_lamports
     }
 
     pub async fn start_services(&self) {
@@ -126,5 +118,50 @@ impl ArbitrageEngine {
         detector
             .find_all_multihop_opportunities(&*pools_guard, &mut metrics)
             .await
+    }
+
+    /// Given a MultiHopArbOpportunity, return Vec<Arc<PoolInfo>> for all hops (or None if any missing)
+    pub async fn resolve_pools_for_opportunity(
+        &self,
+        opp: &MultiHopArbOpportunity,
+    ) -> Option<Vec<Arc<PoolInfo>>> {
+        let pools_guard = self.pools.read().await;
+        let mut result = Vec::with_capacity(opp.hops.len());
+        for hop in &opp.hops {
+            if let Some(pool) = pools_guard.get(&hop.pool) {
+                result.push(pool.clone());
+            } else {
+                return None; // If any pool is missing, return None
+            }
+        }
+        Some(result)
+    }
+
+    // Example: FeeManager integration for trade evaluation
+    #[allow(dead_code)]
+    pub fn example_fee_manager_usage(
+        pool: &crate::utils::PoolInfo,
+        input_amount: &crate::utils::TokenAmount,
+        is_a_to_b: bool,
+        last_update_timestamp: Option<u64>,
+    ) {
+        let _fee_breakdown = FeeManager::estimate_pool_swap_integrated(
+            pool,
+            input_amount,
+            is_a_to_b,
+            last_update_timestamp,
+        );
+        let _multi_hop_breakdown = FeeManager::estimate_multi_hop_with_model(
+            &[pool],
+            &[input_amount.clone()],
+            &[is_a_to_b],
+            &[(Some(pool.fee_numerator), Some(pool.fee_denominator), last_update_timestamp)],
+            &XYKSlippageModel,
+        );
+        let _fee_in_usdc = FeeManager::convert_fee_to_reference_token(
+            _fee_breakdown.expected_fee,
+            &pool.token_a.symbol,
+            "USDC",
+        );
     }
 }

@@ -1,15 +1,16 @@
+use crate::arbitrage::headers_with_api_key;
 use crate::dex::http_utils::HttpRateLimiter;
-use crate::dex::pool::{DexType, PoolInfo, PoolParser, PoolToken};
 use crate::dex::quote::{DexClient, Quote};
+use crate::utils::{DexType, PoolInfo, PoolParser, PoolToken};
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use log::{error, warn};
 use reqwest::Client;
- // Keep Deserialize for API responses
+// Keep Deserialize for API responses
 use solana_sdk::pubkey::Pubkey;
 use std::env;
 use std::str::FromStr;
- // For better logging
+// For better logging
 use std::time::Instant; // For accurate latency measurement
 
 #[derive(Debug, Clone)]
@@ -33,14 +34,6 @@ impl OrcaClient {
     pub fn get_api_key(&self) -> &str {
         &self.api_key
     }
-
-    pub fn build_request_with_api_key(&self, url: &str) -> reqwest::RequestBuilder {
-        let mut req = self.http_client.get(url);
-        if !self.api_key.is_empty() {
-            req = req.header("api-key", &self.api_key);
-        }
-        req
-    }
 }
 
 // Add a static or global rate limiter for Orca (could be parameterized/configured)
@@ -48,9 +41,9 @@ use once_cell::sync::Lazy;
 use std::time::Duration;
 static ORCA_RATE_LIMITER: Lazy<HttpRateLimiter> = Lazy::new(|| {
     HttpRateLimiter::new(
-        4, // max concurrent
+        4,                          // max concurrent
         Duration::from_millis(200), // min delay between requests
-        3, // max retries
+        3,                          // max retries
         Duration::from_millis(250), // base backoff
         vec![
             "https://api.orca.so/v1/quote".to_string(), // fallback(s) if any
@@ -66,13 +59,18 @@ impl DexClient for OrcaClient {
         output_token: &str,
         amount: u64,
     ) -> Result<Quote> {
+        // Use the rate limiter's get_with_backoff to wrap the HTTP request
         let url = format!(
             "https://api.orca.so/v1/quote?inputMint={}&outputMint={}&amountIn={}",
             input_token, output_token, amount
         );
         let request_start_time = Instant::now();
         let response = ORCA_RATE_LIMITER
-            .get_with_backoff(&self.http_client, &url, |u| self.build_request_with_api_key(u))
+            .get_with_backoff(&self.http_client, &url, |u| {
+                self.http_client
+                    .get(u)
+                    .headers(headers_with_api_key("ORCA_API_KEY"))
+            })
             .await?;
         let request_duration_ms = request_start_time.elapsed().as_millis() as u64;
         if response.status().is_success() {
@@ -85,15 +83,33 @@ impl DexClient for OrcaClient {
                     Ok(quote)
                 }
                 Err(e) => {
-                    error!("Failed to deserialize Orca quote from URL {}: {:?}.", url, e);
-                    Err(anyhow!("Failed to deserialize Orca quote from {}. Error: {}", url, e))
+                    error!(
+                        "Failed to deserialize Orca quote from URL {}: {:?}.",
+                        url, e
+                    );
+                    Err(anyhow!(
+                        "Failed to deserialize Orca quote from {}. Error: {}",
+                        url,
+                        e
+                    ))
                 }
             }
         } else {
             let status = response.status();
-            let error_text = response.text().await.unwrap_or_else(|_| "Failed to read error response body".to_string());
-            error!("Failed to fetch Orca quote from URL {}: Status {}. Body: {}", url, status, error_text);
-            Err(anyhow!("Failed to fetch Orca quote from {}: {}. Body: {}", url, status, error_text))
+            let error_text = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "Failed to read error response body".to_string());
+            error!(
+                "Failed to fetch Orca quote from URL {}: Status {}. Body: {}",
+                url, status, error_text
+            );
+            Err(anyhow!(
+                "Failed to fetch Orca quote from {}: {}. Body: {}",
+                url,
+                status,
+                error_text
+            ))
         }
     }
 
@@ -164,5 +180,14 @@ impl PoolParser for OrcaPoolParser {
 
     fn get_dex_type() -> DexType {
         DexType::Orca
+    }
+}
+
+impl OrcaPoolParser {
+    pub fn parse_pool_data(address: Pubkey, data: &[u8]) -> anyhow::Result<PoolInfo> {
+        <Self as PoolParser>::parse_pool_data(address, data)
+    }
+    pub fn get_program_id() -> Pubkey {
+        <Self as PoolParser>::get_program_id()
     }
 }

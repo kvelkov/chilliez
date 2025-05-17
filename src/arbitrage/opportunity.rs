@@ -1,6 +1,7 @@
 //! Defines the core struct for representing multi-hop, cross-DEX arbitrage opportunities.
 
-use crate::dex::pool::{DexType, PoolInfo};
+use crate::arbitrage::fee_manager::{FeeBreakdown, FeeManager};
+use crate::utils::{DexType, PoolInfo, TokenAmount};
 use solana_sdk::pubkey::Pubkey;
 
 /// Represents a single hop in a multi-hop arbitrage route.
@@ -45,4 +46,54 @@ impl MultiHopArbOpportunity {
     pub fn is_profitable(&self, min_profit_pct: f64) -> bool {
         self.profit_pct >= min_profit_pct
     }
+
+    /// Logs all hops in the arbitrage opportunity for analytics/logging.
+    pub fn log_hop(&self) {
+        for (i, hop) in self.hops.iter().enumerate() {
+            log::info!(
+                "[HOP {}] DEX: {:?}, Pool: {}, InputToken: {}, OutputToken: {}, InputAmount: {:.6}, ExpectedOutput: {:.6}",
+                i,
+                hop.dex,
+                hop.pool,
+                hop.input_token,
+                hop.output_token,
+                hop.input_amount,
+                hop.expected_output
+            );
+        }
+    }
+
+    /// Logs summary of the multi-hop arbitrage opportunity for analytics/logging.
+    pub fn log_summary(&self) {
+        log::info!(
+            "[ARB OPPORTUNITY] InputToken: {}, OutputToken: {}, InputAmount: {:.6}, ExpectedOutput: {:.6}, DexPath: {:?}, PoolPath: {:?}, RiskScore: {:?}, Notes: {}",
+            self.input_token,
+            self.output_token,
+            self.input_amount,
+            self.expected_output,
+            self.dex_path,
+            self.pool_path,
+            self.risk_score,
+            self.notes.as_deref().unwrap_or("")
+        );
+    }
+}
+
+#[allow(dead_code)]
+/// Example: Compute fee/slippage/gas for a multi-hop arbitrage opportunity
+pub fn analyze_arbitrage_opportunity(
+    pools: &[&PoolInfo],
+    amounts: &[TokenAmount],
+    directions: &[bool],
+    last_fee_data: &[(Option<u64>, Option<u64>, Option<u64>)],
+) -> FeeBreakdown {
+    // Use the default XYK slippage model
+    let slippage_model = crate::arbitrage::fee_manager::XYKSlippageModel;
+    FeeManager::estimate_multi_hop_with_model(
+        pools,
+        amounts,
+        directions,
+        last_fee_data,
+        &slippage_model,
+    )
 }

@@ -1,87 +1,38 @@
+use anyhow::Result;
+use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use solana_sdk::pubkey::Pubkey;
+use std::collections::HashMap;
 use std::fmt;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TokenAmount {
-    pub amount: u64,
-    pub decimals: u8,
-}
+// Import unified types and trait from utils
+use crate::utils::{PoolInfo, PoolToken, DexType, PoolParser, TokenAmount};
 
-impl TokenAmount {
-    pub fn new(amount: u64, decimals: u8) -> Self {
-        Self { amount, decimals }
-    }
+pub type PoolParseFn = fn(address: Pubkey, data: &[u8]) -> Result<PoolInfo>;
 
-    pub fn to_float(&self) -> f64 {
-        let divisor = 10u64.pow(self.decimals as u32) as f64;
-        self.amount as f64 / divisor
-    }
-}
+pub static POOL_PARSER_REGISTRY: Lazy<HashMap<Pubkey, PoolParseFn>> = Lazy::new(|| {
+    let mut m = HashMap::new();
+    m.insert(
+        crate::dex::orca::OrcaPoolParser::get_program_id(),
+        crate::dex::orca::OrcaPoolParser::parse_pool_data as PoolParseFn,
+    );
+    m.insert(
+        crate::dex::raydium::RaydiumPoolParser::get_program_id(),
+        crate::dex::raydium::RaydiumPoolParser::parse_pool_data as PoolParseFn,
+    );
+    m.insert(
+        crate::dex::whirlpool::WhirlpoolPoolParser::get_program_id(),
+        crate::dex::whirlpool::WhirlpoolPoolParser::parse_pool_data as PoolParseFn,
+    );
+    m.insert(
+        crate::dex::lifinity::LifinityPoolParser::get_program_id(),
+        crate::dex::lifinity::LifinityPoolParser::parse_pool_data as PoolParseFn,
+    );
+    m
+});
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PoolInfo {
-    pub address: Pubkey,
-    pub name: String,
-    pub token_a: PoolToken,
-    pub token_b: PoolToken,
-    pub fee_numerator: u64,
-    pub fee_denominator: u64,
-    pub last_update_timestamp: u64,
-    pub dex_type: DexType,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PoolToken {
-    pub mint: Pubkey,
-    pub symbol: String,
-    pub decimals: u8,
-    pub reserve: u64,
-}
-
-impl Default for PoolToken {
-    fn default() -> Self {
-        PoolToken {
-            mint: Pubkey::default(),
-            symbol: String::new(),
-            decimals: 0,
-            reserve: 0,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-pub enum DexType {
-    Raydium,
-    Orca,
-    Jupiter,
-    Whirlpool,
-    Lifinity,
-    Phoenix,
-    Meteora,
-    Unknown,
-}
-
-impl fmt::Display for DexType {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            DexType::Raydium => write!(f, "Raydium"),
-            DexType::Orca => write!(f, "Orca"),
-            DexType::Jupiter => write!(f, "Jupiter"),
-            DexType::Whirlpool => write!(f, "Whirlpool"),
-            DexType::Lifinity => write!(f, "Lifinity"),
-            DexType::Phoenix => write!(f, "Phoenix"),
-            DexType::Meteora => write!(f, "Meteora"),
-            DexType::Unknown => write!(f, "Unknown"),
-        }
-    }
-}
-
-// Trait for parsing different DEX pool formats
-pub trait PoolParser {
-    fn parse_pool_data(address: Pubkey, data: &[u8]) -> anyhow::Result<PoolInfo>;
-    fn get_program_id() -> Pubkey;
-    fn get_dex_type() -> DexType;
+pub fn get_pool_parser_fn_for_program(program_id: &Pubkey) -> Option<PoolParseFn> {
+    POOL_PARSER_REGISTRY.get(program_id).copied()
 }
 
 /// Returns spot price for a PoolInfo (A/B token price).

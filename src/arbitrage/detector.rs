@@ -2,9 +2,10 @@ use crate::arbitrage::calculator::{
     calculate_max_profit, calculate_multihop_profit_and_slippage, calculate_optimal_input,
     calculate_rebate, calculate_transaction_cost, estimate_price_impact, is_profitable,
 };
+use crate::arbitrage::fee_manager::{FeeManager, XYKSlippageModel};
 use crate::arbitrage::opportunity::{ArbHop, MultiHopArbOpportunity};
-use crate::dex::pool::{PoolInfo, TokenAmount};
 use crate::metrics::Metrics;
+use crate::utils::{PoolInfo, TokenAmount};
 use log::{debug, info};
 use solana_sdk::pubkey::Pubkey;
 use std::collections::HashMap;
@@ -283,7 +284,47 @@ impl ArbitrageDetector {
                                         &directions,
                                         &last_fee_data,
                                     );
-                                let rebate = calculate_rebate(&pools_arr, &[]); // TODO: pass real amounts
+                                // --- FeeManager analytics ---
+                                let amounts = vec![
+                                    TokenAmount::new(input_amount as u64, pool1.token_a.decimals),
+                                    TokenAmount::new(
+                                        (input_amount * 0.98) as u64,
+                                        pool2.token_a.decimals,
+                                    ),
+                                    TokenAmount::new(
+                                        (input_amount * 0.98 * 0.98) as u64,
+                                        pool3.token_a.decimals,
+                                    ),
+                                ];
+                                let slippage_model = XYKSlippageModel;
+                                let fee_breakdown = FeeManager::estimate_multi_hop_with_model(
+                                    &pools_arr,
+                                    &amounts,
+                                    &directions,
+                                    &last_fee_data,
+                                    &slippage_model,
+                                );
+                                let abnormal_fee = FeeManager::is_fee_abnormal(
+                                    pool1.fee_numerator,
+                                    pool1.fee_denominator,
+                                    FeeManager::get_last_fee_for_pool(pool1)
+                                        .map_or(pool1.fee_numerator, |f| f.0),
+                                    FeeManager::get_last_fee_for_pool(pool1)
+                                        .map_or(pool1.fee_denominator, |f| f.1),
+                                    1.5,
+                                );
+                                FeeManager::record_fee_observation(
+                                    pool1,
+                                    pool1.fee_numerator,
+                                    pool1.fee_denominator,
+                                );
+                                let risk_score =
+                                    if abnormal_fee || fee_breakdown.expected_slippage > 0.05 {
+                                        Some(1.0)
+                                    } else {
+                                        Some(0.0)
+                                    };
+                                let rebate = calculate_rebate(&pools_arr, &[]);
                                 let profit_pct = if input_amount > 0.0 {
                                     total_profit / input_amount * 100.0
                                 } else {
@@ -318,6 +359,10 @@ impl ArbitrageDetector {
                                         expected_output: hop3_out,
                                     },
                                 ];
+                                let notes = Some(format!(
+                                    "3-hop cycle (fee: {:.5}, slippage: {:.5}, gas: {}, rebate: {:.5}, abnormal_fee: {}, explanation: {})",
+                                    total_fee, total_slippage, fee_breakdown.gas_cost, rebate, abnormal_fee, fee_breakdown.explanation
+                                ));
                                 let opp = MultiHopArbOpportunity {
                                     hops,
                                     total_profit,
@@ -328,19 +373,195 @@ impl ArbitrageDetector {
                                     expected_output: hop3_out,
                                     dex_path: vec![pool1.dex_type, pool2.dex_type, pool3.dex_type],
                                     pool_path: vec![pool1.address, pool2.address, pool3.address],
-                                    risk_score: None,
-                                    notes: Some(format!(
-                                        "3-hop cycle (fee: {:.5}, slippage: {:.5}, rebate: {:.5})",
-                                        total_fee, total_slippage, rebate
-                                    )),
+                                    risk_score,
+                                    notes,
                                 };
-                                if opp.is_profitable(self.min_profit_threshold) {
+                                if !abnormal_fee && opp.is_profitable(self.min_profit_threshold) {
                                     metrics.record_arbitrage_opportunity(
                                         profit_pct,
                                         &s,
                                         &s,
                                         input_amount,
                                         hop3_out,
+                                    );
+                                    info!("[ANALYTICS] Fee: {:.5}, Slippage: {:.5}, Gas: {}, Abnormal Fee: {}, Risk: {:?}, Notes: {}", total_fee, total_slippage, fee_breakdown.gas_cost, abnormal_fee, risk_score, opp.notes.as_deref().unwrap_or(""));
+                                    opportunities.push(opp);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        info!(
+            "Found {} multi-hop arbitrage opportunities",
+            opportunities.len()
+        );
+        opportunities
+    }
+
+    /// Find all multi-hop, cross-DEX arbitrage opportunities (2- and 3-hop supported), with risk parameters
+    pub async fn find_all_multihop_opportunities_with_risk(
+        &self,
+        pools: &HashMap<Pubkey, Arc<PoolInfo>>,
+        metrics: &mut Metrics,
+        max_slippage: f64,
+        tx_fee_lamports: u64,
+    ) -> Vec<MultiHopArbOpportunity> {
+        let mut opportunities = Vec::new();
+        let pool_vec: Vec<_> = pools.values().cloned().collect();
+
+        // 2-hop and 3-hop paths (TODO: generalize to N-hop)
+        for (i, pool1) in pool_vec.iter().enumerate() {
+            for (j, pool2) in pool_vec.iter().enumerate() {
+                if i == j {
+                    continue;
+                }
+                for &start_token in &[pool1.token_a.mint, pool1.token_b.mint] {
+                    for &mid_token in &[pool2.token_a.mint, pool2.token_b.mint] {
+                        if start_token == mid_token {
+                            continue;
+                        }
+                        for (k, pool3) in pool_vec.iter().enumerate() {
+                            if k == i || k == j {
+                                continue;
+                            }
+                            for &end_token in &[pool3.token_a.mint, pool3.token_b.mint] {
+                                if end_token != start_token {
+                                    continue;
+                                }
+                                let s = start_token.to_string();
+                                let m = mid_token.to_string();
+                                let e = end_token.to_string();
+                                if Self::is_permanently_banned(&s, &m)
+                                    || Self::is_permanently_banned(&m, &e)
+                                    || Self::is_permanently_banned(&e, &s)
+                                {
+                                    continue;
+                                }
+                                if Self::is_temporarily_banned(&s, &m)
+                                    || Self::is_temporarily_banned(&m, &e)
+                                    || Self::is_temporarily_banned(&e, &s)
+                                {
+                                    continue;
+                                }
+                                let pools_arr: Vec<&PoolInfo> = vec![&*pool1, &*pool2, &*pool3];
+                                let directions = vec![true, true, true];
+                                let last_fee_data = vec![(None, None, None); 3];
+                                let input_amount = 1000.0;
+                                let (total_profit, total_slippage, total_fee) =
+                                    calculate_multihop_profit_and_slippage(
+                                        &pools_arr,
+                                        input_amount,
+                                        &directions,
+                                        &last_fee_data,
+                                    );
+                                let amounts = vec![
+                                    TokenAmount::new(input_amount as u64, pool1.token_a.decimals),
+                                    TokenAmount::new(
+                                        (input_amount * 0.98) as u64,
+                                        pool2.token_a.decimals,
+                                    ),
+                                    TokenAmount::new(
+                                        (input_amount * 0.98 * 0.98) as u64,
+                                        pool3.token_a.decimals,
+                                    ),
+                                ];
+                                let slippage_model = XYKSlippageModel;
+                                let fee_breakdown = FeeManager::estimate_multi_hop_with_model(
+                                    &pools_arr,
+                                    &amounts,
+                                    &directions,
+                                    &last_fee_data,
+                                    &slippage_model,
+                                );
+                                let abnormal_fee = FeeManager::is_fee_abnormal(
+                                    pool1.fee_numerator,
+                                    pool1.fee_denominator,
+                                    FeeManager::get_last_fee_for_pool(pool1)
+                                        .map_or(pool1.fee_numerator, |f| f.0),
+                                    FeeManager::get_last_fee_for_pool(pool1)
+                                        .map_or(pool1.fee_denominator, |f| f.1),
+                                    1.5,
+                                );
+                                FeeManager::record_fee_observation(
+                                    pool1,
+                                    pool1.fee_numerator,
+                                    pool1.fee_denominator,
+                                );
+                                let risk_score =
+                                    if abnormal_fee || fee_breakdown.expected_slippage > 0.05 {
+                                        Some(1.0)
+                                    } else {
+                                        Some(0.0)
+                                    };
+                                let rebate = calculate_rebate(&pools_arr, &[]);
+                                let profit_pct = if input_amount > 0.0 {
+                                    total_profit / input_amount * 100.0
+                                } else {
+                                    0.0
+                                };
+                                let hop1_out = input_amount * 0.98;
+                                let hop2_out = hop1_out * 0.98;
+                                let hop3_out = hop2_out * 0.98;
+                                let hops = vec![
+                                    ArbHop {
+                                        dex: pool1.dex_type,
+                                        pool: pool1.address,
+                                        input_token: s.clone(),
+                                        output_token: m.clone(),
+                                        input_amount,
+                                        expected_output: hop1_out,
+                                    },
+                                    ArbHop {
+                                        dex: pool2.dex_type,
+                                        pool: pool2.address,
+                                        input_token: m.clone(),
+                                        output_token: e.clone(),
+                                        input_amount: hop1_out,
+                                        expected_output: hop2_out,
+                                    },
+                                    ArbHop {
+                                        dex: pool3.dex_type,
+                                        pool: pool3.address,
+                                        input_token: e.clone(),
+                                        output_token: s.clone(),
+                                        input_amount: hop2_out,
+                                        expected_output: hop3_out,
+                                    },
+                                ];
+                                let notes = Some(format!(
+                                    "3-hop cycle (fee: {:.5}, slippage: {:.5}, gas: {}, rebate: {:.5}, abnormal_fee: {}, explanation: {})",
+                                    total_fee, total_slippage, fee_breakdown.gas_cost, rebate, abnormal_fee, fee_breakdown.explanation
+                                ));
+                                let opp = MultiHopArbOpportunity {
+                                    hops,
+                                    total_profit,
+                                    profit_pct,
+                                    input_token: s.clone(),
+                                    output_token: s.clone(),
+                                    input_amount,
+                                    expected_output: hop3_out,
+                                    dex_path: vec![pool1.dex_type, pool2.dex_type, pool3.dex_type],
+                                    pool_path: vec![pool1.address, pool2.address, pool3.address],
+                                    risk_score,
+                                    notes,
+                                };
+                                if !abnormal_fee
+                                    && fee_breakdown.expected_slippage <= max_slippage
+                                    && fee_breakdown.gas_cost <= tx_fee_lamports
+                                    && opp.is_profitable(self.min_profit_threshold)
+                                {
+                                    metrics.record_arbitrage_opportunity(
+                                        profit_pct,
+                                        &s,
+                                        &s,
+                                        input_amount,
+                                        hop3_out,
+                                    );
+                                    info!(
+                                        "[ANALYTICS] Fee: {:.5}, Slippage: {:.5}, Gas: {}, Abnormal Fee: {}, Risk: {:?}, Notes: {}",
+                                        total_fee, total_slippage, fee_breakdown.gas_cost, abnormal_fee, risk_score, opp.notes.as_deref().unwrap_or("")
                                     );
                                     opportunities.push(opp);
                                 }

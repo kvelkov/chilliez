@@ -1,4 +1,5 @@
-use crate::dex::pool::{PoolInfo, TokenAmount};
+use crate::arbitrage::fee_manager::{get_gas_cost_for_dex, FeeManager, XYKSlippageModel};
+use crate::utils::{PoolInfo, TokenAmount};
 
 /// Calculates the optimal input amount for maximum profit in an arbitrage opportunity.
 /// Uses constant product AMM formula to determine the ideal trade size.
@@ -242,20 +243,34 @@ pub fn calculate_multihop_profit_and_slippage(
     directions: &[bool],
     last_fee_data: &[(Option<u64>, Option<u64>, Option<u64>)],
 ) -> (f64, f64, f64) {
-    use crate::arbitrage::fee_manager::FeeManager;
-    use crate::dex::pool::TokenAmount;
     // Simulate each hop sequentially (placeholder: use real AMM math for each hop)
     let mut amounts = Vec::new();
     let mut current_amount = input_amount;
-    for _ in 0..pools.len() {
+    for i in 0..pools.len() {
         // Placeholder: apply 2% loss per hop for slippage/fee (replace with real swap math)
         current_amount *= 0.98;
         amounts.push(TokenAmount::new(
             current_amount as u64,
-            pools[0].token_a.decimals,
+            pools[i].token_a.decimals,
         ));
     }
-    let fee_breakdown = FeeManager::estimate_multi_hop(pools, &amounts, directions, last_fee_data);
+    // Use advanced fee/slippage/gas estimation
+    let slippage_model = XYKSlippageModel;
+    let fee_breakdown = FeeManager::estimate_multi_hop_with_model(
+        pools,
+        &amounts,
+        directions,
+        last_fee_data,
+        &slippage_model,
+    );
+    // Example: get gas cost for first DEX
+    let _gas_cost = get_gas_cost_for_dex(pools[0].dex_type);
+    // Example: convert fee to USDC (stub)
+    let _fee_in_usdc = FeeManager::convert_fee_to_reference_token(
+        fee_breakdown.expected_fee,
+        &pools[0].token_a.symbol,
+        "USDC",
+    );
     let total_profit = current_amount - input_amount - fee_breakdown.expected_fee;
     (
         total_profit,

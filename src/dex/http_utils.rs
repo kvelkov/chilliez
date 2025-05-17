@@ -11,6 +11,7 @@ use tokio::time::sleep;
 
 /// Rate limiter and backoff state shared across DEX clients
 pub struct HttpRateLimiter {
+    #[allow(dead_code)]
     pub max_concurrent: usize,
     pub min_delay: Duration,
     pub max_retries: usize,
@@ -21,7 +22,13 @@ pub struct HttpRateLimiter {
 }
 
 impl HttpRateLimiter {
-    pub fn new(max_concurrent: usize, min_delay: Duration, max_retries: usize, base_backoff: Duration, fallback_urls: Vec<String>) -> Self {
+    pub fn new(
+        max_concurrent: usize,
+        min_delay: Duration,
+        max_retries: usize,
+        base_backoff: Duration,
+        fallback_urls: Vec<String>,
+    ) -> Self {
         Self {
             max_concurrent,
             min_delay,
@@ -34,7 +41,12 @@ impl HttpRateLimiter {
     }
 
     /// Perform an HTTP GET with rate limiting, exponential backoff, and fallback URLs.
-    pub async fn get_with_backoff(&self, client: &Client, url: &str, build_req: impl Fn(&str) -> RequestBuilder) -> Result<Response> {
+    pub async fn get_with_backoff(
+        &self,
+        client: &Client,
+        url: &str,
+        build_req: impl Fn(&str) -> RequestBuilder,
+    ) -> Result<Response> {
         let mut attempt = 0;
         let mut urls = vec![url.to_string()];
         urls.extend(self.fallback_urls.clone());

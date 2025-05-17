@@ -1,6 +1,6 @@
 use crate::arbitrage::detector::ArbitrageOpportunity;
 use crate::arbitrage::opportunity::MultiHopArbOpportunity;
-use crate::dex::pool::{DexType, PoolInfo, TokenAmount}; // Re-added TokenAmount import
+use crate::utils::{DexType, PoolInfo, TokenAmount};
 use anyhow::{anyhow, Result};
 use log::{error, info};
 use solana_client::nonblocking::rpc_client::RpcClient;

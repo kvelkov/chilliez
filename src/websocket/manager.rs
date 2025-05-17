@@ -1,14 +1,13 @@
-use crate::dex::pool::{DexType, PoolInfo};
+use crate::solana::websocket::RawAccountUpdate;
 use crate::solana::websocket::SolanaWebsocketManager;
+use crate::utils::{DexType, PoolInfo, TokenAmount};
 use crate::websocket::handlers::parse_account_update;
 use crate::websocket::market_data::CryptoDataProvider;
-use crate::solana::websocket::RawAccountUpdate;
 use log::{info, warn};
 use solana_sdk::pubkey::Pubkey;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use base64::Engine;
 
 #[derive(Debug, Clone)]
 pub struct ArbOpportunity {
@@ -21,7 +20,6 @@ pub struct ArbOpportunity {
     #[allow(dead_code)]
     pub dex_path: Vec<DexType>,
 }
-
 
 pub struct ArbitrageEngine {
     pools: Arc<RwLock<HashMap<Pubkey, Arc<PoolInfo>>>>,
@@ -66,9 +64,9 @@ impl ArbitrageEngine {
                 while let Ok(update) = receiver.recv().await {
                     let guard = pools.write().await;
                     if let RawAccountUpdate::Account { pubkey, data, .. } = &update {
+                        use base64::{engine::general_purpose, Engine as _};
                         use solana_account_decoder::{UiAccount, UiAccountData, UiAccountEncoding};
                         use solana_client::rpc_response::RpcKeyedAccount;
-                        use base64::{engine::general_purpose, Engine as _};
                         let encoded = general_purpose::STANDARD.encode(data);
                         let fake_account = RpcKeyedAccount {
                             pubkey: pubkey.to_string(),

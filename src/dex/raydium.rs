@@ -1,10 +1,11 @@
+use crate::arbitrage::headers_with_api_key;
 use crate::dex::http_utils::HttpRateLimiter;
-use crate::dex::pool::{DexType, PoolInfo, PoolParser, PoolToken};
+use crate::utils::{PoolInfo, PoolToken, DexType, PoolParser};
 use crate::dex::quote::{DexClient, Quote}; // Use the shared Quote
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
-use once_cell::sync::Lazy;
 use log::{error, warn};
+use once_cell::sync::Lazy;
 use reqwest::Client;
 use serde::Deserialize;
 use solana_sdk::pubkey::Pubkey;
@@ -44,20 +45,16 @@ impl RaydiumClient {
         }
     }
 
-    fn build_request_with_api_key(&self, url: &str) -> reqwest::RequestBuilder {
-        let mut req = self.http_client.get(url);
-        if !self.api_key.is_empty() {
-            req = req.header("api-key", &self.api_key);
-        }
-        req
+    pub fn get_api_key(&self) -> &str {
+        &self.api_key
     }
 }
 
 static RAYDIUM_RATE_LIMITER: Lazy<HttpRateLimiter> = Lazy::new(|| {
     HttpRateLimiter::new(
-        4, // max concurrent
+        4,                          // max concurrent
         Duration::from_millis(200), // min delay between requests
-        3, // max retries
+        3,                          // max retries
         Duration::from_millis(250), // base backoff
         vec![
             "https://api.raydium.io/v2/sdk/token/quote".to_string(), // fallback(s) if any
@@ -73,13 +70,14 @@ impl DexClient for RaydiumClient {
         output_token: &str,
         amount: u64,
     ) -> Result<Quote> {
+        // Use the rate limiter's get_with_backoff to wrap the HTTP request
         let url = format!(
             "https://api.raydium.io/v2/sdk/token/quote?inputMint={}&outputMint={}&inputAmount={}",
             input_token, output_token, amount
         );
         let request_start_time = Instant::now();
         let response = RAYDIUM_RATE_LIMITER
-            .get_with_backoff(&self.http_client, &url, |u| self.build_request_with_api_key(u))
+            .get_with_backoff(&self.http_client, &url, |u| self.http_client.get(u).headers(headers_with_api_key("RAYDIUM_API_KEY")))
             .await?;
         let request_duration_ms = request_start_time.elapsed().as_millis() as u64;
         if response.status().is_success() {
@@ -114,7 +112,10 @@ impl DexClient for RaydiumClient {
                     })
                 }
                 Err(e) => {
-                    error!("Failed to deserialize Raydium quote from URL {}: {:?}. Check RaydiumApiResponse struct against actual API output.", url, e);
+                    error!(
+                        "Failed to deserialize Raydium quote from URL {}: {:?}. Check RaydiumApiResponse struct against actual API output.",
+                        url, e
+                    );
                     Err(anyhow!(
                         "Failed to deserialize Raydium quote from {}. Error: {}",
                         url,
@@ -199,5 +200,14 @@ impl PoolParser for RaydiumPoolParser {
 
     fn get_dex_type() -> DexType {
         DexType::Raydium
+    }
+}
+
+impl RaydiumPoolParser {
+    pub fn parse_pool_data(address: Pubkey, data: &[u8]) -> anyhow::Result<PoolInfo> {
+        <Self as PoolParser>::parse_pool_data(address, data)
+    }
+    pub fn get_program_id() -> Pubkey {
+        <Self as PoolParser>::get_program_id()
     }
 }

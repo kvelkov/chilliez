@@ -4,11 +4,11 @@ use crate::dex::lifinity::{LifinityClient, LifinityPoolParser, LIFINITY_PROGRAM_
 use crate::dex::meteora::MeteoraClient;
 use crate::dex::orca::{OrcaClient, OrcaPoolParser, ORCA_SWAP_PROGRAM_ID};
 use crate::dex::phoenix::{PhoenixClient, PHOENIX_PROGRAM_ID};
-use crate::dex::pool::{get_pool_parser_fn_for_program, PoolParseFn, POOL_PARSER_REGISTRY};
-use crate::dex::quote::{DexClient, Quote};
+use crate::dex::pool::get_pool_parser_fn_for_program;
+use crate::dex::quote::DexClient;
 use crate::dex::raydium::{RaydiumClient, RaydiumPoolParser, RAYDIUM_LIQUIDITY_PROGRAM_ID};
 use crate::dex::whirlpool::{WhirlpoolClient, WhirlpoolPoolParser, ORCA_WHIRLPOOL_PROGRAM_ID};
-use crate::utils::{DexType, PoolInfo, PoolParser, PoolToken, TokenAmount};
+use crate::utils::{DexType, PoolInfo, PoolToken};
 use serde_json;
 use solana_sdk::pubkey::Pubkey;
 use std::str::FromStr;
@@ -40,12 +40,24 @@ pub fn exercise_parser_registry() {
 
 /// Call all DEX client trait methods and api_key accessors
 pub async fn exercise_dex_clients() {
-    let orca = OrcaClient::new();
-    let raydium = RaydiumClient::new();
-    let whirlpool = WhirlpoolClient::new();
-    let lifinity = LifinityClient::new();
-    let meteora = MeteoraClient::new();
-    let phoenix = PhoenixClient::new();
+    use crate::dex::http_utils_shared::log_timed_request;
+
+    // Create clients within timed request to demonstrate log_timed_request usage
+    let orca = log_timed_request("Initialize Orca Client", async { OrcaClient::new() }).await;
+    let raydium =
+        log_timed_request("Initialize Raydium Client", async { RaydiumClient::new() }).await;
+    let whirlpool = log_timed_request("Initialize Whirlpool Client", async {
+        WhirlpoolClient::new()
+    })
+    .await;
+    let lifinity = log_timed_request("Initialize Lifinity Client", async {
+        LifinityClient::new()
+    })
+    .await;
+    let meteora =
+        log_timed_request("Initialize Meteora Client", async { MeteoraClient::new() }).await;
+    let phoenix =
+        log_timed_request("Initialize Phoenix Client", async { PhoenixClient::new() }).await;
     // Use api_key fields
     let _ = orca.get_api_key();
     let _ = raydium.get_api_key();

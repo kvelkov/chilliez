@@ -1,5 +1,36 @@
 use crate::arbitrage::fee_manager::{get_gas_cost_for_dex, FeeManager, XYKSlippageModel};
 use crate::utils::{PoolInfo, TokenAmount};
+use solana_sdk::pubkey::Pubkey;
+
+/// Represents the result of opportunity calculation
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub struct OpportunityCalculationResult {
+    pub input_amount: f64,
+    pub output_amount: f64,
+    pub profit: f64,
+    pub profit_percentage: f64,
+    pub price_impact: f64,
+}
+
+/// Calculate arbitrage opportunity metrics for a pair of pools
+#[allow(dead_code)]
+pub fn calculate_opportunity(_pair: &(Pubkey, Pubkey)) -> OpportunityCalculationResult {
+    // A simple placeholder implementation - in production this would:
+    // 1. Look up the pools from a global pool map or context
+    // 2. Calculate the optimal input amount
+    // 3. Calculate the expected output and profit
+    // 4. Determine price impact and other metrics
+
+    // For now return a placeholder result
+    OpportunityCalculationResult {
+        input_amount: 1000.0,
+        output_amount: 1010.0,
+        profit: 10.0,
+        profit_percentage: 0.01,
+        price_impact: 0.005,
+    }
+}
 
 /// Calculates the optimal input amount for maximum profit in an arbitrage opportunity.
 /// Uses constant product AMM formula to determine the ideal trade size.
@@ -246,12 +277,12 @@ pub fn calculate_multihop_profit_and_slippage(
     // Simulate each hop sequentially (placeholder: use real AMM math for each hop)
     let mut amounts = Vec::new();
     let mut current_amount = input_amount;
-    for i in 0..pools.len() {
+    for pool in pools {
         // Placeholder: apply 2% loss per hop for slippage/fee (replace with real swap math)
         current_amount *= 0.98;
         amounts.push(TokenAmount::new(
             current_amount as u64,
-            pools[i].token_a.decimals,
+            pool.token_a.decimals,
         ));
     }
     // Use advanced fee/slippage/gas estimation

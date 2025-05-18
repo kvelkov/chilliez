@@ -43,16 +43,15 @@ impl HttpRateLimiter {
     /// Perform an HTTP GET with rate limiting, exponential backoff, and fallback URLs.
     pub async fn get_with_backoff(
         &self,
-        client: &Client,
+        _client: &Client, // Prefixed with underscore to indicate intentional unused parameter
         url: &str,
         build_req: impl Fn(&str) -> RequestBuilder,
     ) -> Result<Response> {
-        let mut attempt = 0;
-        let mut urls = vec![url.to_string()];
-        urls.extend(self.fallback_urls.clone());
+        let urls = vec![url.to_string()];
+        let urls_with_fallbacks = [urls, self.fallback_urls.clone()].concat();
 
-        for url in urls {
-            attempt = 0;
+        for url in urls_with_fallbacks {
+            let mut attempt = 0;
             loop {
                 let _permit = self.semaphore.acquire().await.unwrap();
                 // Enforce min_delay between requests

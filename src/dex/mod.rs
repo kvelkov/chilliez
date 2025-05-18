@@ -58,8 +58,5 @@ pub fn get_all_clients() -> Vec<Box<dyn DexClient>> {
 pub async fn get_all_clients_arc() -> Vec<Arc<dyn DexClient>> {
     // For now, this wraps the synchronous get_all_clients.
     // If client initialization becomes async, this function's body will change.
-    get_all_clients()
-        .into_iter()
-        .map(|client| Arc::from(client))
-        .collect()
+    get_all_clients().into_iter().map(Arc::from).collect()
 }

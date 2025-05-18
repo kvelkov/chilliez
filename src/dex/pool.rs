@@ -1,12 +1,10 @@
 use anyhow::Result;
 use once_cell::sync::Lazy;
-use serde::{Deserialize, Serialize};
 use solana_sdk::pubkey::Pubkey;
 use std::collections::HashMap;
-use std::fmt;
 
 // Import unified types and trait from utils
-use crate::utils::{PoolInfo, PoolToken, DexType, PoolParser, TokenAmount};
+use crate::utils::{PoolInfo, TokenAmount};
 
 pub type PoolParseFn = fn(address: Pubkey, data: &[u8]) -> Result<PoolInfo>;
 
@@ -89,4 +87,70 @@ pub fn calculate_output_amount(
     let output_amount = numerator / denominator;
 
     TokenAmount::new(output_amount, output_decimals)
+}
+
+/// PoolMap is a container for managing and accessing pools with useful helper methods
+/// for arbitrage candidate discovery and token pair filtering.
+#[allow(dead_code)]
+pub struct PoolMap {
+    pub pools: HashMap<Pubkey, PoolInfo>,
+}
+
+#[allow(dead_code)]
+impl PoolMap {
+    /// Create a new empty PoolMap
+    pub fn new() -> Self {
+        Self {
+            pools: HashMap::new(),
+        }
+    }
+
+    /// Create a PoolMap from an existing HashMap of pools
+    pub fn from_hashmap(pools: HashMap<Pubkey, PoolInfo>) -> Self {
+        Self { pools }
+    }
+
+    /// Default implementation for testing
+    pub fn default() -> Self {
+        Self {
+            pools: HashMap::new(),
+        }
+    }
+
+    /// Add a pool to the map
+    pub fn add_pool(&mut self, pool: PoolInfo) {
+        self.pools.insert(pool.address, pool);
+    }
+
+    /// Get a pool by address
+    pub fn get_pool(&self, address: &Pubkey) -> Option<&PoolInfo> {
+        self.pools.get(address)
+    }
+
+    /// Returns all candidate pairs for arbitrage analysis
+    pub fn candidate_pairs(&self) -> Vec<(Pubkey, Pubkey)> {
+        let mut pairs = Vec::new();
+
+        // Create arbitrage pairs by matching pools with the same tokens
+        let pool_vec: Vec<&PoolInfo> = self.pools.values().collect();
+
+        for (i, pool1) in pool_vec.iter().enumerate() {
+            for (j, pool2) in pool_vec.iter().enumerate() {
+                if i == j {
+                    continue;
+                }
+
+                // Check if the pools share tokens (potential arbitrage opportunity)
+                if (pool1.token_a.mint == pool2.token_a.mint
+                    && pool1.token_b.mint == pool2.token_b.mint)
+                    || (pool1.token_a.mint == pool2.token_b.mint
+                        && pool1.token_b.mint == pool2.token_a.mint)
+                {
+                    pairs.push((pool1.address, pool2.address));
+                }
+            }
+        }
+
+        pairs
+    }
 }

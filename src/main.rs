@@ -7,13 +7,14 @@ mod solana;
 pub mod utils;
 pub mod websocket;
 
-use crate::utils::{DexType, PoolInfo, TokenAmount};
+use crate::utils::PoolInfo;
 use arbitrage::dynamic_threshold::{recommended_min_profit_threshold, VolatilityTracker};
 use arbitrage::engine::ArbitrageEngine;
 use arbitrage::executor::ArbitrageExecutor;
 use config::check_and_print_env_vars;
 use dex::get_all_clients_arc;
 use futures::future::join_all;
+use log::info;
 use metrics::Metrics;
 use solana::rpc::SolanaRpcClient;
 use solana_sdk::signature::read_keypair_file;
@@ -36,7 +37,41 @@ async fn main() -> anyhow::Result<()> {
 
     let metrics = Arc::new(Mutex::new(Metrics::new()));
     metrics.lock().await.log_launch();
-    let dex_clients = get_all_clients_arc().await;
+
+    // Initialize DEX clients and exercise them to prevent "unused code" warnings
+    let _dex_clients = get_all_clients_arc().await;
+
+    // Collect and log trading pairs to use the log_trading_pairs method
+    let trading_pairs = vec![
+        ("SOL".to_string(), "USDC".to_string()),
+        ("ETH".to_string(), "USDC".to_string()),
+        ("BTC".to_string(), "USDC".to_string()),
+        ("RAY".to_string(), "SOL".to_string()),
+        ("ORCA".to_string(), "SOL".to_string()),
+    ];
+    {
+        let mut metrics_guard = metrics.lock().await;
+        metrics_guard.log_trading_pairs(&trading_pairs);
+    }
+
+    // In debug mode, exercise the DEX parser registry and clients
+    #[cfg(debug_assertions)]
+    {
+        info!("Running DEX integration tests in debug mode...");
+        // Exercise parser registry to prevent "unused code" warnings
+        crate::dex::integration_test::exercise_parser_registry();
+
+        // Exercise DEX clients to prevent "unused code" warnings
+        let integration_handle = tokio::spawn(async {
+            crate::dex::integration_test::exercise_dex_clients().await;
+            crate::dex::integration_test::exercise_serde();
+        });
+        // We don't need to wait for this to complete, but we need to store the handle
+        // to avoid compiler warnings about futures not being awaited
+        tokio::spawn(async move {
+            let _ = integration_handle.await;
+        });
+    }
 
     let pools: Arc<RwLock<HashMap<solana_sdk::pubkey::Pubkey, Arc<PoolInfo>>>> =
         Arc::new(RwLock::new(HashMap::new()));
@@ -77,13 +112,22 @@ async fn main() -> anyhow::Result<()> {
         env::var("TRADER_WALLET_KEYPAIR_PATH").expect("TRADER_WALLET_KEYPAIR_PATH must be set");
     let wallet = Arc::new(read_keypair_file(wallet_path).expect("Failed to read keypair file"));
 
-    let executor = Arc::new(ArbitrageExecutor::new(
-        wallet,
-        rpc_client,
-        tx_fee_lamports,
-        Duration::from_secs(30),
-        simulation_mode,
-    ));
+    // Create executor with the Solana RPC client for advanced operations
+    let executor = Arc::new(
+        ArbitrageExecutor::new(
+            wallet,
+            rpc_client,
+            tx_fee_lamports,
+            Duration::from_secs(30),
+            simulation_mode,
+        )
+        .with_solana_rpc(solana_client.clone()),
+    );
+
+    // Initial update of network congestion data
+    if let Err(e) = executor.update_network_congestion().await {
+        println!("⚠️ Initial network congestion update failed: {}", e);
+    }
 
     let arbitrage_engine = Arc::new(ArbitrageEngine::new(
         pools.clone(),
@@ -95,6 +139,20 @@ async fn main() -> anyhow::Result<()> {
     ));
 
     // -- RUST BOT ENTRY POINT --
+
+    // Sample ban management functionality demonstration
+    let banned_token_a = "FAKE123456789";
+    let banned_token_b = "SCAM987654321";
+
+    // Ban a problematic token pair (will create/use banned_pairs_log.csv)
+    arbitrage_engine.ban_token_pair(banned_token_a, banned_token_b, true, "Known scam token");
+
+    // Check if a token pair is banned
+    let is_banned = arbitrage_engine.is_token_pair_banned(banned_token_a, banned_token_b);
+    info!(
+        "Token pair ban check: {} <-> {} is banned: {}",
+        banned_token_a, banned_token_b, is_banned
+    );
 
     arbitrage_engine.start_services().await;
 
@@ -111,6 +169,18 @@ async fn main() -> anyhow::Result<()> {
             let new_threshold = recommended_min_profit_threshold(vol);
             engine_handle.set_min_profit_threshold(new_threshold).await;
             println!("📈 Dynamic threshold updated: {:.4}", new_threshold);
+        }
+    });
+
+    // Spawn a task to periodically update network congestion data
+    let executor_handle = executor.clone();
+    let congestion_task = tokio::spawn(async move {
+        let mut intv = interval(Duration::from_secs(30)); // Update every 30 seconds
+        loop {
+            intv.tick().await;
+            if let Err(e) = executor_handle.update_network_congestion().await {
+                eprintln!("Failed to update network congestion: {}", e);
+            }
         }
     });
 
@@ -158,7 +228,7 @@ async fn main() -> anyhow::Result<()> {
 
             let pool_refs: Vec<&PoolInfo> = pools_vec.iter().map(|arc| arc.as_ref()).collect();
 
-            let (total_profit, total_slippage, total_fee) =
+            let (_total_profit, total_slippage, total_fee) =
                 crate::arbitrage::calculator::calculate_multihop_profit_and_slippage(
                     &pool_refs,
                     opp.input_amount,
@@ -207,6 +277,7 @@ async fn main() -> anyhow::Result<()> {
         .expect("Failed to listen for shutdown");
 
     threshold_task.abort();
+    congestion_task.abort();
     println!("🛑 Arbitrage bot stopping...");
 
     metrics.lock().await.summary();

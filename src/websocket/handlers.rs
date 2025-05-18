@@ -1,4 +1,5 @@
 use crate::websocket::types::AccountUpdate;
+use base64::Engine;
 use solana_account_decoder::UiAccountEncoding;
 use solana_client::rpc_response::RpcKeyedAccount;
 use solana_sdk::pubkey::Pubkey;
@@ -10,7 +11,9 @@ pub fn parse_account_update(account: &RpcKeyedAccount) -> Option<AccountUpdate> 
     let data = &account.account.data;
     let binary_data = match data {
         solana_account_decoder::UiAccountData::Binary(encoded, UiAccountEncoding::Base64) => {
-            base64::decode(encoded).ok()?
+            base64::engine::general_purpose::STANDARD
+                .decode(encoded)
+                .ok()?
         }
         _ => return None,
     };

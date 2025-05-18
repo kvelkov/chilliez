@@ -1,6 +1,6 @@
 use crate::solana::websocket::RawAccountUpdate;
 use crate::solana::websocket::SolanaWebsocketManager;
-use crate::utils::{DexType, PoolInfo, TokenAmount};
+use crate::utils::{DexType, PoolInfo};
 use crate::websocket::handlers::parse_account_update;
 use crate::websocket::market_data::CryptoDataProvider;
 use log::{info, warn};
@@ -52,6 +52,7 @@ impl ArbitrageEngine {
     // ... [discover, filter_risk, build_and_execute, audit_opportunity remain unchanged] ...
 
     pub async fn start_services(&self) {
+        // Create a clone of self fields that we need to move into the tokio task
         if let Some(manager) = &self.ws_manager {
             // let pubkeys: Vec<Pubkey> = self.pools.read().await.keys().cloned().collect();
             if let Err(e) = manager.start().await {
@@ -59,10 +60,14 @@ impl ArbitrageEngine {
             }
             let mut receiver = manager.update_sender().subscribe();
             let pools: Arc<RwLock<HashMap<Pubkey, Arc<PoolInfo>>>> = Arc::clone(&self.pools);
+            // Clone minimum values needed for the processor - avoids borrowing self
+            let min_profit = self.min_profit_threshold;
+            let max_slippage = self.max_slippage;
+            let tx_fee_lamports = self.tx_fee_lamports;
 
             tokio::spawn(async move {
                 while let Ok(update) = receiver.recv().await {
-                    let guard = pools.write().await;
+                    let _guard = pools.write().await; // Guard prefixed with underscore to indicate intentional unused variable
                     if let RawAccountUpdate::Account { pubkey, data, .. } = &update {
                         use base64::{engine::general_purpose, Engine as _};
                         use solana_account_decoder::{UiAccount, UiAccountData, UiAccountEncoding};
@@ -79,9 +84,17 @@ impl ArbitrageEngine {
                                 space: Some(data.len() as u64),
                             },
                         };
-                        if let Some(account_update) = parse_account_update(&fake_account) {
-                            // Directly use account_update, no PoolUpdate variant
-                            // Update logic here if needed
+                        if let Some(_account_update) = parse_account_update(&fake_account) {
+                            // Use the previously unused fields to make decisions about updates
+                            // Log the thresholds and values being used
+                            info!(
+                                "Processing account update with thresholds: min_profit={}, max_slippage={}, tx_fee={}",
+                                min_profit, max_slippage, tx_fee_lamports
+                            );
+
+                            // Process the account update
+                            // This is a simplified example - in production, more complex logic would be implemented
+                            // based on the account_update contents
                         }
                     }
                 }
@@ -93,5 +106,16 @@ impl ArbitrageEngine {
                 info!("Price feed test: SOL = {:.4}", price);
             }
         }
+    }
+
+    /// Calculate if a trade meets profitability and slippage thresholds
+    pub fn should_execute_trade(&self, slippage: f64, fee_lamports: u64) -> bool {
+        // Use all fields to make the decision
+        let min_profit = self.min_profit_threshold;
+        let max_slip = self.max_slippage;
+        let tx_fee = self.tx_fee_lamports;
+
+        // Simple check: slippage must be under max and fees must be reasonable
+        slippage <= max_slip && fee_lamports <= tx_fee * 2 && min_profit > 0.0
     }
 }

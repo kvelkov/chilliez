@@ -1,7 +1,9 @@
 //! FeeManager: Centralized logic for all fee, slippage, and dynamic gas calculations across pools/DEXs.
 
+use crate::arbitrage::calculator::OpportunityCalculationResult;
 use crate::utils::{DexType, PoolInfo, TokenAmount};
 use once_cell::sync::Lazy;
+use solana_sdk::pubkey::Pubkey;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -13,6 +15,49 @@ pub struct FeeBreakdown {
     pub gas_cost: u64,             // Estimated compute/gas units or lamports
     pub sudden_fee_increase: bool, // True if fee spike/surge detected
     pub explanation: String,       // Human-readable summary for logs/alerts
+}
+
+/// Represents the result of fee estimation for an arbitrage opportunity
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub struct FeeEstimationResult {
+    pub swap_fee: f64,
+    pub transaction_fee: u64,
+    pub priority_fee: u64,
+    pub total_cost: f64,
+}
+
+/// Estimate fees for an arbitrage opportunity
+#[allow(dead_code)]
+pub fn estimate_fees(
+    _pair: &(Pubkey, Pubkey),
+    calc_result: &OpportunityCalculationResult,
+) -> FeeEstimationResult {
+    // In a production system, this would:
+    // 1. Look up the pool details from a global pool map or context
+    // 2. Calculate the swap fee based on the DEX fee structure
+    // 3. Estimate transaction fees based on current network conditions
+    // 4. Add priority fee based on configuration and network congestion
+    // 5. Calculate total cost considering all fees
+
+    // Basic swap fee calculation - typically a percentage of the input amount
+    let swap_fee = calc_result.input_amount * 0.003; // Assuming 0.3% fee
+
+    // Transaction fee in lamports (0.000005 SOL = 5000 lamports)
+    let transaction_fee: u64 = 5000;
+
+    // Priority fee in compute units (200 is a typical minimum)
+    let priority_fee: u64 = 200;
+
+    // Total cost in terms of the input token
+    let total_cost = swap_fee + (transaction_fee as f64 / 1_000_000.0); // Rough conversion to SOL
+
+    FeeEstimationResult {
+        swap_fee,
+        transaction_fee,
+        priority_fee,
+        total_cost,
+    }
 }
 
 /// Centralized manager for all dynamic fee/slippage/gas estimation.

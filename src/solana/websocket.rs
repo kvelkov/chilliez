@@ -96,7 +96,10 @@ impl SolanaWebsocketManager {
         match self.reconnect().await {
             Ok(_) => info!("[WebSocket] Connected to {}", self.ws_url),
             Err(e) => {
-                error!("[WebSocket] Initial connection to {} failed: {}", self.ws_url, e);
+                error!(
+                    "[WebSocket] Initial connection to {} failed: {}",
+                    self.ws_url, e
+                );
                 return Err(e);
             }
         }
@@ -111,14 +114,17 @@ impl SolanaWebsocketManager {
                 if let Some(_client) = pubsub_client.read().await.clone() {
                     debug!("[WebSocket] Heartbeat: connection to {} is alive", ws_url);
                 } else {
-                    warn!("[WebSocket] Disconnected from {}, attempting reconnect...", ws_url);
+                    warn!(
+                        "[WebSocket] Disconnected from {}, attempting reconnect...",
+                        ws_url
+                    );
                     let keys: Vec<Pubkey> = {
                         let subs = subscriptions.read().await;
                         subs.keys().copied().collect()
                     };
                     for pubkey in keys {
                         match Self::create_account_subscription(
-                            Arc::clone(&pubsub_client.read().await.as_ref().unwrap()),
+                            Arc::clone(pubsub_client.read().await.as_ref().unwrap()),
                             pubkey,
                             update_sender.clone(),
                         )
@@ -268,7 +274,10 @@ impl SolanaWebsocketManager {
                     UiAccountData::Binary(encoded, _) => {
                         match base64::engine::general_purpose::STANDARD.decode(encoded) {
                             Ok(data) => {
-                                info!("[WebSocket] Successfully decoded and parsed data for {}", pubkey);
+                                info!(
+                                    "[WebSocket] Successfully decoded and parsed data for {}",
+                                    pubkey
+                                );
                                 data
                             }
                             Err(e) => {
@@ -302,7 +311,10 @@ impl SolanaWebsocketManager {
                 };
                 match sender.send(update) {
                     Ok(_) => info!("[WebSocket] Broadcasted update for {}", pubkey),
-                    Err(e) => error!("[WebSocket] Failed to broadcast update for {}: {}", pubkey, e),
+                    Err(e) => error!(
+                        "[WebSocket] Failed to broadcast update for {}: {}",
+                        pubkey, e
+                    ),
                 }
             }
             warn!("[WebSocket] Subscription stream for {} ended", pubkey);

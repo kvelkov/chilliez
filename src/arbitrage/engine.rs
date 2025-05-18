@@ -116,7 +116,7 @@ impl ArbitrageEngine {
         let detector = ArbitrageDetector::new(min_profit);
         let pools_guard = self.pools.read().await;
         detector
-            .find_all_multihop_opportunities(&*pools_guard, &mut metrics)
+            .find_all_multihop_opportunities(&pools_guard, &mut metrics)
             .await
     }
 
@@ -155,13 +155,37 @@ impl ArbitrageEngine {
             &[pool],
             &[input_amount.clone()],
             &[is_a_to_b],
-            &[(Some(pool.fee_numerator), Some(pool.fee_denominator), last_update_timestamp)],
+            &[(
+                Some(pool.fee_numerator),
+                Some(pool.fee_denominator),
+                last_update_timestamp,
+            )],
             &XYKSlippageModel,
         );
         let _fee_in_usdc = FeeManager::convert_fee_to_reference_token(
             _fee_breakdown.expected_fee,
             &pool.token_a.symbol,
             "USDC",
+        );
+    }
+
+    /// Check if a token pair is banned (temporary or permanent)
+    pub fn is_token_pair_banned(&self, token_a: &str, token_b: &str) -> bool {
+        ArbitrageDetector::is_permanently_banned(token_a, token_b)
+            || ArbitrageDetector::is_temporarily_banned(token_a, token_b)
+    }
+
+    /// Log a banned pair with reason
+    pub fn ban_token_pair(&self, token_a: &str, token_b: &str, is_permanent: bool, reason: &str) {
+        let ban_type = if is_permanent {
+            "permanent"
+        } else {
+            "temporary"
+        };
+        ArbitrageDetector::log_banned_pair(token_a, token_b, ban_type, reason);
+        info!(
+            "Added {} ban for token pair {} <-> {}: {}",
+            ban_type, token_a, token_b, reason
         );
     }
 }

@@ -190,4 +190,92 @@ impl SolanaRpcClient {
     pub async fn is_healthy(&self) -> bool {
         self.primary_client.get_health().await.is_ok()
     }
+
+    /// Get the current network congestion factor based on recent performance metrics
+    /// Returns a value between 1.0 (low congestion) and 5.0 (extreme congestion)
+    pub async fn get_network_congestion_factor(&self) -> f64 {
+        match self
+            .primary_client
+            .get_recent_performance_samples(Some(10))
+            .await
+        {
+            Ok(samples) => {
+                if samples.is_empty() {
+                    return 1.0; // Default to low congestion if no samples
+                }
+
+                // Calculate average transaction count and estimate slot processing time
+                let avg_tx_count: f64 = samples
+                    .iter()
+                    .map(|s| s.num_transactions as f64)
+                    .sum::<f64>()
+                    / samples.len() as f64;
+
+                // Calculate estimated slot time based on sample period and number of slots
+                let avg_slot_time: f64 = samples
+                    .iter()
+                    .map(|s| (s.sample_period_secs as f64 * 1_000_000.0) / s.num_slots as f64) // Convert to microseconds
+                    .sum::<f64>()
+                    / samples.len() as f64;
+
+                // Higher tx count and longer slot times indicate congestion
+                let tx_factor = (avg_tx_count / 2000.0).min(3.0); // Normalize, capped at 3.0
+                let time_factor = (avg_slot_time / 600.0).min(2.0); // Normalize, capped at 2.0
+
+                // Combine factors with some weighting
+                1.0 + tx_factor + time_factor
+            }
+            Err(err) => {
+                error!("Failed to get performance samples: {}", err);
+                1.5 // Default to slightly elevated congestion on error
+            }
+        }
+    }
+
+    /// Get recent priority fee levels to determine competitive fee
+    pub async fn get_recent_prioritization_fees(
+        &self,
+        recent_slots: usize,
+    ) -> Result<(u64, u64, u64)> {
+        match self
+            .primary_client
+            .get_recent_prioritization_fees(&[])
+            .await
+        {
+            Ok(fees) => {
+                if fees.is_empty() {
+                    return Ok((5000, 10000, 25000)); // Default values if no data
+                }
+
+                // Limit to the specified number of recent slots
+                let recent_fees: Vec<_> = fees
+                    .iter()
+                    .take(recent_slots)
+                    .map(|f| f.prioritization_fee)
+                    .collect();
+
+                if recent_fees.is_empty() {
+                    return Ok((5000, 10000, 25000)); // Default values if no data after filtering
+                }
+
+                // Calculate percentiles for fee strategy
+                let mut sorted_fees = recent_fees.clone();
+                sorted_fees.sort_unstable();
+
+                let p25_idx = (sorted_fees.len() as f64 * 0.25) as usize;
+                let p50_idx = (sorted_fees.len() as f64 * 0.5) as usize;
+                let p75_idx = (sorted_fees.len() as f64 * 0.75) as usize;
+
+                let p25 = sorted_fees.get(p25_idx).copied().unwrap_or(5000);
+                let p50 = sorted_fees.get(p50_idx).copied().unwrap_or(10000);
+                let p75 = sorted_fees.get(p75_idx).copied().unwrap_or(25000);
+
+                Ok((p25, p50, p75))
+            }
+            Err(err) => {
+                error!("Failed to get recent prioritization fees: {}", err);
+                Ok((5000, 10000, 25000)) // Default values on error
+            }
+        }
+    }
 }

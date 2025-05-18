@@ -1,0 +1,9 @@
+flowchart LR
+    WS[WebSocket Feed] --> PoolMap[Live Pool Data]
+    PoolMap --> Filter[Pair Blacklist / TempBan Filter]
+    Filter -->|valid pairs| Calc[calculator.rs]
+    Filter -->|valid pairs| Fee[fee_manager.rs]
+    Calc --> Detector[🚨 Opportunity Detector]
+    Fee --> Detector
+    Detector -->|if profitable| Exec[executor.rs]
+    Detector -->|else| Skip[discard]

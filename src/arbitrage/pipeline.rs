@@ -4,13 +4,15 @@ use crate::arbitrage::executor;
 use crate::arbitrage::fee_manager;
 /// ArbitragePipeline module for processing arbitrage opportunities.
 /// This skeleton matches the flowchart and can be expanded with actual logic.
-use crate::dex::pool::{PoolInfo, PoolMap};
+use crate::dex::pool::PoolMap;
 
+#[allow(dead_code)]
 pub struct ArbitragePipeline {
     // Configuration fields and dependencies
     pub pool_map: PoolMap,
 }
 
+#[allow(dead_code)]
 impl ArbitragePipeline {
     /// Creates a new instance of ArbitragePipeline
     pub fn new(pool_map: PoolMap) -> Self {
@@ -32,7 +34,7 @@ impl ArbitragePipeline {
             let fee_result = fee_manager::estimate_fees(&pair, &calc_result);
 
             // 6. Pass results to detector
-            if detector::is_profitable(&calc_result, &fee_result) {
+            if detector::ArbitrageDetector::is_profitable(&calc_result, &fee_result) {
                 // 7. Execute trade
                 executor::execute(&pair, &calc_result, &fee_result)?;
             } else {
@@ -52,7 +54,7 @@ mod tests {
     fn test_pipeline_creation() {
         // Use dummy PoolMap for test
         let pool_map = PoolMap::default();
-        let pipeline = ArbitragePipeline::new(pool_map);
+        let _pipeline = ArbitragePipeline::new(pool_map);
         // Basic test to ensure the pipeline can be created
     }
 }

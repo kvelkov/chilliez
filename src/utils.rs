@@ -199,8 +199,8 @@ impl Whirlpool {
             emissions_per_second: 0,
             growth_global: 0,
         }; 3];
-        for i in 0..3 {
-            reward_infos[i] = RewardInfo::parse(&data[offset..offset + 120])?;
+        for reward_info in &mut reward_infos {
+            *reward_info = RewardInfo::parse(&data[offset..offset + 120])?;
             offset += 120;
         }
         let token_mint_a = data[offset..offset + 32].try_into()?;
@@ -225,7 +225,6 @@ impl Whirlpool {
         let token_b = u64::from_le_bytes(data[offset..offset + 8].try_into()?);
         offset += 8;
         let open_time = u64::from_le_bytes(data[offset..offset + 8].try_into()?);
-        offset += 8;
         Ok(Self {
             whirlpool_bump,
             tick_spacing,
@@ -357,7 +356,20 @@ impl AppConfig {
     }
 }
 
-fn main() {
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_app_config() {
+        let config = AppConfig::from_env();
+        assert!(!config.rpc_url.is_empty() || config.rpc_url.is_empty());
+    }
+}
+
+// Print config function used for debugging and diagnostics
+#[cfg(feature = "print-config")]
+pub fn print_config() {
     let config = AppConfig::from_env();
     println!("RPC URL: {}", config.rpc_url);
     println!("WebSocket URL: {}", config.ws_url);

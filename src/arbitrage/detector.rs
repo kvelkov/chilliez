@@ -1,8 +1,9 @@
 use crate::arbitrage::calculator::{
     calculate_max_profit, calculate_multihop_profit_and_slippage, calculate_optimal_input,
     calculate_rebate, calculate_transaction_cost, estimate_price_impact, is_profitable,
+    OpportunityCalculationResult,
 };
-use crate::arbitrage::fee_manager::{FeeManager, XYKSlippageModel};
+use crate::arbitrage::fee_manager::{FeeEstimationResult, FeeManager, XYKSlippageModel};
 use crate::arbitrage::opportunity::{ArbHop, MultiHopArbOpportunity};
 use crate::metrics::Metrics;
 use crate::utils::{PoolInfo, TokenAmount};
@@ -54,12 +55,12 @@ impl ArbitrageDetector {
         if let Ok(content) = std::fs::read_to_string("banned_pairs_log.csv") {
             for line in content.lines() {
                 let parts: Vec<_> = line.split(',').collect();
-                if parts.len() >= 3 && parts[2] == "permanent" {
-                    if (parts[0] == token_a && parts[1] == token_b)
-                        || (parts[0] == token_b && parts[1] == token_a)
-                    {
-                        return true;
-                    }
+                if parts.len() >= 3
+                    && parts[2] == "permanent"
+                    && ((parts[0] == token_a && parts[1] == token_b)
+                        || (parts[0] == token_b && parts[1] == token_a))
+                {
+                    return true;
                 }
             }
         }
@@ -273,7 +274,8 @@ impl ArbitrageDetector {
                                     continue;
                                 }
                                 // --- Use new calculator for multi-hop analytics ---
-                                let pools_arr: Vec<&PoolInfo> = vec![&*pool1, &*pool2, &*pool3];
+                                let pools_arr: Vec<&PoolInfo> =
+                                    vec![pool1.as_ref(), pool2.as_ref(), pool3.as_ref()];
                                 let directions = vec![true, true, true]; // TODO: dynamic direction
                                 let last_fee_data = vec![(None, None, None); 3];
                                 let input_amount = 1000.0; // TODO: dynamic sizing
@@ -445,7 +447,8 @@ impl ArbitrageDetector {
                                 {
                                     continue;
                                 }
-                                let pools_arr: Vec<&PoolInfo> = vec![&*pool1, &*pool2, &*pool3];
+                                let pools_arr: Vec<&PoolInfo> =
+                                    vec![pool1.as_ref(), pool2.as_ref(), pool3.as_ref()];
                                 let directions = vec![true, true, true];
                                 let last_fee_data = vec![(None, None, None); 3];
                                 let input_amount = 1000.0;
@@ -576,5 +579,27 @@ impl ArbitrageDetector {
             opportunities.len()
         );
         opportunities
+    }
+
+    /// Determine if an arbitrage opportunity is profitable after accounting for fees
+    #[allow(dead_code)]
+    pub fn is_profitable(
+        calc_result: &OpportunityCalculationResult,
+        fee_result: &FeeEstimationResult,
+    ) -> bool {
+        // Simple implementation - check if profit exceeds total costs
+        // A more sophisticated implementation would consider:
+        // - Risk adjustments
+        // - Gas price spikes
+        // - Slippage tolerance
+        // - Minimum profit thresholds
+
+        // Calculate effective profit after all fees
+        let net_profit = calc_result.profit - fee_result.total_cost;
+
+        // Ensure profit exceeds minimum threshold (e.g., 0.5% of input amount)
+        let min_profit_threshold = calc_result.input_amount * 0.005;
+
+        net_profit > min_profit_threshold && calc_result.profit_percentage > 0.005
     }
 }

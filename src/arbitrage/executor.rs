@@ -21,8 +21,7 @@ use std::sync::{
 };
 use std::time::{Duration, Instant};
 
-/// Executes an arbitrage trade between a pair of pools
-#[allow(dead_code)]
+/// Executes an arbitrage trade between a pair of pools (legacy/simple, not async, not used in main pipeline)
 pub fn execute(
     pair: &(Pubkey, Pubkey),
     calc_result: &OpportunityCalculationResult,
@@ -48,8 +47,10 @@ pub fn execute(
     Ok(())
 }
 
+// [Optional] - Only needed if you use this legacy sync interface elsewhere
+
 /// Executor for arbitrage opportunities
-#[allow(dead_code)] // Used in integration/test, and as API for future arb orchestration expansion
+#[allow(dead_code)]
 pub struct ArbitrageExecutor {
     // Wallet used for transactions, needed for any signing in live trading/test
     wallet: Arc<Keypair>,
@@ -67,8 +68,9 @@ pub struct ArbitrageExecutor {
     solana_rpc: Option<Arc<SolanaRpcClient>>,
 }
 
+#[allow(dead_code)]
 impl ArbitrageExecutor {
-    #[allow(dead_code)]
+    /// ArbitrageExecutor struct constructor
     pub fn new(
         wallet: Arc<Keypair>,
         rpc_client: Arc<RpcClient>,
@@ -134,7 +136,6 @@ impl ArbitrageExecutor {
     }
 
     /// Execute an arbitrage opportunity
-    #[allow(dead_code)]
     pub async fn execute(&self, opportunity: ArbitrageOpportunity) -> Result<String> {
         // Check if any tokens in this opportunity are on the ban list
         if self.has_banned_tokens(&opportunity) {
@@ -253,7 +254,6 @@ impl ArbitrageExecutor {
     }
 
     /// Get recent priority fees from the network
-    #[allow(dead_code)]
     pub async fn get_recent_priority_fees(&self, num_blocks: usize) -> (u64, u64, u64) {
         if let Some(solana_rpc) = &self.solana_rpc {
             return solana_rpc
@@ -380,7 +380,6 @@ impl ArbitrageExecutor {
     }
 
     /// Build instructions for the arbitrage transaction
-    #[allow(dead_code)]
     fn build_instructions(&self, opportunity: &ArbitrageOpportunity) -> Result<Vec<Instruction>> {
         // This is a simplified implementation - real implementation would use actual DEX instructions
         let mut instructions = Vec::new();
@@ -436,7 +435,6 @@ impl ArbitrageExecutor {
     }
 
     /// Create a Raydium swap instruction (simplified placeholder)
-    #[allow(dead_code)]
     fn create_raydium_swap_instruction(
         &self,
         _pool: &PoolInfo,
@@ -454,7 +452,6 @@ impl ArbitrageExecutor {
     }
 
     /// Create an Orca swap instruction (simplified placeholder)
-    #[allow(dead_code)]
     fn create_orca_swap_instruction(
         &self,
         _pool: &PoolInfo,
@@ -472,7 +469,6 @@ impl ArbitrageExecutor {
     }
 
     /// Add priority fee to transaction
-    #[allow(dead_code)]
     fn add_priority_fee(&self, transaction: Transaction, fee: u64) -> Result<Transaction> {
         // Create a compute budget instruction with the specified priority fee
         let priority_fee_ix = ComputeBudgetInstruction::set_compute_unit_price(fee);
@@ -523,7 +519,6 @@ impl ArbitrageExecutor {
     }
 
     /// Adjust priority fee based on network conditions (adaptive fee calculation)
-    #[allow(dead_code)]
     pub async fn adjust_priority_fee(&self) -> Result<u64> {
         // Get congestion factor (stored as fixed-point integer, divided by 100 for the actual value)
         let congestion_factor = self.network_congestion.load(Ordering::Relaxed);
@@ -543,8 +538,7 @@ impl ArbitrageExecutor {
         Ok(adaptive_fee)
     }
 
-    /// Calculate optimal priority fee based on profit opportunity and network congestion
-    #[allow(dead_code)]
+    /// Calculate optimal priority fee based on profit opportunity and network congestion (async)
     pub async fn calculate_optimal_priority_fee_async(&self, profit_pct: f64) -> Result<u64> {
         // Get basic priority fee adjusted for network congestion
         let base_fee = self.adjust_priority_fee().await?;

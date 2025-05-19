@@ -1,6 +1,7 @@
 pub mod dex_api_templates;
 pub mod http_utils;
 pub mod http_utils_shared;
+#[cfg(any(test, debug_assertions))]
 pub mod integration_test;
 pub mod lifinity;
 pub mod meteora;
@@ -60,3 +61,4 @@ pub async fn get_all_clients_arc() -> Vec<Arc<dyn DexClient>> {
     // If client initialization becomes async, this function's body will change.
     get_all_clients().into_iter().map(Arc::from).collect()
 }
+

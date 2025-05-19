@@ -13,6 +13,7 @@ use arbitrage::engine::ArbitrageEngine;
 use arbitrage::executor::ArbitrageExecutor;
 use config::check_and_print_env_vars;
 use dex::get_all_clients_arc;
+use dotenv::dotenv;
 use futures::future::join_all;
 use log::info;
 use metrics::Metrics;
@@ -28,8 +29,13 @@ use tokio::time::interval;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    dotenv::dotenv().ok();
+    dotenv().ok(); // ✅ Correctly placed now
     env_logger::init();
+
+    match env::var("MIN_PROFIT") {
+        Ok(val) => println!("✅ MIN_PROFIT: {}", val),
+        Err(_) => println!("❌ MIN_PROFIT is missing!"),
+    }
 
     // --- Load and validate config (typed, env-driven) ---
     let _config = config::env::load_config();
@@ -55,7 +61,7 @@ async fn main() -> anyhow::Result<()> {
     }
 
     // In debug mode, exercise the DEX parser registry and clients
-    #[cfg(debug_assertions)]
+    #[cfg(any(test, debug_assertions))]
     {
         info!("Running DEX integration tests in debug mode...");
         // Exercise parser registry to prevent "unused code" warnings

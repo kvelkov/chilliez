@@ -356,17 +356,6 @@ impl AppConfig {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_app_config() {
-        let config = AppConfig::from_env();
-        assert!(!config.rpc_url.is_empty() || config.rpc_url.is_empty());
-    }
-}
-
 // Print config function used for debugging and diagnostics
 #[cfg(feature = "print-config")]
 pub fn print_config() {
@@ -391,4 +380,15 @@ pub fn print_config() {
     println!("MIN PROFIT: {}", config.min_profit);
     println!("MAX SLIPPAGE: {}", config.max_slippage);
     println!("CYCLE INTERVAL: {}", config.cycle_interval);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_app_config() {
+        let config = AppConfig::from_env();
+        assert!(!config.rpc_url.is_empty() || config.rpc_url.is_empty());
+    }
 }

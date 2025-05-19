@@ -26,7 +26,7 @@ struct PhoenixApiResponse {
     // Add other fields as needed
 }
 
-pub const PHOENIX_PROGRAM_ID: &str = "PhoeNix11111111111111111111111111111111111";
+pub const PHOENIX_PROGRAM_ID: &str = "Pnix1UuGq7bK6iF1kQyK4R6mF1QwZ5Q1QwZ5Q1QwZ5Q1";
 
 pub struct PhoenixClient {
     api_key: String,

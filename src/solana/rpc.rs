@@ -10,7 +10,7 @@ use std::time::Duration;
 
 /// Provides high-availability RPC with retries/fallbacks.
 /// Not yet called by main flow but will be integrated for production HA.
-#[allow(dead_code)]
+#[allow(dead_code)] // These fields/methods are critical for HA and will be used in production
 pub struct SolanaRpcClient {
     /// Primary RPC client - will replace direct RpcClient usage in main/test
     pub primary_client: Arc<RpcClient>,
@@ -23,6 +23,7 @@ pub struct SolanaRpcClient {
     pub retry_delay: Duration,
 }
 
+#[allow(dead_code)] // These methods are part of the HA interface and will be used in production
 impl SolanaRpcClient {
     /// Create a new RPC client with primary and fallback endpoints
     ///
@@ -31,7 +32,6 @@ impl SolanaRpcClient {
     /// * `fallback_endpoints` - List of backup RPC endpoints to try if primary fails
     /// * `max_retries` - Maximum retry attempts before trying fallbacks
     /// * `retry_delay` - Base delay between retry attempts
-    #[allow(dead_code)]
     pub fn new(
         primary_endpoint: &str,
         fallback_endpoints: Vec<String>,
@@ -70,7 +70,6 @@ impl SolanaRpcClient {
     ///
     /// # Arguments
     /// * `pubkey` - The account public key to fetch
-    #[allow(dead_code)]
     pub async fn get_account_data(&self, pubkey: &Pubkey) -> Result<Vec<u8>> {
         let mut retries = 0;
         let mut last_error = None;
@@ -122,7 +121,6 @@ impl SolanaRpcClient {
     /// # Arguments
     /// * `program_id` - The program public key to query
     /// * `filters` - RPC filters to apply to the query
-    #[allow(dead_code)]
     pub async fn get_program_accounts(
         &self,
         program_id: &Pubkey,
@@ -186,7 +184,6 @@ impl SolanaRpcClient {
     ///
     /// Verifies the primary RPC endpoint is responding to health checks.
     /// Used to validate connectivity before performing operations.
-    #[allow(dead_code)]
     pub async fn is_healthy(&self) -> bool {
         self.primary_client.get_health().await.is_ok()
     }

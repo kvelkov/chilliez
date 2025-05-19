@@ -16,11 +16,53 @@ use std::str::FromStr;
 /// Call all parser registry and static parser methods for all DEXes
 pub fn exercise_parser_registry() {
     // Use all program IDs
-    let orca_id = Pubkey::from_str(ORCA_SWAP_PROGRAM_ID).unwrap();
-    let raydium_id = Pubkey::from_str(RAYDIUM_LIQUIDITY_PROGRAM_ID).unwrap();
-    let whirlpool_id = Pubkey::from_str(ORCA_WHIRLPOOL_PROGRAM_ID).unwrap();
-    let lifinity_id = Pubkey::from_str(LIFINITY_PROGRAM_ID).unwrap();
-    let phoenix_id = Pubkey::from_str(PHOENIX_PROGRAM_ID).unwrap();
+    let orca_id = match Pubkey::from_str(ORCA_SWAP_PROGRAM_ID) {
+        Ok(id) => id,
+        Err(e) => {
+            eprintln!(
+                "Invalid ORCA_SWAP_PROGRAM_ID '{}': {}",
+                ORCA_SWAP_PROGRAM_ID, e
+            );
+            return;
+        }
+    };
+    let raydium_id = match Pubkey::from_str(RAYDIUM_LIQUIDITY_PROGRAM_ID) {
+        Ok(id) => id,
+        Err(e) => {
+            eprintln!(
+                "Invalid RAYDIUM_LIQUIDITY_PROGRAM_ID '{}': {}",
+                RAYDIUM_LIQUIDITY_PROGRAM_ID, e
+            );
+            return;
+        }
+    };
+    let whirlpool_id = match Pubkey::from_str(ORCA_WHIRLPOOL_PROGRAM_ID) {
+        Ok(id) => id,
+        Err(e) => {
+            eprintln!(
+                "Invalid ORCA_WHIRLPOOL_PROGRAM_ID '{}': {}",
+                ORCA_WHIRLPOOL_PROGRAM_ID, e
+            );
+            return;
+        }
+    };
+    let lifinity_id = match Pubkey::from_str(LIFINITY_PROGRAM_ID) {
+        Ok(id) => id,
+        Err(e) => {
+            eprintln!(
+                "Invalid LIFINITY_PROGRAM_ID '{}': {}",
+                LIFINITY_PROGRAM_ID, e
+            );
+            return;
+        }
+    };
+    let phoenix_id = match Pubkey::from_str(PHOENIX_PROGRAM_ID) {
+        Ok(id) => id,
+        Err(e) => {
+            eprintln!("Invalid PHOENIX_PROGRAM_ID '{}': {}", PHOENIX_PROGRAM_ID, e);
+            return;
+        }
+    };
     let ids = vec![orca_id, raydium_id, whirlpool_id, lifinity_id, phoenix_id];
     for id in ids {
         let _ = get_pool_parser_fn_for_program(&id);
@@ -79,12 +121,14 @@ pub async fn exercise_dex_clients() {
     let _ = meteora.get_name();
     let _ = phoenix.get_name();
     // Call async quote (dummy values)
-    let _ = orca.get_best_swap_quote("A", "B", 1).await;
-    let _ = raydium.get_best_swap_quote("A", "B", 1).await;
-    let _ = whirlpool.get_best_swap_quote("A", "B", 1).await;
-    let _ = lifinity.get_best_swap_quote("A", "B", 1).await;
-    let _ = meteora.get_best_swap_quote("A", "B", 1).await;
-    let _ = phoenix.get_best_swap_quote("A", "B", 1).await;
+    let usdc = "EPjFWdd5AufqSSqeM2q8VsJb9h6p9FZ6F1u1kQ1QwZ5Q";
+    let sol = "So11111111111111111111111111111111111111112";
+    let _ = orca.get_best_swap_quote(usdc, sol, 1_000_000).await;
+    let _ = raydium.get_best_swap_quote(usdc, sol, 1_000_000).await;
+    let _ = whirlpool.get_best_swap_quote(usdc, sol, 1_000_000).await;
+    let _ = lifinity.get_best_swap_quote(usdc, sol, 1_000_000).await;
+    let _ = meteora.get_best_swap_quote(usdc, sol, 1_000_000).await;
+    let _ = phoenix.get_best_swap_quote(usdc, sol, 1_000_000).await;
 }
 
 /// Serialize and deserialize a dummy PoolInfo to exercise serde imports

@@ -7,6 +7,7 @@ use async_trait::async_trait;
 use log::{error, warn};
 use reqwest::Client;
 // Keep Deserialize for API responses
+use serde::Deserialize;
 use solana_sdk::pubkey::Pubkey;
 use std::env;
 use std::str::FromStr;
@@ -46,7 +47,7 @@ static ORCA_RATE_LIMITER: Lazy<HttpRateLimiter> = Lazy::new(|| {
         3,                          // max retries
         Duration::from_millis(250), // base backoff
         vec![
-            "https://api.orca.so/v1/quote".to_string(), // fallback(s) if any
+            "".to_string(), // fallback(s) if any
         ],
     )
 });
@@ -61,7 +62,7 @@ impl DexClient for OrcaClient {
     ) -> Result<Quote> {
         // Use the rate limiter's get_with_backoff to wrap the HTTP request
         let url = format!(
-            "https://api.orca.so/v1/quote?inputMint={}&outputMint={}&amountIn={}",
+            "https://api.orca.so/v2/solana/quote?inputMint={}&outputMint={}&amountIn={}",
             input_token, output_token, amount
         );
         let request_start_time = Instant::now();
@@ -74,25 +75,56 @@ impl DexClient for OrcaClient {
             .await?;
         let request_duration_ms = request_start_time.elapsed().as_millis() as u64;
         if response.status().is_success() {
-            match response.json::<Quote>().await {
-                Ok(mut quote) => {
-                    if quote.dex.is_empty() {
-                        quote.dex = self.get_name().to_string();
+            let text = response.text().await?;
+            // Try to detect if the response is a valid quote or an error
+            if text.contains("\"inputMint\"") && text.contains("\"outputMint\"") {
+                match serde_json::from_str::<OrcaQuoteResponse>(&text) {
+                    Ok(api_response) => {
+                        let input_amount_u64 =
+                            api_response.in_amount.parse::<u64>().map_err(|e| {
+                                anyhow!(
+                                    "Failed to parse Orca in_amount '{}': {}",
+                                    api_response.in_amount,
+                                    e
+                                )
+                            })?;
+                        let output_amount_u64 =
+                            api_response.out_amount.parse::<u64>().map_err(|e| {
+                                anyhow!(
+                                    "Failed to parse Orca out_amount '{}': {}",
+                                    api_response.out_amount,
+                                    e
+                                )
+                            })?;
+                        Ok(Quote {
+                            input_token: api_response.input_mint,
+                            output_token: api_response.output_mint,
+                            input_amount: input_amount_u64,
+                            output_amount: output_amount_u64,
+                            dex: self.get_name().to_string(),
+                            route: vec![],
+                            latency_ms: Some(request_duration_ms),
+                            execution_score: None,
+                            route_path: None,
+                            slippage_estimate: None,
+                        })
                     }
-                    quote.latency_ms = Some(request_duration_ms);
-                    Ok(quote)
+                    Err(e) => {
+                        error!(
+                            "Failed to deserialize Orca quote from URL {}: {:?}. Response body: {}",
+                            url, e, text
+                        );
+                        Err(anyhow!(
+                            "Failed to deserialize Orca quote from {}. Error: {}. Body: {}",
+                            url,
+                            e,
+                            text
+                        ))
+                    }
                 }
-                Err(e) => {
-                    error!(
-                        "Failed to deserialize Orca quote from URL {}: {:?}.",
-                        url, e
-                    );
-                    Err(anyhow!(
-                        "Failed to deserialize Orca quote from {}. Error: {}",
-                        url,
-                        e
-                    ))
-                }
+            } else {
+                error!("Orca API did not return a quote. Response body: {}", text);
+                Err(anyhow!("Orca API did not return a quote. Body: {}", text))
             }
         } else {
             let status = response.status();
@@ -190,4 +222,19 @@ impl OrcaPoolParser {
     pub fn get_program_id() -> Pubkey {
         <Self as PoolParser>::get_program_id()
     }
+}
+
+// This struct matches the expected fields in a successful Orca quote API response.
+// If the API returns an error or a different structure, deserialization will fail.
+#[derive(Deserialize, Debug)]
+struct OrcaQuoteResponse {
+    #[serde(rename = "inputMint")]
+    input_mint: String,
+    #[serde(rename = "outputMint")]
+    output_mint: String,
+    #[serde(rename = "inAmount")]
+    in_amount: String,
+    #[serde(rename = "outAmount")]
+    out_amount: String,
+    // ...other fields as needed...
 }

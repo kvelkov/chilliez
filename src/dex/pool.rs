@@ -19,7 +19,6 @@ pub type PoolParseFn = fn(address: Pubkey, data: &[u8]) -> AnyhowResult<PoolInfo
 /// This allows dynamic dispatch of parsing logic based on the account's owner program.
 pub static POOL_PARSER_REGISTRY: Lazy<HashMap<Pubkey, PoolParseFn>> = Lazy::new(|| {
     let mut m = HashMap::new();
-    
     // Register Orca legacy pool parser
     // Ensure OrcaPoolParser is correctly pathed and implements UtilsPoolParser
     let orca_program_id = crate::dex::orca::OrcaPoolParser::get_program_id();
@@ -36,7 +35,6 @@ pub static POOL_PARSER_REGISTRY: Lazy<HashMap<Pubkey, PoolParseFn>> = Lazy::new(
         crate::dex::raydium::RaydiumPoolParser::parse_pool_data as PoolParseFn,
     );
     log::info!("Registered Raydium pool parser for program ID: {}", raydium_program_id);
-   
 
     // Register Lifinity pool parser
     // Ensure LifinityPoolParser is correctly pathed
@@ -78,7 +76,7 @@ pub fn get_pool_parser_fn_for_program(program_id: &Pubkey) -> Option<PoolParseFn
 // The calculate_price function is removed from here as per your decision.
 // Price calculations are primarily handled in arbitrage/calculator.rs.
 /*
-#[allow(dead_code)]
+
 pub fn calculate_price(pool: &PoolInfo) -> f64 {
     // ... implementation ...
 }
@@ -103,12 +101,9 @@ pub fn calculate_output_amount(
 /// It's useful for arbitrage candidate discovery and token pair filtering.
 /// Note: This struct seems to be a simple wrapper around a HashMap.
 /// Consider if its methods are used extensively or if direct HashMap usage is simpler.
-#[allow(dead_code)] // Currently, PoolMap and its methods are not used in the main flow.
 pub struct PoolMap {
     pub pools: HashMap<Pubkey, Arc<PoolInfo>>, // Changed to Arc<PoolInfo> for shared ownership
 }
-
-#[allow(dead_code)]
 impl PoolMap {
     /// Creates a new, empty `PoolMap`.
     pub fn new() -> Self {

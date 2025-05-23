@@ -2,8 +2,9 @@
 //! Defines the core struct for representing multi-hop, cross-DEX arbitrage opportunities.
 
 use crate::arbitrage::fee_manager::{FeeBreakdown, FeeManager};
-use crate::utils::{DexType, PoolInfo, TokenAmount}; // TokenAmount might not be directly used here but good for context
+use crate::utils::{DexType, PoolInfo, TokenAmount};
 use solana_sdk::pubkey::Pubkey;
+use std::sync::Arc; // Added Arc
 
 /// Represents a single hop in a multi-hop arbitrage route.
 #[derive(Debug, Clone)]
@@ -17,6 +18,7 @@ pub struct ArbHop {
 }
 
 /// Represents a full arbitrage opportunity, possibly spanning multiple DEXes and hops.
+/// This struct now consolidates fields from the previous ArbitrageOpportunity.
 #[derive(Debug, Clone)]
 pub struct MultiHopArbOpportunity {
     pub id: String, // Unique identifier for the opportunity
@@ -27,13 +29,13 @@ pub struct MultiHopArbOpportunity {
     /// Profit as a percentage of input
     pub profit_pct: f64,
     /// The initial input token (Symbol or Mint Address)
-    pub input_token: String,
+    pub input_token: String, // This was also input_token_mint as Pubkey effectively
     /// The final output token (should match input for cyclic arb) (Symbol or Mint Address)
-    pub output_token: String,
+    pub output_token: String, // This was also output_token_mint as Pubkey effectively
     /// The amount initially input (human-readable format)
-    pub input_amount: f64,
+    pub input_amount: f64, // This was input_amount of type TokenAmount in ArbitrageOpportunity
     /// The expected output after all hops (human-readable format)
-    pub expected_output: f64,
+    pub expected_output: f64, // This was expected_output of type TokenAmount in ArbitrageOpportunity
     /// The full DEX path (for analytics/logging)
     pub dex_path: Vec<DexType>,
     /// The pools traversed (for analytics/logging)
@@ -43,11 +45,20 @@ pub struct MultiHopArbOpportunity {
     pub risk_score: Option<f64>,
     pub notes: Option<String>,
 
-    // Fields added to resolve errors in detector.rs
+    // Fields for USD value estimation (previously in MultiHopArbOpportunity)
     pub estimated_profit_usd: Option<f64>,
     pub input_amount_usd: Option<f64>,
     pub intermediate_tokens: Vec<String>, // Mint addresses or symbols of intermediate tokens
     pub output_amount_usd: Option<f64>,
+
+    // Fields from the former ArbitrageOpportunity struct
+    pub source_pool: Arc<PoolInfo>, // Represents the first pool in the chain for simpler cases
+    pub target_pool: Arc<PoolInfo>, // Represents the last pool in the chain for simpler cases
+
+    // Mint addresses for the primary tokens involved in the cycle
+    pub input_token_mint: Pubkey,         // Mint of the initial input token
+    pub output_token_mint: Pubkey,        // Mint of the final output token (often same as input_token_mint)
+    pub intermediate_token_mint: Option<Pubkey>, // Mint of the token after the first hop (for 2-hop)
 }
 
 impl MultiHopArbOpportunity {
@@ -57,7 +68,7 @@ impl MultiHopArbOpportunity {
     }
 
     /// Logs all hops in the arbitrage opportunity for analytics/logging.
-    pub fn log_hop(&self) {
+    pub fn log_hop_details(&self) { // Renamed to avoid conflict if `hops` field is directly logged
         for (i, hop) in self.hops.iter().enumerate() {
             log::info!(
                 "[HOP {}] DEX: {:?}, Pool: {}, InputToken: {}, OutputToken: {}, InputAmount: {:.6}, ExpectedOutput: {:.6}",
@@ -75,10 +86,12 @@ impl MultiHopArbOpportunity {
     /// Logs summary of the multi-hop arbitrage opportunity for analytics/logging.
     pub fn log_summary(&self) {
         log::info!(
-            "[ARB OPPORTUNITY ID: {}] InputToken: {}, OutputToken: {}, InputAmount: {:.6}, ExpectedOutput: {:.6}, Profit: {:.6} ({:.4}%), DexPath: {:?}, PoolPath: {:?}, RiskScore: {:?}, Notes: {}",
+            "[ARB OPPORTUNITY ID: {}] InputToken: {} ({}), OutputToken: {} ({}), InputAmount: {:.6}, ExpectedOutput: {:.6}, Profit: {:.6} ({:.4}%), DexPath: {:?}, PoolPath: {:?}, RiskScore: {:?}, Notes: {}",
             self.id,
             self.input_token,
+            self.input_token_mint,
             self.output_token,
+            self.output_token_mint,
             self.input_amount,
             self.expected_output,
             self.total_profit,
@@ -86,8 +99,11 @@ impl MultiHopArbOpportunity {
             self.dex_path,
             self.pool_path,
             self.risk_score,
-            self.notes.as_deref().unwrap_or("")
+            self.notes.as_deref().unwrap_or("N/A")
         );
+        if self.hops.is_empty() {
+             log::info!("Source Pool: {}, Target Pool: {}", self.source_pool.address, self.target_pool.address);
+        }
     }
 }
 

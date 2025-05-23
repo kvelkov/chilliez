@@ -1,8 +1,15 @@
 use crate::arbitrage::fee_manager::{get_gas_cost_for_dex, FeeManager, XYKSlippageModel};
-use crate::utils::{PoolInfo, TokenAmount};
+use crate::config::settings::Config;
+use crate::utils::{DexType, PoolInfo, TokenAmount, calculate_output_amount}; // Removed non-existent mint constants
 use dashmap::DashMap;
 use once_cell::sync::Lazy;
 use solana_sdk::pubkey::Pubkey;
+use std::sync::Arc;
+
+
+pub struct ArbitrageCalculator {
+    config: Arc<Config>,
+}
 
 /// Represents the result of opportunity calculation
 #[derive(Debug, Clone)]
@@ -26,7 +33,6 @@ static OPTIMAL_INPUT_CACHE: Lazy<DashMap<(Pubkey, Pubkey, bool, u64), TokenAmoun
 static MULTI_HOP_CACHE: Lazy<DashMap<String, (f64, f64, f64)>> = Lazy::new(|| DashMap::new());
 
 /// Calculate arbitrage opportunity metrics for a pair of pools
-#[allow(dead_code)]
 pub fn calculate_opportunity(_pair: &(Pubkey, Pubkey)) -> OpportunityCalculationResult {
     // A simple placeholder implementation - in production this would:
     // 1. Look up the pools from a global pool map or context

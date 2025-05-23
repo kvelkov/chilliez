@@ -1425,6 +1425,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "835a3dc7d1ec9e75e2b5fb4ba75396837112d2060b03f7d43bc1897c7f7211da"
 
 [[package]]
+name = "fern"
+version = "0.6.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d9f0c14694cbd524c8720dd69b0e3179344f04ebb5f90f2e4a440c6ea3b2f1ee"
+dependencies = [
+ "log",
+]
+
+[[package]]
 name = "flate2"
 version = "1.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3515,6 +3524,7 @@ dependencies = [
  "dotenv",
  "env_logger 0.11.8",
  "fastrand",
+ "fern",
  "futures",
  "hex",
  "itertools 0.12.1",

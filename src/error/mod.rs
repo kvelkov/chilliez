@@ -25,6 +25,9 @@ pub enum ArbError {
     #[error("Configuration error: {0}")]
     ConfigError(String),
 
+    #[error("Lock acquisition error: {0}")] // Added LockError variant
+    LockError(String),
+
     #[error("Insufficient liquidity: {0}")]
     InsufficientLiquidity(String),
 
@@ -57,6 +60,12 @@ pub enum ArbError {
 
     #[error("Unknown error: {0}")]
     Unknown(String),
+
+    #[error("Failed to load keypair: {0}")]
+    KeypairLoadError(String), // Added
+
+    #[error("Cache initialization failed: {0}")]
+    CacheInitializationError(String), // Added
 }
 
 // Implement From traits for common error types

@@ -31,7 +31,6 @@ pub trait DexClient: Send + Sync {
     fn get_name(&self) -> &str; // Returns the name of the DEX implementation
 }
 
-#[allow(dead_code)]
 impl Quote {
     /// Returns the profit in base units (output - input)
     pub fn profit(&self) -> i64 {
@@ -64,3 +63,26 @@ impl dyn DexClient {
 
 use anyhow::Result;
 use async_trait::async_trait;
+
+#[derive(Debug, Serialize, Deserialize, Clone)] // Added Clone
+pub struct QuoteRequest {
+    pub input_token: String,
+    pub output_token: String,
+    pub amount: u64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)] // Added Clone
+pub struct QuoteResponse {
+    pub input_token: String,
+    pub output_token: String,
+    pub input_amount: u64,
+    pub output_amount: u64,
+    pub dex: String,
+    pub route: Vec<String>,
+
+    // New recommended fields
+    pub latency_ms: Option<u64>,         // Time it took to fetch quote
+    pub execution_score: Option<f64>,    // AI/ML score for quality
+    pub route_path: Option<Vec<String>>, // Explicit path (if multi-hop)
+    pub slippage_estimate: Option<f64>,  // % slippage expected
+}

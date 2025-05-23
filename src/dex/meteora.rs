@@ -68,7 +68,6 @@ impl MeteoraClient {
         }
     }
 
-    #[allow(dead_code)]
     pub fn get_api_key(&self) -> &str {
         &self.api_key
     }

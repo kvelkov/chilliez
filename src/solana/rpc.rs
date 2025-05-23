@@ -6,11 +6,10 @@ use solana_client::rpc_filter::RpcFilterType;
 use solana_sdk::commitment_config::CommitmentConfig;
 use solana_sdk::pubkey::Pubkey;
 use std::sync::Arc;
-use std::time::Duration;
+use tokio::time::Duration;
 
 /// Provides high-availability RPC with retries/fallbacks.
 /// Not yet called by main flow but will be integrated for production HA.
-#[allow(dead_code)] // These fields/methods are critical for HA and will be used in production
 pub struct SolanaRpcClient {
     /// Primary RPC client - will replace direct RpcClient usage in main/test
     pub primary_client: Arc<RpcClient>,
@@ -23,9 +22,8 @@ pub struct SolanaRpcClient {
     pub retry_delay: Duration,
 }
 
-#[allow(dead_code)] // These methods are part of the HA interface and will be used in production
 impl SolanaRpcClient {
-    /// Create a new RPC client with primary and fallback endpoints
+    /// Creates a new `SolanaRpcClient` with a primary RPC endpoint and optional fallback endpoints
     ///
     /// # Arguments
     /// * `primary_endpoint` - The main RPC endpoint URL

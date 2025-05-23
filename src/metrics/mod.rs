@@ -4,8 +4,9 @@ use std::fs::OpenOptions; // For file logging, if kept
 use std::io::Write;      // For file logging, if kept
 use std::sync::Arc;      // If any part becomes async and shared
 use tokio::sync::Mutex;  // If any part becomes async and shared
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH, Instant}; // Added Instant
 use chrono::{Utc, TimeZone}; // For better timestamp handling
+use serde::{Serialize, Deserialize}; // Added for (de)serialization
 
 // If you intend to log to a file as in the prometheus version:
 // use serde_json::json;
@@ -39,11 +40,12 @@ pub struct ExecutionRecord {
     timestamp: Instant,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)] // Added derives for TradeOutcome
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)] // Added derives for TradeOutcome
 pub enum TradeOutcome {
     Success,
     Failure,
-    Skipped,
+    Attempted, // Added
+    Skipped, // Assuming Skipped was already there or needed
 }
 
 
@@ -280,32 +282,52 @@ impl Metrics {
         // Example: self.log_to_file(&log_entry_str);
     }
 
-    pub fn record_opportunity_detected(
-        &mut self,
-        input_token: &str,
-        intermediate_token: &str, // Assuming this is the last intermediate before cycling back
-        profit_pct: f64,
-        estimated_profit_usd: Option<f64>,
-        input_amount_usd: Option<f64>,
-        dex_path: Vec<String>, // Changed to Vec<String>
-    ) -> Result<(), String> { // Return Result
-        self.opportunities_detected_count += 1;
-        let timestamp_utc = chrono::Utc::now(); // Use Utc::now() for DateTime<Utc>
-        let dex_path_str = dex_path.join(" -> ");
+    pub fn log_degradation_mode_change(&mut self, entered_degradation: bool, new_threshold: Option<f64>) {
+        let mode = if entered_degradation { "entered" } else { "exited" };
+        let threshold_info = new_threshold.map_or_else(|| "".to_string(), |t| format!(", new threshold: {:.4}%", t * 100.0));
+        info!("System {} degradation mode{}.", mode, threshold_info);
+    }
 
-        let log_entry = format!(
-            "{}Z,OPP_DETECTED,{},{},{:.4}%,{:.2},{:.2},{}",
-            timestamp_utc.to_rfc3339_opts(chrono::SecondsFormat::Millis, true), // Use timestamp_utc
+    pub fn log_pools_updated(&mut self, new_pools: usize, updated_pools: usize, total_pools: usize) {
+        info!("Pools updated: {} new, {} updated. Total pools: {}.", new_pools, updated_pools, total_pools);
+    }
+
+    pub fn record_trade_outcome(
+        &mut self,
+        opportunity_id: &str,
+        dex_path: &[String],
+        input_token: &str,
+        output_token: &str,
+        input_amount: f64,
+        expected_output_amount: f64,
+        actual_output_amount: Option<f64>,
+        profit_percentage: f64,
+        estimated_profit_usd: Option<f64>,
+        actual_profit_usd: Option<f64>,
+        outcome: TradeOutcome,
+        execution_time_ms: u128,
+        transaction_id: Option<String>,
+        error_message: Option<String>,
+        tx_cost_sol: f64, // Added
+        fees_paid_usd: Option<f64>, // Added
+    ) {
+        self.record_trade_attempt(
+            opportunity_id,
+            dex_path,
             input_token,
-            intermediate_token,
-            profit_pct,
-            estimated_profit_usd.unwrap_or(0.0),
-            input_amount_usd.unwrap_or(0.0),
-            dex_path_str
+            output_token,
+            input_amount,
+            expected_output_amount,
+            profit_percentage, // This was estimated_profit_pct
+            estimated_profit_usd,
+            outcome,
+            actual_profit_usd,
+            execution_time_ms,
+            tx_cost_sol, // Pass through
+            fees_paid_usd, // Pass through
+            error_message,
+            transaction_id,
         );
-        info!("{}", log_entry);
-        // Example: self.log_to_file(&log_entry_str)?;
-        Ok(())
     }
 
 
@@ -367,8 +389,3 @@ impl Metrics {
 }
 
 // Default implementation for convenience
-impl Default for Metrics {
-    fn default() -> Self {
-        Metrics::new(100.0, None) // Provide default values for new parameters
-    }
-}

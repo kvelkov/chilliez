@@ -3,9 +3,10 @@ use std::collections::VecDeque;
 use crate::arbitrage::detector::ArbitrageDetector;
 use crate::config::settings::Config;
 use crate::metrics::Metrics;
-use std::sync::{Arc, Mutex as StdMutex}; // Aliased Mutex to StdMutex
+use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::Mutex; // Added tokio Mutex
+use tokio::sync::Mutex;
+use log::info;
 
 /// Tracks recent prices and computes rolling volatility (std deviation).
 pub struct VolatilityTracker {
@@ -64,7 +65,7 @@ impl DynamicThresholdUpdater {
         metrics: Arc<Mutex<Metrics>>,            // Changed to tokio::sync::Mutex
     ) -> Self {
         Self {
-            min_profit_threshold: config.min_profit_pct, // Initialize from config
+            min_profit_threshold: config.min_profit_pct.unwrap_or(0.0), // Initialize from config
             volatility_factor: config.volatility_threshold_factor.unwrap_or(0.5), // Default if not in config
             update_interval: Duration::from_secs(config.dynamic_threshold_update_interval_secs.unwrap_or(300)),
             detector,
@@ -86,7 +87,7 @@ impl DynamicThresholdUpdater {
             let base_threshold = self.config.min_profit_pct;
             let volatility_factor = self.config.volatility_threshold_factor.unwrap_or(0.1);
 
-            let new_threshold = recommend_min_profit_threshold(historical_volatility, base_threshold, volatility_factor);
+            let new_threshold = recommend_min_profit_threshold(historical_volatility, base_threshold.unwrap_or(0.0), volatility_factor);
             
             // Update the threshold in ArbitrageEngine or wherever it's stored
             // This might involve sending the new_threshold through a channel or calling a method on an Arc<RwLock<f64>>
@@ -111,7 +112,7 @@ mod tests {
             tracker.add_price(p);
         }
         let vol = tracker.volatility();
-        let threshold = recommend_min_profit_threshold(volatility, vol, 0.5);
+        let threshold = recommend_min_profit_threshold(vol, vol, 0.5); // Corrected: was (volatility, vol, 0.5)
         assert!(vol > 0.0);
         assert!(threshold >= 0.01);
     }

@@ -7,13 +7,11 @@ use tokio::sync::RwLock;
 
 /// A cache for token metadata to reduce RPC calls.
 /// Primed for future UI/metrics/analytics integrations.
-#[allow(dead_code)]
 pub struct TokenMetadataCache {
     cache: Arc<RwLock<HashMap<Pubkey, TokenMetadata>>>,
 }
 
 /// Metadata for a token, public for orchestrator/metrics/analytics future expansion.
-#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct TokenMetadata {
     pub mint: Pubkey,
@@ -25,7 +23,6 @@ pub struct TokenMetadata {
 
 impl TokenMetadataCache {
     /// Create a new token metadata cache
-    #[allow(dead_code)]
     pub fn new() -> Self {
         Self {
             cache: Arc::new(RwLock::new(HashMap::new())),
@@ -33,7 +30,6 @@ impl TokenMetadataCache {
     }
 
     /// Get token metadata, fetching it if not in cache
-    #[allow(dead_code)]
     pub async fn get_metadata(
         &self,
         mint: &Pubkey,
@@ -54,7 +50,6 @@ impl TokenMetadataCache {
     }
 
     /// Fetch token metadata from RPC (or token list as fallback)
-    #[allow(dead_code)]
     async fn fetch_token_metadata(mint: &Pubkey, _rpc_client: &RpcClient) -> Result<TokenMetadata> {
         // In a real implementation, we would fetch metadata from on-chain program
         // For now, we'll use a simplified approach with hardcoded values for common tokens
@@ -104,7 +99,6 @@ impl TokenMetadataCache {
     }
 
     /// Add or update token metadata in the cache
-    #[allow(dead_code)]
     pub async fn update_metadata(&self, metadata: TokenMetadata) {
         self.cache.write().await.insert(metadata.mint, metadata);
     }
@@ -112,7 +106,6 @@ impl TokenMetadataCache {
 
 /// Parse account data based on its structure.
 /// Utility for future integration with program-specific account parsing.
-#[allow(dead_code)]
 pub fn parse_account_data(account_type: &str, data: &[u8]) -> Result<serde_json::Value> {
     match account_type {
         "token" => parse_token_account(data),

@@ -2,466 +2,347 @@
 
 // Module declarations
 mod arbitrage;
-mod cache; // Added cache module
+mod cache;
 mod config;
 mod dex;
 mod error;
 mod metrics;
 mod solana;
-pub mod utils; // Keep utils public if types are used by other crates, otherwise consider private
-pub mod websocket; // Corrected: This should likely be `crate::solana::websocket` or a local module
+pub mod utils;
+pub mod websocket; // Consider if this should be solana::websocket
 
 // Crate imports
 use crate::{
     arbitrage::{
-        // detector::ArbitrageDetector, // Marked as unused
-        // dynamic_threshold::recommend_min_profit_threshold, // Marked as unused
-        dynamic_threshold::VolatilityTracker, // Kept as it's used
+        dynamic_threshold::VolatilityTracker,
         engine::ArbitrageEngine,
-        executor::ArbitrageExecutor, 
-        // opportunity::MultiHopArbOpportunity, // Marked as unused
+        executor::ArbitrageExecutor,
+        opportunity::MultiHopArbOpportunity, // Using the unified struct
     },
     cache::Cache,
-    config::load_config, // Removed ::Config as it's unused
+    config::load_config,
     dex::get_all_clients_arc,
-    error::ArbError, 
-    metrics::{Metrics, TradeOutcome}, // Added TradeOutcome
+    error::ArbError,
+    metrics::{Metrics, TradeOutcome},
     solana::{
         rpc::SolanaRpcClient,
-        websocket::{SolanaWebsocketManager, WebsocketUpdate}, // Corrected import path
+        websocket::{SolanaWebsocketManager, WebsocketUpdate, RawAccountUpdate}, // Added RawAccountUpdate
     },
-    utils::{setup_logging, ProgramConfig, PoolInfo, load_keypair}, // Added PoolInfo, load_keypair, removed self import
-    // Removed websocket::AccountUpdate as it's not directly used here, or should be defined
+    utils::{setup_logging, PoolInfo, load_keypair}, // Removed ProgramConfig as it's unused here
 };
-use solana_sdk::signer::Signer; 
-// use futures::future::join_all; // Marked as unused
+
 use log::{debug, error, info, warn};
-use solana_sdk::{pubkey::Pubkey, signature::read_keypair_file};
-use solana_client::rpc_client::RpcClient; // Added RpcClient import
+use solana_sdk::{pubkey::Pubkey, signature::read_keypair_file, signer::Signer};
+use solana_client::nonblocking::rpc_client::RpcClient as NonBlockingRpcClient; // Aliased
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::signal;
 use tokio::sync::{Mutex, RwLock};
-use tokio::time::{interval, Instant}; // Import tokio::time::Instant
+use tokio::time::{interval, Instant};
+
 
 #[tokio::main]
 async fn main() -> Result<(), ArbError> {
-    // Setup logging
     setup_logging().expect("Failed to initialize logging");
     info!("Solana Arbitrage Bot starting...");
 
-    // Load configuration
-    let app_config = Arc::new(load_config()?); // Corrected to use imported load_config directly
+    let app_config = Arc::new(load_config()?);
     info!("Configuration loaded and validated successfully.");
 
-    // --- Initialize Metrics ---
-    // If log_path for metrics comes from config, pass it here:
-    // let metrics_log_path = app_config.metrics_log_path.as_deref(); // Example config field
     let metrics = Arc::new(Mutex::new(Metrics::new(
-        app_config.sol_price_usd.unwrap_or(100.0), 
-        app_config.metrics_log_path.clone(), // Pass metrics_log_path from config
+        app_config.sol_price_usd.unwrap_or(100.0),
+        app_config.metrics_log_path.clone(),
     )));
+    metrics.lock().await.log_launch();
 
-    metrics.lock().await.log_launch(); // log_launch is not async
+    info!("Initializing Solana RPC clients...");
+    let primary_rpc_endpoint = app_config.rpc_url.clone();
+    let fallback_rpc_endpoints_str = app_config.rpc_url_backup.clone().unwrap_or_default();
 
-    // Initialize Solana RPC client (both primary and fallback)
-    info!("Initializing Solana RPC client...");
-    let primary_rpc_endpoint = app_config.rpc_url.clone(); // Corrected: was redis_url
-    let fallback_rpc_endpoints = app_config.rpc_url_backup.clone(); // Corrected: was dex_quote_cache_ttl_secs
-
-    let rpc_client = Arc::new(SolanaRpcClient::new_with_fallbacks(
+    // High-Availability RPC Client
+    let ha_solana_rpc_client = Arc::new(SolanaRpcClient::new(
         &primary_rpc_endpoint,
-        &fallback_rpc_endpoints.unwrap_or_default(), // Corrected: use rpc_url_backup
-        app_config.rpc_max_retries.unwrap_or(5), // Corrected: use rpc_max_retries
-        Duration::from_millis(app_config.rpc_retry_delay_ms.unwrap_or(1000)), // Corrected: use rpc_retry_delay_ms
+        fallback_rpc_endpoints_str,
+        app_config.rpc_max_retries.unwrap_or(3), // Default retries
+        Duration::from_millis(app_config.rpc_retry_delay_ms.unwrap_or(500)), // Default delay
     ));
-    info!("Solana RPC client initialized.");
+    info!("High-availability Solana RPC client initialized.");
 
-    // --- Initialize Redis Cache ---
+    // Direct Non-Blocking RPC Client (for components that specifically need it)
+    let direct_rpc_client = Arc::new(
+        NonBlockingRpcClient::new_with_commitment(
+            primary_rpc_endpoint.clone(),
+            solana_sdk::commitment_config::CommitmentConfig::confirmed(),
+        ),
+    );
+    info!("Direct non-blocking Solana RPC client initialized.");
+
+
     let redis_cache = Arc::new(
         Cache::new(&app_config.redis_url, app_config.redis_default_ttl_secs)
             .await
             .map_err(|e| {
                 error!("CRITICAL: Failed to initialize Redis cache at {}: {}", app_config.redis_url, e);
-                anyhow::anyhow!("Redis cache initialization failed: {}", e)
+                ArbError::ConfigError(format!("Redis cache initialization failed: {}", e))
             })?,
     );
     info!("Redis cache initialized successfully at {}", app_config.redis_url);
 
-    // --- Initialize Solana RPC Clients ---
-    let primary_rpc_endpoint = app_config.rpc_url.clone();
-    let fallback_rpc_endpoints = app_config.rpc_url_backup
-        .iter()
-        .cloned()
-        .collect::<Vec<String>>();
-
-    let ha_solana_rpc_client = Arc::new(SolanaRpcClient::new(
-        &primary_rpc_endpoint,
-        fallback_rpc_endpoints,
-        app_config.rpc_max_retries,
-        Duration::from_millis(app_config.rpc_retry_delay_ms),
-    ));
-    info!("High-availability Solana RPC client initialized for endpoint: {}", primary_rpc_endpoint);
-
-    let direct_rpc_client = Arc::new(
-        solana_client::nonblocking::rpc_client::RpcClient::new_with_commitment(
-            primary_rpc_endpoint.clone(),
-            solana_sdk::commitment_config::CommitmentConfig::confirmed(), // Or from config
-        ),
-    );
-    info!("Direct Solana RPC client initialized for endpoint: {}", primary_rpc_endpoint);
-
-
-    // --- Initialize DEX API Clients ---
-    // This now correctly passes the initialized cache and config.
-    let _dex_api_clients = get_all_clients_arc(Arc::clone(&redis_cache), Arc::clone(&app_config)).await;
+    let dex_api_clients = get_all_clients_arc(Arc::clone(&redis_cache), Arc::clone(&app_config)).await;
     info!("DEX API clients initialized and configured with cache.");
 
-
-    // --- Initialize Shared Pools Map ---
     let pools_map: Arc<RwLock<HashMap<Pubkey, Arc<PoolInfo>>>> =
         Arc::new(RwLock::new(HashMap::new()));
-    // Ensure log_pools_fetched in metrics/mod.rs is updated if it needs to be async or handle the new pools_map type.
-    metrics.lock().await.log_pools_fetched(pools_map.read().await.len()); // log_pools_fetched is not async
-    info!("Initial pool data fetched (or initialized as empty).");
+    metrics.lock().await.log_pools_fetched(pools_map.read().await.len());
+    info!("Initial pool data map initialized.");
 
-    // Load trader wallet
-    let wallet_path = app_config.trader_wallet_keypair_path.clone(); // Corrected: was health_check_token_symbol
-    let wallet = match read_keypair_file(&wallet_path).map_err(|e| {
-        error!(
-            "Failed to read keypair file from path '{}': {}",
-            wallet_path, e
-        );
-        anyhow::anyhow!("Failed to read keypair file '{}': {}", wallet_path, e)
-    }) {
+    let wallet_path = app_config.trader_wallet_keypair_path.clone();
+    let wallet = match read_keypair_file(&wallet_path) {
         Ok(kp) => Arc::new(kp),
-        Err(e) => return Err(e),
+        Err(e) => {
+            error!("Failed to read keypair file from path '{}': {}", wallet_path, e);
+            return Err(ArbError::ConfigError(format!("Failed to read keypair file '{}': {}", wallet_path, e)));
+        }
     };
-    info!("Trader wallet loaded successfully from: {}", wallet_path);
-    info!("Trader wallet Pubkey: {}", wallet.pubkey());
+    info!("Trader wallet loaded successfully from: {}. Pubkey: {}", wallet_path, wallet.pubkey());
 
-    // Initialize TransactionExecutor
-    let wallet_keypair_for_tx = Arc::new(load_keypair(&app_config.trader_wallet_keypair_path)?); // Used imported load_keypair
-    let rpc_client_for_tx = Arc::new(RpcClient::new(app_config.rpc_url.clone()));
+    // ArbitrageExecutor uses the direct NonBlockingRpcClient for sending transactions
+    let tx_executor = Arc::new(ArbitrageExecutor::new(
+        wallet.clone(),
+        direct_rpc_client.clone(), // Using the direct non-blocking client
+        app_config.default_priority_fee_lamports,
+        Duration::from_secs(app_config.max_transaction_timeout_seconds),
+        app_config.paper_trading, // General simulation for testing before live
+        app_config.paper_trading, // Specific paper trading mode
+    ).with_solana_rpc(ha_solana_rpc_client.clone())); // Provide HA client for internal HA features if any
+    info!("ArbitrageExecutor initialized.");
 
-    let tx_executor = Arc::new(ArbitrageExecutor::new( 
-        wallet_keypair_for_tx.clone(),
-        rpc_client_for_tx.clone(),
-        app_config.default_priority_fee_lamports.unwrap_or(10000),
-        std::time::Duration::from_secs(app_config.transaction_timeout_secs.unwrap_or(30)),
-        app_config.simulation_mode.unwrap_or(false),
-    ));
 
-    // Initialize Metrics (already initialized above, reusing 'metrics')
-    // let metrics = Arc::new(Mutex::new(Metrics::new(Some("metrics_log.json "))));
-
-    // Initialize ArbitrageEngine
-    let arbitrage_engine_for_tx = Arc::new(ArbitrageEngine::new( // Renamed to avoid conflict
-        pools_map.clone(),
-        Some(rpc_client_for_tx.clone()), 
-        app_config.clone(),
-        metrics.clone(),
-        None, 
-    ));
-    info!("TransactionExecutor initialized."); // This log refers to tx_executor
-
-    // --- Initialize Arbitrage Executor ---
-    let executor = Arc::new(
-        ArbitrageExecutor::new(
-            Arc::clone(&wallet),
-            Arc::clone(&direct_rpc_client),
-            app_config.default_priority_fee_lamports.unwrap_or(0), // Ensure default if None
-            Duration::from_secs(app_config.max_transaction_timeout_seconds),
-            app_config.paper_trading.unwrap_or(false), // Ensure default if None
-        )
-        .with_solana_rpc(Arc::clone(&ha_solana_rpc_client)),
-    );
-    if let Err(e) = executor.update_network_congestion().await {
-        warn!("Initial network congestion update failed: {}", e);
-    }
-    info!("Arbitrage executor initialized.");
-
-    // --- Initialize Arbitrage Engine ---
     let ws_manager_instance = if !app_config.ws_url.is_empty() {
-        let (manager, _receiver) = crate::solana::websocket::SolanaWebsocketManager::new(
+        let (manager, _receiver) = SolanaWebsocketManager::new( // receiver is for RawAccountUpdate
             app_config.ws_url.clone(),
-            vec![], // TODO: Add fallback WS URLs from config if available
-            app_config.ws_update_channel_size,
+            app_config.rpc_url_backup.clone().unwrap_or_default(), // Using RPC fallbacks as WS fallbacks concept
+            app_config.ws_update_channel_size.unwrap_or(1024),
         );
-        Some(manager)
+        Some(Arc::new(Mutex::new(manager))) // Wrap manager in Arc<Mutex<>>
     } else {
         warn!("WebSocket URL not configured. Real-time pool updates will be disabled.");
         None
     };
 
+
     let arbitrage_engine = Arc::new(ArbitrageEngine::new(
         pools_map.clone(),
-        Some(rpc_client.clone()), // Pass the RPC client Arc<SolanaRpcClient>
-        app_config.clone(), 
-        metrics.clone(),    
-        None, 
+        Some(ha_solana_rpc_client.clone()), // Engine uses HA client for its operations
+        app_config.clone(),
+        metrics.clone(),
+        None, // No specific price provider implementation yet
+        ws_manager_instance.clone(),
+        dex_api_clients.clone(), // Pass initialized DEX clients
     ));
     info!("ArbitrageEngine initialized.");
-
     arbitrage_engine.start_services().await;
 
 
     // --- Background Tasks ---
-    let mut volatility_tracker = VolatilityTracker::new(app_config.volatility_tracker_window.unwrap_or(20));
-    let engine_threshold_handle = Arc::clone(&arbitrage_engine);
-    let threshold_update_interval_secs = app_config.dynamic_threshold_update_interval_secs.unwrap_or(10);
+    let engine_clone_for_threshold = Arc::clone(&arbitrage_engine);
+    let config_clone_for_threshold = Arc::clone(&app_config); // Clone Arc<Config>
+    let mut threshold_task_handle = tokio::spawn(async move {
+        info!("Starting dynamic profit threshold update task (interval: {}s).", config_clone_for_threshold.dynamic_threshold_update_interval_secs.unwrap_or(60));
+        let mut interval_timer = interval(Duration::from_secs(config_clone_for_threshold.dynamic_threshold_update_interval_secs.unwrap_or(60)));
+        // VolatilityTracker should be part of the engine or managed state if its history is important across ticks
+        // For simplicity here, it's local to the task.
+        let mut vol_tracker = VolatilityTracker::new(config_clone_for_threshold.volatility_tracker_window.unwrap_or(20));
 
-    let mut threshold_task_handle = tokio::spawn(async move { // Made mutable
-        info!("Starting dynamic profit threshold update task (interval: {}s).", threshold_update_interval_secs);
-        let mut threshold_interval = interval(Duration::from_secs(threshold_update_interval_secs));
-        let base_min_profit_from_config = app_config.min_profit_pct.unwrap_or(0.001); // Corrected: use min_profit_pct
-        let volatility_factor_from_config = app_config.volatility_threshold_factor.unwrap_or(0.5);
-
-        // Dynamic threshold update task (runs periodically)
         loop {
-            threshold_interval.tick().await;
-            let current_price_of_major_asset = 1.0; 
-            volatility_tracker.add_price(current_price_of_major_asset);
-            let vol = volatility_tracker.volatility();
-            // Ensure the dynamic_threshold module's function is correctly referenced if it's not in global scope
-            let new_threshold = crate::arbitrage::dynamic_threshold::recommend_min_profit_threshold(vol, base_min_profit_from_config, volatility_factor_from_config);
-            engine_threshold_handle.set_min_profit_threshold(new_threshold).await;
-            debug!("Dynamic profit threshold updated: {:.4}% (vol: {:.6})", new_threshold * 100.0, vol);
+            interval_timer.tick().await;
+            // In a real scenario, fetch a relevant price for volatility calculation
+            let price_for_volatility = 1.0; // Placeholder
+            vol_tracker.add_price(price_for_volatility);
+            let current_volatility = vol_tracker.volatility();
+            let base_threshold = config_clone_for_threshold.min_profit_pct;
+            let factor = config_clone_for_threshold.volatility_threshold_factor.unwrap_or(0.5);
+            let new_threshold = crate::arbitrage::dynamic_threshold::recommend_min_profit_threshold(current_volatility, base_threshold, factor);
+            engine_clone_for_threshold.set_min_profit_threshold(new_threshold).await;
+            debug!("Dynamic profit threshold updated: {:.4}% (vol: {:.6})", new_threshold * 100.0, current_volatility);
         }
     });
 
-    let executor_congestion_handle = Arc::clone(&executor);
-    let congestion_update_interval_secs = app_config.congestion_update_interval_secs.unwrap_or(30);
-    let mut congestion_task_handle = tokio::spawn(async move { // Made mutable
-        info!("Starting network congestion update task (interval: {}s).", congestion_update_interval_secs);
-        let mut congestion_interval = interval(Duration::from_secs(congestion_update_interval_secs));
+    let executor_clone_for_congestion = Arc::clone(&tx_executor);
+    let congestion_interval_secs = app_config.congestion_update_interval_secs.unwrap_or(30);
+    let mut congestion_task_handle = tokio::spawn(async move {
+        info!("Starting network congestion update task (interval: {}s).", congestion_interval_secs);
+        let mut interval_timer = interval(Duration::from_secs(congestion_interval_secs));
         loop {
-            congestion_interval.tick().await;
-            if let Err(e) = executor_congestion_handle.update_network_congestion().await {
+            interval_timer.tick().await;
+            if let Err(e) = executor_clone_for_congestion.update_network_congestion().await {
                 error!("Failed to update network congestion: {}", e);
             }
         }
     });
+    
+    let engine_clone_for_health = Arc::clone(&arbitrage_engine);
+    let health_check_interval_secs = app_config.health_check_interval_secs.unwrap_or(60);
+    let mut health_check_task_handle = tokio::spawn(async move {
+         info!("Starting health check task (interval: {}s).", health_check_interval_secs);
+        let mut interval_timer = interval(Duration::from_secs(health_check_interval_secs));
+        loop {
+            interval_timer.tick().await;
+            engine_clone_for_health.run_health_checks().await; // Call the method
+        }
+    });
 
-    // Placeholder for health_check_task_handle if it's used later.
-    // If it's a tokio::task::JoinHandle, it needs to be initialized.
-    // For now, assuming it might be conditionally initialized or this is a remnant.
-    // To resolve the "not found in this scope " error for now, we declare it.
-    // This should be properly initialized if the health check task is implemented.
-    let mut health_check_task_handle: Option<tokio::task::JoinHandle<Result<(), anyhow::Error>>> = None;
 
-
-    // --- Main Arbitrage Loop ---
-    info!("Starting main arbitrage detection cycle (interval: {}s).", app_config.cycle_interval_seconds.unwrap_or(5));
-    let mut main_cycle_interval = interval(Duration::from_secs(app_config.cycle_interval_seconds.unwrap_or(5)));
+    info!("Starting main arbitrage detection cycle (interval: {}s).", app_config.cycle_interval_seconds);
+    let mut main_cycle_interval = interval(Duration::from_secs(app_config.cycle_interval_seconds));
     main_cycle_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
     loop {
-        let cycle_start_time = Instant::now(); // Use tokio::time::Instant
+        let cycle_start_time = Instant::now();
 
         tokio::select! {
-            biased; // Process signal first if available
+            biased;
             _ = signal::ctrl_c() => {
                 info!("Ctrl-C received, initiating shutdown...");
-                break; // Exit the main loop
+                break;
             },
-            // WebSocket updates handling
-            ws_update = async {
+            ws_update_result = async {
                 if let Some(manager_arc) = &ws_manager_instance {
                     let mut manager_guard = manager_arc.lock().await;
-                    if manager_guard.is_connected().await { // Assuming is_connected is async
-                        manager_guard.try_recv_update().await // Assuming try_recv_update is async
-                    } else {
-                        None
-                    }
+                    // Assuming try_recv_update is the method to get parsed WebsocketUpdate
+                    manager_guard.try_recv_update().await // This needs to be implemented in SolanaWebsocketManager
                 } else {
-                    // If ws_manager is None, this branch should not be selected often.
-                    // We can use a pending future to avoid busy-looping if ws_manager is None.
-                    std::future::pending().await
+                    std::future::pending().await // Keep this branch pending if no ws_manager
                 }
             }, if ws_manager_instance.is_some() => {
-                if let Some(update_result) = ws_update {
-                    match update_result {
-                        Ok(Some(WebsocketUpdate::PoolUpdate(updated_pool_info))) => {
-                            // This part needs to be adapted if PoolUpdate directly gives PoolInfo
-                            // Or if it gives data that needs parsing and then updating the shared pools_map.
-                            // For now, assuming direct update for simplicity.
-                            let mut pools_w = pools_map.write().await;
-                            pools_w.insert(updated_pool_info.address, Arc::new(updated_pool_info));
-                            debug!("Processed pool update from WebSocket for pool {}", pools_w.get(&updated_pool_info.address).unwrap().address);
-                        },
-                        Ok(Some(WebsocketUpdate::GenericUpdate(msg))) => {
-                            info!("Generic WebSocket message: {}", msg);
-                        }
-                        Ok(None) => { /* No message currently available */ }
-                        Err(e) => {
-                            error!("WebSocket receive error: {}. Attempting to reconnect if necessary.", e);
-                            if let Some(manager_arc) = &ws_manager_instance {
-                                let mut manager_guard = manager_arc.lock().await;
-                                if !manager_guard.is_connected().await { // Check if already trying to reconnect
-                                    // manager_guard.reconnect().await.unwrap_or_else(|err| { // Assuming reconnect is async
-                                    //     error!("Failed to reconnect WebSocket: {}", err);
-                                    // });
-                                }
-                            }
-                        }
+                match ws_update_result {
+                    Ok(Some(WebsocketUpdate::PoolUpdate(updated_pool_info))) => {
+                        let mut pools_w = pools_map.write().await;
+                        let pool_address = updated_pool_info.address;
+                        pools_w.insert(pool_address, Arc::new(updated_pool_info));
+                        debug!("Processed pool update from WebSocket for pool {}", pool_address);
+                        metrics.lock().await.log_pools_updated(0, 1, pools_w.len()); // 0 new, 1 updated
+                    },
+                    Ok(Some(WebsocketUpdate::GenericUpdate(msg))) => {
+                        info!("Generic WebSocket message: {}", msg);
+                    }
+                    Ok(None) => { /* No message currently available from ws_manager's processed queue */ }
+                    Err(e) => { // This error comes from try_recv_update if channel closed etc.
+                        error!("WebSocket receive error from processed queue: {:?}. Check SolanaWebsocketManager.", e);
+                        // Reconnect logic might be handled within SolanaWebsocketManager's own tasks
                     }
                 }
             },
-            // Main arbitrage cycle tick
             _ = main_cycle_interval.tick() => {
                 let detection_start_time = Instant::now();
                 info!("Main cycle tick: Searching for arbitrage opportunities...");
                 metrics.lock().await.increment_main_cycles();
 
-                // Dynamic Threshold Update (if enabled and interval passed)
-                // This logic might be better inside the dynamic_threshold_task
-                // or triggered by its own timer if it's independent of the main cycle.
-
-                let opportunities = match arbitrage_engine.detect_arbitrage().await {
+                // Using discover_multihop_opportunities as it's more general
+                let opportunities = match arbitrage_engine.discover_multihop_opportunities().await {
                     Ok(ops) => ops,
                     Err(e) => {
                         error!("Error during arbitrage detection: {}", e);
-                        Vec::new() // Continue with an empty list of opportunities
+                        Vec::new()
                     }
                 };
                 let detection_duration = detection_start_time.elapsed();
                 info!("Found {} opportunities in {:?}", opportunities.len(), detection_duration);
 
                 if !opportunities.is_empty() {
-                    let base_tx_fee_lamports_for_metrics = app_config.default_priority_fee_lamports.unwrap_or(1000); // Corrected
+                    let execution_chunk_size = app_config.execution_chunk_size.unwrap_or(1) as usize;
+                    for opp_chunk in opportunities.chunks(execution_chunk_size) {
+                        let mut execution_futures = Vec::new();
+                        for opp in opp_chunk {
+                            let opp_clone = opp.clone(); // Clone opp for async task
+                            let tx_executor_clone = Arc::clone(&tx_executor);
+                            let metrics_clone = Arc::clone(&metrics);
+                            let base_tx_fee_sol = app_config.default_priority_fee_lamports as f64 / 1_000_000_000.0;
 
-                    for opp_item in opportunities { // Renamed opp to opp_item to avoid conflict with loop variable
-                        // Assuming MultiHopArbOpportunity has a unique identifier or can be constructed
-                        // The 'hop' variable was not defined in this scope.
-                        // We need to iterate through hops if opp_item contains multiple.
-                        // For simplicity, assuming opp_item itself has the necessary details or refers to the first hop.
-                        // This section needs to be carefully reviewed based on MultiHopArbOpportunity structure.
 
-                        // If opp_item is a MultiHopArbOpportunity, it should have fields like input_token, profit_pct etc.
-                        // If it contains a Vec<Hop>, we need to decide how to log.
-                        // For now, using fields directly from opp_item, assuming it's structured appropriately.
+                            // Log attempt before spawning task
+                            let dex_path_strings: Vec<String> = opp_clone.dex_path.iter().map(|d| format!("{:?}", d)).collect();
+                            metrics_clone.lock().await.record_trade_attempt(
+                                &opp_clone.id,
+                                &dex_path_strings,
+                                &opp_clone.input_token,
+                                &opp_clone.output_token,
+                                opp_clone.input_amount,
+                                opp_clone.expected_output,
+                                opp_clone.profit_pct,
+                                opp_clone.estimated_profit_usd,
+                                TradeOutcome::Attempted, // Outcome
+                                None, // actual_profit_usd
+                                0, // execution_time_ms
+                                0.0, // tx_cost_sol
+                                None, // fees_paid_usd
+                                None, // error_message
+                                None, // transaction_id
+                            );
 
-                        let opp_identifier = format!(
-                            "Opportunity_{}_{}_{:.4}", 
-                            opp_item.input_token, // Assuming these fields exist on opp_item (MultiHopArbOpportunity)
-                            opp_item.output_token,
-                            opp_item.profit_pct
-                        );
-                        let dex_path_vec: Vec<String> = opp_item.dex_path.iter().map(|d| format!("{:?}", d)).collect();
+                            execution_futures.push(tokio::spawn(async move {
+                                let exec_start_time = Instant::now();
+                                let result = tx_executor_clone.execute_opportunity(&opp_clone).await; // Use execute_opportunity
+                                let exec_duration_ms = exec_start_time.elapsed().as_millis();
 
-                        metrics.lock().await.record_trade_attempt(
-                            &opp_identifier,
-                            &dex_path_vec,
-                            &opp_item.input_token,
-                            &opp_item.output_token,
-                            opp_item.input_amount, // Assuming this field exists
-                            opp_item.expected_output, // Assuming this field exists
-                            opp_item.profit_pct,
-                            opp_item.estimated_profit_usd, // Assuming this field exists
-                            TradeOutcome::Attempted, // Changed from Skipped
-                            None, 
-                            0,    
-                            0.0,  
-                            None, 
-                            Some("Attempting execution".to_string()),
-                            None, 
-                        );
-
-                        let execution_start_time = Instant::now();
-                        match tx_executor.execute_arbitrage_opportunity(&opp_item).await { // Pass opp_item
-                            Ok(signature) => {
-                                let execution_duration_ms = execution_start_time.elapsed().as_millis();
-                                info!("Successfully executed opportunity {}: Signature: {}, Duration: {}ms", opp_identifier, signature, execution_duration_ms);
-                                metrics.lock().await.record_trade_outcome(
-                                    &opp_identifier,
-                                    TradeOutcome::Success,
-                                    opp_item.profit_pct, 
-                                    Some(base_tx_fee_lamports_for_metrics), 
-                                    Some(execution_duration_ms as u64),
-                                    Some(signature.to_string()),
-                                    None, 
-                                ); 
-                            }
-                            Err(e) => {
-                                let execution_duration_ms = execution_start_time.elapsed().as_millis();
-                                error!("Failed to execute opportunity {}: {}. Duration: {}ms", opp_identifier, e, execution_duration_ms);
-                                metrics.lock().await.record_trade_outcome(
-                                    &opp_identifier,
-                                    TradeOutcome::Failure,
-                                    0.0, 
-                                    Some(base_tx_fee_lamports_for_metrics),
-                                    Some(execution_duration_ms as u64),
-                                    None, 
-                                    Some(e.to_string()),
-                                ); 
-                            }
+                                match result {
+                                    Ok(signature) => {
+                                        info!("Successfully executed opportunity {}: Signature: {}, Duration: {}ms", opp_clone.id, signature, exec_duration_ms);
+                                        // Assuming actual profit is same as estimated for now
+                                        let actual_profit = opp_clone.estimated_profit_usd;
+                                        metrics_clone.lock().await.record_trade_attempt( // Using record_trade_attempt to log outcome
+                                            &opp_clone.id, &dex_path_strings, &opp_clone.input_token, &opp_clone.output_token,
+                                            opp_clone.input_amount, opp_clone.expected_output, opp_clone.profit_pct,
+                                            opp_clone.estimated_profit_usd,
+                                            TradeOutcome::Success,
+                                            actual_profit,
+                                            exec_duration_ms,
+                                            base_tx_fee_sol, // tx_cost_sol placeholder
+                                            Some(base_tx_fee_sol * app_config.sol_price_usd.unwrap_or(100.0)), // fees_paid_usd placeholder
+                                            None,
+                                            Some(signature.to_string()),
+                                        );
+                                    }
+                                    Err(e) => {
+                                        error!("Failed to execute opportunity {}: {}. Duration: {}ms", opp_clone.id, e, exec_duration_ms);
+                                        metrics_clone.lock().await.record_trade_attempt(
+                                            &opp_clone.id, &dex_path_strings, &opp_clone.input_token, &opp_clone.output_token,
+                                            opp_clone.input_amount, opp_clone.expected_output, opp_clone.profit_pct,
+                                            opp_clone.estimated_profit_usd,
+                                            TradeOutcome::Failure,
+                                            None,
+                                            exec_duration_ms,
+                                            base_tx_fee_sol,
+                                            Some(base_tx_fee_sol * app_config.sol_price_usd.unwrap_or(100.0)),
+                                            Some(e.to_string()),
+                                            None,
+                                        );
+                                    }
+                                }
+                            }));
                         }
+                        futures::future::join_all(execution_futures).await;
                     }
                 }
-                // Log main cycle duration
                 metrics.lock().await.record_main_cycle_duration(cycle_start_time.elapsed().as_millis() as u64);
             },
-            // Dynamic threshold update task
-            maybe_threshold_task = async {
-                // Borrow mutable handle if it exists
-                if let Some(task_handle_ref_mut) = threshold_task_handle.as_mut() {
-                     task_handle_ref_mut.await.map_err(|e| error!("Dynamic threshold task panicked: {:?}", e))
-                } else {
-                    futures::future::pending().await
-                }
-            }, if threshold_task_handle.is_some() => { 
+             // Handling task completion/panics
+            _ = async { threshold_task_handle.await.unwrap_or_else(|e| error!("Dynamic threshold task panicked: {:?}", e)) }, if !threshold_task_handle.is_finished() => {
                 info!("Dynamic threshold update task completed or panicked.");
-                threshold_task_handle = None; 
+                // Optionally re-spawn if needed, or handle error
             },
-            // Health check task
-            maybe_health_check_task = async {
-                // Borrow mutable handle if it exists
-                if let Some(task_handle_ref_mut) = health_check_task_handle.as_mut() {
-                    task_handle_ref_mut.await.map_err(|e| error!("Health check task panicked: {:?}", e))
-                } else {
-                    futures::future::pending().await
-                }
-            }, if health_check_task_handle.is_some() => { 
+            _ = async { congestion_task_handle.await.unwrap_or_else(|e| error!("Congestion update task panicked: {:?}", e)) }, if !congestion_task_handle.is_finished() => {
+                info!("Congestion update task completed or panicked.");
+            },
+            _ = async { health_check_task_handle.await.unwrap_or_else(|e| error!("Health check task panicked: {:?}", e)) }, if !health_check_task_handle.is_finished() => {
                 info!("Health check task completed or panicked.");
-                health_check_task_handle = None; 
             }
         }
     }
 
-    // Final summary before shutdown
     info!("Shutting down. Final metrics summary:");
-    metrics.lock().await.summary(); // Not async
+    metrics.lock().await.summary();
 
     Ok(())
 }
-// Reminder: Add these fields to your Config struct in `src/config/settings.rs`
-// and load them from environment variables:
-// ---
-// pub redis_url: String,
-// pub redis_default_ttl_secs: u64,
-// pub dex_quote_cache_ttl_secs: Option<HashMap<String, u64>>,
-// pub volatility_tracker_window: Option<usize>,
-// pub dynamic_threshold_update_interval_secs: Option<u64>,
-// pub volatility_threshold_factor: Option<f64>,
-// pub congestion_update_interval_secs: Option<u64>,
-// pub execution_chunk_size: Option<u8>,
-// pub sol_price_usd: Option<f64>,
-// pub ws_update_channel_size: usize, // Should already be there
-// pub degradation_profit_factor: Option<f64>,
-// pub degradation_slippage_factor: Option<f64>,
-// pub pool_read_timeout_ms: Option<u64>,
-// pub health_check_token_symbol: Option<String>,
-// pub metrics_log_path: Option<String>, // For file-based metrics logging if used
-//
-// And ensure `recommended_min_profit_threshold` in `src/arbitrage/dynamic_threshold.rs`
-// is updated to accept `base_threshold` and `factor`.
-// Example:
-// pub fn recommended_min_profit_threshold(volatility: f64, base_threshold: f64, factor: f64) -> f64 {
-//     let boost = (volatility * factor).min(base_threshold * 2.0); // Cap boost
-//     (base_threshold + boost).max(0.0001) // Ensure positive and not excessively small
-// }
-//
-// Also, update `Metrics` methods in `src/metrics/mod.rs` to be `async` if they perform
-// operations like file I/O that should be non-blocking.

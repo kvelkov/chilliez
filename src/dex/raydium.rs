@@ -109,7 +109,6 @@ impl RaydiumClient {
         }
     }
 
-    #[allow(dead_code)] // If API key is not used by current endpoints
     pub fn get_api_key(&self) -> &str {
         &self.api_key
     }

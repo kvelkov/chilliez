@@ -109,11 +109,11 @@ impl Config {
                 .ok()
                 .and_then(|v| v.parse().ok()),
             min_profit_pct: env::var("MIN_PROFIT_PCT")
-                .unwrap_or_else(|_| "0.001".to_string())
+                .unwrap_or_else(|_| "0.001".to_string()) // Default to 0.1%
                 .parse()
                 .unwrap_or(0.001),
             max_slippage_pct: env::var("MAX_SLIPPAGE_PCT")
-                .unwrap_or_else(|_| "0.005".to_string())
+                .unwrap_or_else(|_| "0.005".to_string()) // Default to 0.5%
                 .parse()
                 .unwrap_or(0.005),
             cycle_interval_seconds: env::var("CYCLE_INTERVAL_SECONDS")
@@ -131,12 +131,19 @@ impl Config {
     }
 
     pub fn validate_and_log(&self) {
-        // Simple log of the loaded config. Add more validation logic if needed.
         log::info!("Application Configuration Loaded: {:?}", self);
         if self.rpc_url.is_empty() {
-            log::error!("RPC_URL cannot be empty.");
-            // Consider panicking or returning a Result from from_env if critical configs are invalid
+            log::error!("CRITICAL: RPC_URL environment variable is not set or empty.");
+            // Consider panicking here if it's absolutely critical for startup
+            // panic!("RPC_URL cannot be empty");
         }
-        // Add other critical validations here
+        if self.trader_wallet_keypair_path.is_empty() {
+            log::error!("CRITICAL: TRADER_WALLET_KEYPAIR_PATH environment variable is not set or empty.");
+            // panic!("TRADER_WALLET_KEYPAIR_PATH cannot be empty");
+        }
+        if self.min_profit_pct <= 0.0 || self.min_profit_pct >= 1.0 {
+            log::warn!("MIN_PROFIT_PCT ({}) is outside the typical range (0.0 to 1.0, exclusive of 0). Ensure it's a fraction (e.g., 0.001 for 0.1%).", self.min_profit_pct);
+        }
+        // Add more specific validations as needed
     }
 }

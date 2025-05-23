@@ -2,33 +2,32 @@
 use crate::{
     arbitrage::{
         calculator::{
-            calculate_max_profit, calculate_optimal_input, calculate_transaction_cost,
-            estimate_price_impact, is_profitable as is_profitable_calc,
+            calculate_max_profit, calculate_optimal_input, // Removed unused calculate_transaction_cost, estimate_price_impact, is_profitable_calc
             OpportunityCalculationResult,
         },
-        fee_manager::{FeeEstimationResult, FeeManager, XYKSlippageModel},
+        fee_manager::{FeeManager, XYKSlippageModel}, // Removed unused FeeEstimationResult
         opportunity::{ArbHop, MultiHopArbOpportunity},
     },
     error::ArbError,
     metrics::Metrics,
     utils::{
-        calculate_multihop_profit_and_slippage, calculate_output_amount, calculate_rebate, DexType,
-        PoolInfo, TokenAmount,
+        calculate_multihop_profit_and_slippage, calculate_output_amount, PoolInfo, TokenAmount, DexType, // Added DexType
+        // Removed unused calculate_rebate
     },
 };
 use log::{debug, error, info, warn};
 use solana_sdk::pubkey::Pubkey;
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashMap, // Removed HashSet as it's unused
     fs::OpenOptions,
     io::Write,
     sync::Arc,
 };
-use tokio::io::AsyncWriteExt;
+// Removed: use tokio::io::AsyncWriteExt; // Not used directly here
 
 #[derive(Clone)]
 pub struct ArbitrageDetector {
-    min_profit_threshold: f64, // Expected as a percentage, e.g., 0.5 for 0.5%
+    min_profit_threshold: f64,
 }
 
 #[allow(dead_code)]
@@ -73,11 +72,8 @@ impl ArbitrageDetector {
         if let Ok(content) = std::fs::read_to_string("banned_pairs_log.csv") {
             for line in content.lines() {
                 let parts: Vec<_> = line.split(',').collect();
-                if parts.len() >= 3
-                    && parts[2] == "permanent"
-                    && ((parts[0] == token_a && parts[1] == token_b)
-                        || (parts[0] == token_b && parts[1] == token_a))
-                {
+                if parts.len() >= 3 && parts[2] == "permanent" && 
+                   ((parts[0] == token_a && parts[1] == token_b) || (parts[0] == token_b && parts[1] == token_a)) {
                     return true;
                 }
             }
@@ -93,17 +89,11 @@ impl ArbitrageDetector {
                 if parts.len() >= 4 && parts[2] == "temporary" {
                     if let Some(expiry_str) = parts.get(3) {
                         if let Ok(expiry) = expiry_str.parse::<u64>() {
-                            if ((parts[0] == token_a && parts[1] == token_b)
-                                || (parts[0] == token_b && parts[1] == token_a))
-                                && expiry > now
-                            {
+                            if ((parts[0] == token_a && parts[1] == token_b) || (parts[0] == token_b && parts[1] == token_a)) && expiry > now {
                                 return true;
                             }
                         } else {
-                            warn!(
-                                "Failed to parse expiry timestamp '{}' in ban log for pair {}/{}",
-                                expiry_str, token_a, token_b
-                            );
+                            warn!("Failed to parse expiry timestamp '{}' in ban log for pair {}/{}", expiry_str, token_a, token_b);
                         }
                     }
                 }
@@ -111,172 +101,78 @@ impl ArbitrageDetector {
         }
         false
     }
-
+    
     pub async fn find_all_opportunities(
         &self,
         pools: &HashMap<Pubkey, Arc<PoolInfo>>,
-        metrics: &mut Metrics, // Changed to &mut Metrics as record_opportunity_detected takes &mut self
+        metrics: &mut Metrics,
     ) -> Result<Vec<MultiHopArbOpportunity>, ArbError> {
         let mut opportunities = Vec::new();
 
         for (src_id, src_pool_arc) in pools {
             let src_pool = src_pool_arc.as_ref();
             let tokens_in_src_pool = [
-                (
-                    &src_pool.token_a.mint,
-                    &src_pool.token_a.symbol,
-                    src_pool.token_a.decimals,
-                ),
-                (
-                    &src_pool.token_b.mint,
-                    &src_pool.token_b.symbol,
-                    src_pool.token_b.decimals,
-                ),
+                (&src_pool.token_a.mint, &src_pool.token_a.symbol, src_pool.token_a.decimals),
+                (&src_pool.token_b.mint, &src_pool.token_b.symbol, src_pool.token_b.decimals),
             ];
 
-            for &(
-                input_token_mint_for_cycle,
-                input_token_symbol_for_cycle,
-                input_decimals_for_cycle,
-            ) in &tokens_in_src_pool
-            {
-                let (
-                    intermediate_token_mint_val,
-                    intermediate_token_symbol_val,
-                    _intermediate_decimals_val,
-                ) = if src_pool.token_a.mint == *input_token_mint_for_cycle {
-                    (
-                        src_pool.token_b.mint,
-                        src_pool.token_b.symbol.clone(),
-                        src_pool.token_b.decimals,
-                    )
-                } else {
-                    (
-                        src_pool.token_a.mint,
-                        src_pool.token_a.symbol.clone(),
-                        src_pool.token_a.decimals,
-                    )
-                };
+            for &(input_token_mint_for_cycle, input_token_symbol_for_cycle, input_decimals_for_cycle) in &tokens_in_src_pool {
+                let (intermediate_token_mint_val, intermediate_token_symbol_val, _intermediate_decimals_val) =
+                    if src_pool.token_a.mint == *input_token_mint_for_cycle {
+                        (src_pool.token_b.mint, src_pool.token_b.symbol.clone(), src_pool.token_b.decimals)
+                    } else {
+                        (src_pool.token_a.mint, src_pool.token_a.symbol.clone(), src_pool.token_a.decimals)
+                    };
 
-                if *input_token_mint_for_cycle == intermediate_token_mint_val {
-                    continue;
-                }
-
-                if Self::is_permanently_banned(
-                    input_token_symbol_for_cycle,
-                    &intermediate_token_symbol_val,
-                ) || Self::is_temporarily_banned(
-                    input_token_symbol_for_cycle,
-                    &intermediate_token_symbol_val,
-                ) {
-                    debug!(
-                        "Skipping banned pair for first hop: {} <-> {}",
-                        input_token_symbol_for_cycle, intermediate_token_symbol_val
-                    );
+                if *input_token_mint_for_cycle == intermediate_token_mint_val { continue; }
+                if Self::is_permanently_banned(input_token_symbol_for_cycle, &intermediate_token_symbol_val) || Self::is_temporarily_banned(input_token_symbol_for_cycle, &intermediate_token_symbol_val) {
+                    debug!("Skipping banned pair for first hop: {} <-> {}", input_token_symbol_for_cycle, intermediate_token_symbol_val);
                     continue;
                 }
 
                 for (tgt_id, tgt_pool_arc) in pools {
-                    if src_id == tgt_id {
-                        continue;
-                    }
+                    if src_id == tgt_id { continue; }
                     let tgt_pool = tgt_pool_arc.as_ref();
 
-                    let tgt_trades_intermediate_to_input = tgt_pool.token_a.mint
-                        == intermediate_token_mint_val
-                        && tgt_pool.token_b.mint == *input_token_mint_for_cycle;
-                    let tgt_trades_input_to_intermediate_reverse = tgt_pool.token_b.mint
-                        == intermediate_token_mint_val
-                        && tgt_pool.token_a.mint == *input_token_mint_for_cycle;
+                    let tgt_trades_intermediate_to_input = tgt_pool.token_a.mint == intermediate_token_mint_val && tgt_pool.token_b.mint == *input_token_mint_for_cycle;
+                    let tgt_trades_input_to_intermediate_reverse = tgt_pool.token_b.mint == intermediate_token_mint_val && tgt_pool.token_a.mint == *input_token_mint_for_cycle;
 
-                    if !(tgt_trades_intermediate_to_input
-                        || tgt_trades_input_to_intermediate_reverse)
-                    {
+                    if !(tgt_trades_intermediate_to_input || tgt_trades_input_to_intermediate_reverse) { continue; }
+
+                    let final_output_token_symbol_val = if tgt_trades_intermediate_to_input { &tgt_pool.token_b.symbol } else { &tgt_pool.token_a.symbol };
+                    if Self::is_permanently_banned(&intermediate_token_symbol_val, final_output_token_symbol_val) || Self::is_temporarily_banned(&intermediate_token_symbol_val, final_output_token_symbol_val) {
+                        debug!("Skipping banned pair for second hop: {} <-> {}", intermediate_token_symbol_val, final_output_token_symbol_val);
                         continue;
                     }
 
-                    let final_output_token_symbol_val = if tgt_trades_intermediate_to_input {
-                        &tgt_pool.token_b.symbol
-                    } else {
-                        &tgt_pool.token_a.symbol
-                    };
-
-                    if Self::is_permanently_banned(
-                        &intermediate_token_symbol_val,
-                        final_output_token_symbol_val,
-                    ) || Self::is_temporarily_banned(
-                        &intermediate_token_symbol_val,
-                        final_output_token_symbol_val,
-                    ) {
-                        debug!(
-                            "Skipping banned pair for second hop: {} <-> {}",
-                            intermediate_token_symbol_val, final_output_token_symbol_val
-                        );
-                        continue;
-                    }
-
-                    let src_swaps_input_for_intermediate =
-                        src_pool.token_a.mint == *input_token_mint_for_cycle;
-                    let max_input_token_amount =
-                        TokenAmount::new(1_000_000, input_decimals_for_cycle); // Example fixed max input
-                    let optimal_in = calculate_optimal_input(
-                        src_pool,
-                        tgt_pool,
-                        src_swaps_input_for_intermediate,
-                        max_input_token_amount,
-                    );
-
-                    let intermediate_amt_received = calculate_output_amount(
-                        src_pool,
-                        optimal_in.clone(),
-                        src_swaps_input_for_intermediate,
-                    );
-                    let tgt_swaps_intermediate_for_input =
-                        tgt_pool.token_a.mint == intermediate_token_mint_val;
-                    let final_output_amt = calculate_output_amount(
-                        tgt_pool,
-                        intermediate_amt_received.clone(),
-                        tgt_swaps_intermediate_for_input,
-                    );
-
-                    let profit_pct_calc_fractional = calculate_max_profit(
-                        src_pool,
-                        tgt_pool,
-                        src_swaps_input_for_intermediate,
-                        optimal_in.clone(),
-                    ); // Returns fraction
-                    let profit_abs_tokens =
-                        (final_output_amt.to_float() - optimal_in.to_float()).max(0.0);
-
-                    // Placeholder: USD Price conversion
-                    let input_token_price_usd = 1.0; // Fetch or estimate
+                    let src_swaps_input_for_intermediate = src_pool.token_a.mint == *input_token_mint_for_cycle;
+                    let max_input_token_amount = TokenAmount::new(1_000_000, input_decimals_for_cycle);
+                    let optimal_in = calculate_optimal_input(src_pool, tgt_pool, src_swaps_input_for_intermediate, max_input_token_amount);
+                    let intermediate_amt_received = calculate_output_amount(src_pool, optimal_in.clone(), src_swaps_input_for_intermediate);
+                    let tgt_swaps_intermediate_for_input = tgt_pool.token_a.mint == intermediate_token_mint_val;
+                    let final_output_amt = calculate_output_amount(tgt_pool, intermediate_amt_received.clone(), tgt_swaps_intermediate_for_input);
+                    let profit_pct_calc_fractional = calculate_max_profit(src_pool, tgt_pool, src_swaps_input_for_intermediate, optimal_in.clone());
+                    let profit_abs_tokens = (final_output_amt.to_float() - optimal_in.to_float()).max(0.0);
+                    
+                    let input_token_price_usd = 1.0; 
                     let profit_usd = profit_abs_tokens * input_token_price_usd;
                     let input_amount_usd_val = optimal_in.to_float() * input_token_price_usd;
                     let output_amount_usd_val = final_output_amt.to_float() * input_token_price_usd;
 
                     if profit_pct_calc_fractional * 100.0 > self.min_profit_threshold {
-                        let opp_id = format!(
-                            "2hop-{}-{}-{}-{}",
-                            input_token_symbol_for_cycle,
-                            src_pool.address,
-                            tgt_pool.address,
-                            chrono::Utc::now().timestamp_millis()
-                        );
-
+                        let opp_id = format!("2hop-{}-{}-{}-{}", input_token_symbol_for_cycle, src_pool.address, tgt_pool.address, chrono::Utc::now().timestamp_millis());
                         let current_opportunity = MultiHopArbOpportunity {
                             id: opp_id.clone(),
                             hops: vec![
                                 ArbHop {
-                                    dex: src_pool.dex_type,
-                                    pool: src_pool.address,
+                                    dex: src_pool.dex_type.clone(), pool: src_pool.address, // Clone DexType
                                     input_token: input_token_symbol_for_cycle.to_string(),
                                     output_token: intermediate_token_symbol_val.clone(),
                                     input_amount: optimal_in.to_float(),
                                     expected_output: intermediate_amt_received.to_float(),
                                 },
                                 ArbHop {
-                                    dex: tgt_pool.dex_type,
-                                    pool: tgt_pool.address,
+                                    dex: tgt_pool.dex_type.clone(), pool: tgt_pool.address, // Clone DexType
                                     input_token: intermediate_token_symbol_val.clone(),
                                     output_token: final_output_token_symbol_val.to_string(),
                                     input_amount: intermediate_amt_received.to_float(),
@@ -284,339 +180,125 @@ impl ArbitrageDetector {
                                 },
                             ],
                             total_profit: profit_abs_tokens,
-                            profit_pct: profit_pct_calc_fractional * 100.0, // Store as percentage
+                            profit_pct: profit_pct_calc_fractional * 100.0,
                             input_token: input_token_symbol_for_cycle.to_string(),
-                            output_token: final_output_token_symbol_val.to_string(), // Should match input for cycle
+                            output_token: final_output_token_symbol_val.to_string(),
                             input_amount: optimal_in.to_float(),
                             expected_output: final_output_amt.to_float(),
-                            dex_path: vec![src_pool.dex_type, tgt_pool.dex_type],
+                            dex_path: vec![src_pool.dex_type.clone(), tgt_pool.dex_type.clone()], // Clone DexType
                             pool_path: vec![src_pool.address, tgt_pool.address],
-                            risk_score: None, // Placeholder
-                            notes: Some("Direct 2-hop cyclic opportunity".to_string()),
-                            estimated_profit_usd: Some(profit_usd),
-                            input_amount_usd: Some(input_amount_usd_val),
+                            risk_score: None, notes: Some("Direct 2-hop cyclic opportunity".to_string()),
+                            estimated_profit_usd: Some(profit_usd), input_amount_usd: Some(input_amount_usd_val),
                             intermediate_tokens: vec![intermediate_token_symbol_val.clone()],
                             output_amount_usd: Some(output_amount_usd_val),
-                            source_pool: Arc::clone(src_pool_arc),
-                            target_pool: Arc::clone(tgt_pool_arc),
-                            input_token_mint: *input_token_mint_for_cycle,
-                            output_token_mint: *input_token_mint_for_cycle, // Assuming cyclic
+                            source_pool: Arc::clone(src_pool_arc), target_pool: Arc::clone(tgt_pool_arc),
+                            input_token_mint: *input_token_mint_for_cycle, output_token_mint: *input_token_mint_for_cycle,
                             intermediate_token_mint: Some(intermediate_token_mint_val),
                         };
-
-                        info!(
-                            "Potential 2-hop Arb Opp: {} -> {} (Profit: {:.4}%)",
-                            current_opportunity.input_token,
-                            current_opportunity.output_token,
-                            current_opportunity.profit_pct
-                        );
+                        
+                        info!("Potential 2-hop Arb Opp: {} -> {} (Profit: {:.4}%)", current_opportunity.input_token, current_opportunity.output_token, current_opportunity.profit_pct);
                         current_opportunity.log_summary();
 
-                        // Log to metrics
-                        let dex_path_strings_log: Vec<String> = current_opportunity
-                            .dex_path
-                            .iter()
-                            .map(|d| format!("{:?}", d))
-                            .collect();
+                        let dex_path_strings_log: Vec<String> = current_opportunity.dex_path.iter().map(|d| format!("{:?}", d)).collect();
                         if let Err(e) = metrics.record_opportunity_detected(
                             &current_opportunity.input_token,
-                            &current_opportunity
-                                .intermediate_tokens
-                                .get(0)
-                                .cloned()
-                                .unwrap_or_default(),
-                            current_opportunity.profit_pct,
+                            &current_opportunity.intermediate_tokens.get(0).cloned().unwrap_or_default(),
+                            current_opportunity.profit_pct, // Pass as percentage
                             current_opportunity.estimated_profit_usd,
                             current_opportunity.input_amount_usd,
                             dex_path_strings_log,
-                        ) {
-                            error!("Failed to record 2-hop opportunity detection metric: {}", e);
-                        }
+                        ) { error!("Failed to record 2-hop opportunity detection metric: {}", e); }
                         opportunities.push(current_opportunity);
                     }
                 }
             }
         }
-
-        opportunities.sort_by(|a, b| {
-            b.profit_pct
-                .partial_cmp(&a.profit_pct)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
-        info!(
-            "Found {} direct (2-hop cyclic) arbitrage opportunities above {:.4}% threshold",
-            opportunities.len(),
-            self.min_profit_threshold
-        );
+        opportunities.sort_by(|a, b| b.profit_pct.partial_cmp(&a.profit_pct).unwrap_or(std::cmp::Ordering::Equal));
+        info!("Found {} direct (2-hop cyclic) arbitrage opportunities above {:.4}% threshold", opportunities.len(), self.min_profit_threshold);
         Ok(opportunities)
     }
-
-    pub async fn find_two_hop_opportunities(
-        &self,
-        pools: &HashMap<Pubkey, Arc<PoolInfo>>,
-        metrics: &mut Metrics,
-    ) -> Result<Vec<MultiHopArbOpportunity>, ArbError> {
-        // Currently, find_all_opportunities logic is focused on 2-hop cyclic.
+    
+    pub async fn find_two_hop_opportunities(&self, pools: &HashMap<Pubkey, Arc<PoolInfo>>, metrics: &mut Metrics) -> Result<Vec<MultiHopArbOpportunity>, ArbError> {
         self.find_all_opportunities(pools, metrics).await
     }
 
-    pub async fn find_all_multihop_opportunities(
-        &self,
-        pools: &HashMap<Pubkey, Arc<PoolInfo>>,
-        metrics: &mut Metrics, // Changed to &mut Metrics
-    ) -> Result<Vec<MultiHopArbOpportunity>, ArbError> {
+    pub async fn find_all_multihop_opportunities(&self, pools: &HashMap<Pubkey, Arc<PoolInfo>>, metrics: &mut Metrics) -> Result<Vec<MultiHopArbOpportunity>, ArbError> {
         let mut opportunities = Vec::new();
         let pool_vec: Vec<_> = pools.values().cloned().collect();
+        if pool_vec.len() < 3 { return Ok(opportunities); }
 
-        if pool_vec.len() < 3 {
-            // Need at least 3 pools for a 3-hop
-            return Ok(opportunities);
-        }
-
-        // 3-hop: P1 (A->B) -> P2 (B->C) -> P3 (C->A)
         for i in 0..pool_vec.len() {
             for j in 0..pool_vec.len() {
-                if i == j {
-                    continue;
-                }
+                if i == j { continue; }
                 for k in 0..pool_vec.len() {
-                    if k == i || k == j {
-                        continue;
-                    }
+                    if k == i || k == j { continue; }
 
-                    let p1_arc = &pool_vec[i];
-                    let p2_arc = &pool_vec[j];
-                    let p3_arc = &pool_vec[k];
-                    let p1 = p1_arc.as_ref();
-                    let p2 = p2_arc.as_ref();
-                    let p3 = p3_arc.as_ref();
+                    let p1_arc = &pool_vec[i]; let p2_arc = &pool_vec[j]; let p3_arc = &pool_vec[k];
+                    let p1 = p1_arc.as_ref(); let p2 = p2_arc.as_ref(); let p3 = p3_arc.as_ref();
 
-                    // Iterate over tokenA and tokenB of p1 as the starting token
                     for start_token_index_p1 in 0..2 {
-                        // 0 for token_a, 1 for token_b
-                        let (start_token_mint_p1, start_token_symbol_p1, start_token_decimals_p1) =
-                            if start_token_index_p1 == 0 {
-                                (p1.token_a.mint, &p1.token_a.symbol, p1.token_a.decimals)
-                            } else {
-                                (p1.token_b.mint, &p1.token_b.symbol, p1.token_b.decimals)
-                            };
-                        let (mid_token1_mint_p1, mid_token1_symbol_p1, _mid_token1_decimals_p1) =
-                            if start_token_index_p1 == 0 {
-                                (p1.token_b.mint, &p1.token_b.symbol, p1.token_b.decimals)
-                            } else {
-                                (p1.token_a.mint, &p1.token_a.symbol, p1.token_a.decimals)
-                            };
+                        let (start_token_mint_p1, start_token_symbol_p1, start_token_decimals_p1) = if start_token_index_p1 == 0 { (p1.token_a.mint, &p1.token_a.symbol, p1.token_a.decimals) } else { (p1.token_b.mint, &p1.token_b.symbol, p1.token_b.decimals) };
+                        let (mid_token1_mint_p1, mid_token1_symbol_p1, _mid_token1_decimals_p1) = if start_token_index_p1 == 0 { (p1.token_b.mint, &p1.token_b.symbol, p1.token_b.decimals) } else { (p1.token_a.mint, &p1.token_a.symbol, p1.token_a.decimals) };
 
-                        // Check if p2 trades mid_token1
                         for mid_token1_index_p2 in 0..2 {
-                            let (
-                                current_mid_token1_mint_p2,
-                                _current_mid_token1_symbol_p2,
-                                _current_mid_token1_decimals_p2,
-                            ) = if mid_token1_index_p2 == 0 {
-                                (p2.token_a.mint, &p2.token_a.symbol, p2.token_a.decimals)
-                            } else {
-                                (p2.token_b.mint, &p2.token_b.symbol, p2.token_b.decimals)
-                            };
+                            let (current_mid_token1_mint_p2, _current_mid_token1_symbol_p2, _current_mid_token1_decimals_p2) = if mid_token1_index_p2 == 0 { (p2.token_a.mint, &p2.token_a.symbol, p2.token_a.decimals) } else { (p2.token_b.mint, &p2.token_b.symbol, p2.token_b.decimals) };
+                            if mid_token1_mint_p1 != current_mid_token1_mint_p2 { continue; }
+                            let (mid_token2_mint_p2, mid_token2_symbol_p2, _mid_token2_decimals_p2) = if mid_token1_index_p2 == 0 { (p2.token_b.mint, &p2.token_b.symbol, p2.token_b.decimals) } else { (p2.token_a.mint, &p2.token_a.symbol, p2.token_a.decimals) };
 
-                            if mid_token1_mint_p1 != current_mid_token1_mint_p2 {
-                                continue;
-                            } // p2 must trade token output from p1
-
-                            let (mid_token2_mint_p2, mid_token2_symbol_p2, _mid_token2_decimals_p2) =
-                                if mid_token1_index_p2 == 0 {
-                                    (p2.token_b.mint, &p2.token_b.symbol, p2.token_b.decimals)
-                                } else {
-                                    (p2.token_a.mint, &p2.token_a.symbol, p2.token_a.decimals)
-                                };
-
-                            // Check if p3 trades mid_token2 back to start_token
                             for mid_token2_index_p3 in 0..2 {
-                                let (
-                                    current_mid_token2_mint_p3,
-                                    _current_mid_token2_symbol_p3,
-                                    _current_mid_token2_decimals_p3,
-                                ) = if mid_token2_index_p3 == 0 {
-                                    (p3.token_a.mint, &p3.token_a.symbol, p3.token_a.decimals)
-                                } else {
-                                    (p3.token_b.mint, &p3.token_b.symbol, p3.token_b.decimals)
-                                };
+                                let (current_mid_token2_mint_p3, _current_mid_token2_symbol_p3, _current_mid_token2_decimals_p3) = if mid_token2_index_p3 == 0 { (p3.token_a.mint, &p3.token_a.symbol, p3.token_a.decimals) } else { (p3.token_b.mint, &p3.token_b.symbol, p3.token_b.decimals) };
+                                if mid_token2_mint_p2 != current_mid_token2_mint_p3 { continue; }
+                                let (final_token_mint_p3, final_token_symbol_p3, _final_token_decimals_p3) = if mid_token2_index_p3 == 0 { (p3.token_b.mint, &p3.token_b.symbol, p3.token_b.decimals) } else { (p3.token_a.mint, &p3.token_a.symbol, p3.token_a.decimals) };
+                                if final_token_mint_p3 != start_token_mint_p1 { continue; }
 
-                                if mid_token2_mint_p2 != current_mid_token2_mint_p3 {
-                                    continue;
-                                }
-
-                                let (
-                                    final_token_mint_p3,
-                                    final_token_symbol_p3,
-                                    _final_token_decimals_p3,
-                                ) = if mid_token2_index_p3 == 0 {
-                                    (p3.token_b.mint, &p3.token_b.symbol, p3.token_b.decimals)
-                                } else {
-                                    (p3.token_a.mint, &p3.token_a.symbol, p3.token_a.decimals)
-                                };
-
-                                if final_token_mint_p3 != start_token_mint_p1 {
-                                    continue;
-                                } // Must be a cycle
-
-                                // Ban check (symbol based)
-                                if Self::is_permanently_banned(
-                                    start_token_symbol_p1,
-                                    mid_token1_symbol_p1,
-                                ) || Self::is_temporarily_banned(
-                                    start_token_symbol_p1,
-                                    mid_token1_symbol_p1,
-                                ) || Self::is_permanently_banned(
-                                    mid_token1_symbol_p1,
-                                    mid_token2_symbol_p2,
-                                ) || Self::is_temporarily_banned(
-                                    mid_token1_symbol_p1,
-                                    mid_token2_symbol_p2,
-                                ) || Self::is_permanently_banned(
-                                    mid_token2_symbol_p2,
-                                    final_token_symbol_p3,
-                                ) || Self::is_temporarily_banned(
-                                    mid_token2_symbol_p2,
-                                    final_token_symbol_p3,
-                                ) {
-                                    continue;
-                                }
+                                if Self::is_permanently_banned(start_token_symbol_p1, mid_token1_symbol_p1) || Self::is_temporarily_banned(start_token_symbol_p1, mid_token1_symbol_p1) ||
+                                   Self::is_permanently_banned(mid_token1_symbol_p1, mid_token2_symbol_p2) || Self::is_temporarily_banned(mid_token1_symbol_p1, mid_token2_symbol_p2) ||
+                                   Self::is_permanently_banned(mid_token2_symbol_p2, final_token_symbol_p3) || Self::is_temporarily_banned(mid_token2_symbol_p2, final_token_symbol_p3) { continue; }
 
                                 let pools_arr_ref: Vec<&PoolInfo> = vec![p1, p2, p3];
-                                let dir1 = p1.token_a.mint == start_token_mint_p1; // Is A the input for P1?
-                                let dir2 = p2.token_a.mint == mid_token1_mint_p1; // Is output of P1 (mid_token1) the TokenA of P2?
-                                let dir3 = p3.token_a.mint == mid_token2_mint_p2; // Is output of P2 (mid_token2) the TokenA of P3?
+                                let dir1 = p1.token_a.mint == start_token_mint_p1; let dir2 = p2.token_a.mint == mid_token1_mint_p1; let dir3 = p3.token_a.mint == mid_token2_mint_p2;
                                 let directions = vec![dir1, dir2, dir3];
-
-                                let last_fee_data = vec![
-                                    (None, None, None),
-                                    (None, None, None),
-                                    (None, None, None),
-                                ];
-                                let input_amount_float = 100.0; // Example fixed input amount in human-readable units
-
-                                let (
-                                    calculated_profit_float,
-                                    total_slippage_fraction,
-                                    _total_fee_tokens,
-                                ) = calculate_multihop_profit_and_slippage(
-                                    &pools_arr_ref,
-                                    input_amount_float,
-                                    &directions,
-                                    &last_fee_data,
-                                );
-
-                                // Convert float input to TokenAmount for detailed hop calculation
-                                let input_tokenamount = TokenAmount::new(
-                                    (input_amount_float
-                                        * 10f64.powi(start_token_decimals_p1 as i32))
-                                        as u64,
-                                    start_token_decimals_p1,
-                                );
-                                let hop1_out_ta =
-                                    calculate_output_amount(p1, input_tokenamount.clone(), dir1);
-                                let hop2_out_ta =
-                                    calculate_output_amount(p2, hop1_out_ta.clone(), dir2);
-                                let hop3_out_ta =
-                                    calculate_output_amount(p3, hop2_out_ta.clone(), dir3);
-
-                                let profit_pct = if input_amount_float > 0.0 {
-                                    (calculated_profit_float / input_amount_float) * 100.0
-                                } else {
-                                    0.0
-                                };
+                                let last_fee_data = vec![(None,None,None); 3];
+                                let input_amount_float = 100.0;
+                                
+                                let (calculated_profit_float, total_slippage_fraction, _total_fee_tokens) = calculate_multihop_profit_and_slippage(&pools_arr_ref, input_amount_float, &directions, &last_fee_data);
+                                let input_tokenamount = TokenAmount::new((input_amount_float * 10f64.powi(start_token_decimals_p1 as i32)) as u64, start_token_decimals_p1);
+                                let hop1_out_ta = calculate_output_amount(p1, input_tokenamount.clone(), dir1);
+                                let hop2_out_ta = calculate_output_amount(p2, hop1_out_ta.clone(), dir2);
+                                let hop3_out_ta = calculate_output_amount(p3, hop2_out_ta.clone(), dir3);
+                                let profit_pct = if input_amount_float > 0.0 { (calculated_profit_float / input_amount_float) * 100.0 } else { 0.0 };
 
                                 if profit_pct > self.min_profit_threshold {
-                                    let opp_id = format!(
-                                        "3hop-{}-{}-{}-{}-{}",
-                                        start_token_symbol_p1,
-                                        p1.address,
-                                        p2.address,
-                                        p3.address,
-                                        chrono::Utc::now().timestamp_millis()
-                                    );
+                                    let opp_id = format!("3hop-{}-{}-{}-{}-{}", start_token_symbol_p1, p1.address, p2.address, p3.address, chrono::Utc::now().timestamp_millis());
                                     let hops_data = vec![
-                                        ArbHop {
-                                            dex: p1.dex_type,
-                                            pool: p1.address,
-                                            input_token: start_token_symbol_p1.to_string(),
-                                            output_token: mid_token1_symbol_p1.to_string(),
-                                            input_amount: input_amount_float,
-                                            expected_output: hop1_out_ta.to_float(),
-                                        },
-                                        ArbHop {
-                                            dex: p2.dex_type,
-                                            pool: p2.address,
-                                            input_token: mid_token1_symbol_p1.to_string(),
-                                            output_token: mid_token2_symbol_p2.to_string(),
-                                            input_amount: hop1_out_ta.to_float(),
-                                            expected_output: hop2_out_ta.to_float(),
-                                        },
-                                        ArbHop {
-                                            dex: p3.dex_type,
-                                            pool: p3.address,
-                                            input_token: mid_token2_symbol_p2.to_string(),
-                                            output_token: final_token_symbol_p3.to_string(),
-                                            input_amount: hop2_out_ta.to_float(),
-                                            expected_output: hop3_out_ta.to_float(),
-                                        },
+                                        ArbHop { dex: p1.dex_type.clone(), pool: p1.address, input_token: start_token_symbol_p1.to_string(), output_token: mid_token1_symbol_p1.to_string(), input_amount: input_amount_float, expected_output: hop1_out_ta.to_float() },
+                                        ArbHop { dex: p2.dex_type.clone(), pool: p2.address, input_token: mid_token1_symbol_p1.to_string(), output_token: mid_token2_symbol_p2.to_string(), input_amount: hop1_out_ta.to_float(), expected_output: hop2_out_ta.to_float() },
+                                        ArbHop { dex: p3.dex_type.clone(), pool: p3.address, input_token: mid_token2_symbol_p2.to_string(), output_token: final_token_symbol_p3.to_string(), input_amount: hop2_out_ta.to_float(), expected_output: hop3_out_ta.to_float() },
                                     ];
-
-                                    // Placeholder USD estimations
-                                    let estimated_profit_usd = Some(calculated_profit_float * 1.0); // Assuming 1 USD per token for simplicity
-                                    let input_amount_usd_val = Some(input_amount_float * 1.0);
-                                    let output_amount_usd_val =
-                                        Some((input_amount_float + calculated_profit_float) * 1.0);
+                                    let estimated_profit_usd = Some(calculated_profit_float * 1.0); let input_amount_usd_val = Some(input_amount_float * 1.0); let output_amount_usd_val = Some((input_amount_float + calculated_profit_float) * 1.0);
 
                                     let opp = MultiHopArbOpportunity {
-                                        id: opp_id,
-                                        hops: hops_data,
-                                        total_profit: calculated_profit_float,
-                                        profit_pct,
-                                        input_token: start_token_symbol_p1.to_string(),
-                                        output_token: final_token_symbol_p3.to_string(), // Should be start_token_symbol for cycle
-                                        input_amount: input_amount_float,
-                                        expected_output: hop3_out_ta.to_float(), // Final output from simulation
-                                        dex_path: vec![p1.dex_type, p2.dex_type, p3.dex_type],
+                                        id: opp_id, hops: hops_data, total_profit: calculated_profit_float, profit_pct,
+                                        input_token: start_token_symbol_p1.to_string(), output_token: final_token_symbol_p3.to_string(),
+                                        input_amount: input_amount_float, expected_output: hop3_out_ta.to_float(),
+                                        dex_path: vec![p1.dex_type.clone(), p2.dex_type.clone(), p3.dex_type.clone()], // Clone DexType
                                         pool_path: vec![p1.address, p2.address, p3.address],
-                                        risk_score: Some(total_slippage_fraction), // Using slippage as a risk score example
-                                        notes: Some(format!(
-                                            "3-hop: Slippage: {:.4}%",
-                                            total_slippage_fraction * 100.0
-                                        )),
-                                        estimated_profit_usd,
-                                        input_amount_usd: input_amount_usd_val,
-                                        intermediate_tokens: vec![
-                                            mid_token1_symbol_p1.to_string(),
-                                            mid_token2_symbol_p2.to_string(),
-                                        ],
+                                        risk_score: Some(total_slippage_fraction), notes: Some(format!("3-hop: Slippage: {:.4}%", total_slippage_fraction * 100.0)),
+                                        estimated_profit_usd, input_amount_usd: input_amount_usd_val,
+                                        intermediate_tokens: vec![mid_token1_symbol_p1.to_string(), mid_token2_symbol_p2.to_string()],
                                         output_amount_usd: output_amount_usd_val,
-                                        source_pool: Arc::clone(p1_arc),
-                                        target_pool: Arc::clone(p3_arc),
-                                        input_token_mint: start_token_mint_p1,
-                                        output_token_mint: final_token_mint_p3, // Should be start_token_mint for cycle
-                                        intermediate_token_mint: Some(mid_token1_mint_p1), // First intermediate mint
+                                        source_pool: Arc::clone(p1_arc), target_pool: Arc::clone(p3_arc),
+                                        input_token_mint: start_token_mint_p1, output_token_mint: final_token_mint_p3,
+                                        intermediate_token_mint: Some(mid_token1_mint_p1),
                                     };
-
                                     info!("[ANALYTICS] Potential 3-Hop Opp: {} -> {} -> {} -> {} (Profit: {:.2}%)", start_token_symbol_p1, mid_token1_symbol_p1, mid_token2_symbol_p2, final_token_symbol_p3, opp.profit_pct);
                                     opp.log_summary();
-
-                                    let dex_path_strings_log: Vec<String> =
-                                        opp.dex_path.iter().map(|d| format!("{:?}", d)).collect();
+                                    
+                                    let dex_path_strings_log: Vec<String> = opp.dex_path.iter().map(|d| format!("{:?}",d)).collect();
                                     if let Err(e) = metrics.record_opportunity_detected(
-                                        &opp.input_token,
-                                        &opp.intermediate_tokens
-                                            .get(0)
-                                            .cloned()
-                                            .unwrap_or_default(), // Log first intermediate
-                                        opp.profit_pct,
-                                        opp.estimated_profit_usd,
-                                        opp.input_amount_usd,
-                                        dex_path_strings_log,
-                                    ) {
-                                        error!("Failed to record 3-hop opportunity detection metric: {}", e);
-                                    }
+                                        &opp.input_token, &opp.intermediate_tokens.get(0).cloned().unwrap_or_default(),
+                                        opp.profit_pct, opp.estimated_profit_usd, opp.input_amount_usd, dex_path_strings_log,
+                                    ){ error!("Failed to record 3-hop opportunity metric: {}", e); }
                                     opportunities.push(opp);
                                 }
                             }
@@ -625,72 +307,36 @@ impl ArbitrageDetector {
                 }
             }
         }
-
-        opportunities.sort_by(|a, b| {
-            b.profit_pct
-                .partial_cmp(&a.profit_pct)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
-        info!(
-            "Found {} multi-hop (3-hop) arbitrage opportunities above {:.4}% threshold",
-            opportunities.len(),
-            self.min_profit_threshold
-        );
+        opportunities.sort_by(|a, b| b.profit_pct.partial_cmp(&a.profit_pct).unwrap_or(std::cmp::Ordering::Equal));
+        info!("Found {} multi-hop (3-hop) arbitrage opportunities above {:.4}% threshold", opportunities.len(), self.min_profit_threshold);
         Ok(opportunities)
     }
 
-    pub async fn find_all_multihop_opportunities_with_risk(
-        &self,
-        pools: &HashMap<Pubkey, Arc<PoolInfo>>,
-        metrics: &mut Metrics, // Changed to &mut Metrics
-        max_slippage_pct: f64,
-        tx_fee_lamports: u64,
-    ) -> Result<Vec<MultiHopArbOpportunity>, ArbError> {
-        // This method can reuse the logic from find_all_multihop_opportunities
-        // and then add further filtering based on risk parameters (slippage, fees).
-        // For brevity, this example will call the base multi-hop finder and then filter.
-        // A more optimized approach might integrate risk checks earlier.
-
+    pub async fn find_all_multihop_opportunities_with_risk(&self, pools: &HashMap<Pubkey, Arc<PoolInfo>>, metrics: &mut Metrics, max_slippage_pct: f64, tx_fee_lamports: u64) -> Result<Vec<MultiHopArbOpportunity>, ArbError> {
         let base_opportunities = self.find_all_multihop_opportunities(pools, metrics).await?;
         let mut risk_adjusted_opportunities = Vec::new();
 
         for opp in base_opportunities {
-            // Estimate fees and slippage for this specific opportunity
-            // This is a simplified estimation; real estimation would use FeeManager more deeply
-            let estimated_total_slippage_fraction = opp.risk_score.unwrap_or(0.0); // Assuming risk_score stores slippage for now
-            let estimated_gas_cost_lamports = FeeManager::estimate_multi_hop_with_model(
-                &opp.pool_path
-                    .iter()
-                    .map(|p_addr| pools.get(p_addr).unwrap().as_ref())
-                    .collect::<Vec<&PoolInfo>>(), // This is a bit convoluted to get refs
-                &opp.hops
-                    .iter()
-                    .map(|h| TokenAmount::new((h.input_amount * 10f64.powi(6)) as u64, 6))
-                    .collect::<Vec<TokenAmount>>(), // Dummy decimals and amounts
-                &vec![true; opp.hops.len()], // Dummy directions
-                &vec![(None, None, None); opp.hops.len()],
-                &XYKSlippageModel {},
-            )
-            .gas_cost;
+            let estimated_total_slippage_fraction = opp.risk_score.unwrap_or(1.0); // Default to high if not set
+            
+            // Rough gas cost estimation based on number of hops, or use a more detailed FeeManager call if available for the whole path
+            let estimated_gas_cost_lamports = opp.hops.len() as u64 * FeeManager::estimate_multi_hop_with_model(
+                 &opp.pool_path.iter().filter_map(|p_addr| pools.get(p_addr).map(|p| p.as_ref())).collect::<Vec<&PoolInfo>>(),
+                 &opp.hops.iter().map(|h| TokenAmount::new((h.input_amount * 10f64.powi(6)) as u64, 6)).collect::<Vec<TokenAmount>>(),
+                 &vec![true; opp.hops.len()],
+                 &vec![(None,None,None); opp.hops.len()],
+                 &XYKSlippageModel {}
+            ).gas_cost / opp.hops.len().max(1) as u64; // Average per hop if complex, or sum
 
-            if estimated_total_slippage_fraction <= (max_slippage_pct / 100.0) && // Convert pct to fraction
-                estimated_gas_cost_lamports <= tx_fee_lamports
-            {
-                // Further checks like ensuring profit after estimated fees still meets threshold
-                // For now, we assume self.min_profit_threshold already accounts for typical fees
-                // or is a gross profit threshold.
+            if estimated_total_slippage_fraction * 100.0 <= max_slippage_pct && estimated_gas_cost_lamports <= tx_fee_lamports {
                 risk_adjusted_opportunities.push(opp);
             } else {
                 debug!("Skipping opportunity ID {} due to risk/fee (Slippage: {:.4}%, Fee: {} lamports)", opp.id, estimated_total_slippage_fraction * 100.0, estimated_gas_cost_lamports);
             }
         }
-        info!(
-            "Found {} multi-hop arbitrage opportunities (risk-adjusted) above {:.4}% threshold, max slippage {:.2}%, max fee {} lamports",
-            risk_adjusted_opportunities.len(),
-            self.min_profit_threshold,
-            max_slippage_pct,
-            tx_fee_lamports
-        );
+        
+        info!("Found {} multi-hop arbitrage opportunities (risk-adjusted) above {:.4}% threshold, max slippage {:.2}%, max fee {} lamports",
+            risk_adjusted_opportunities.len(), self.min_profit_threshold, max_slippage_pct, tx_fee_lamports);
         Ok(risk_adjusted_opportunities)
     }
 }

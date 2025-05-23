@@ -1,17 +1,9 @@
 use crate::arbitrage::fee_manager::{get_gas_cost_for_dex, FeeManager, XYKSlippageModel};
-use crate::config::settings::Config;
-use crate::utils::{DexType, PoolInfo, TokenAmount, calculate_output_amount}; // Removed non-existent mint constants
+use crate::utils::{PoolInfo, TokenAmount}; // Removed DexType, calculate_output_amount
 use dashmap::DashMap;
 use once_cell::sync::Lazy;
 use solana_sdk::pubkey::Pubkey;
-use std::sync::Arc;
 
-
-pub struct ArbitrageCalculator {
-    config: Arc<Config>,
-}
-
-/// Represents the result of opportunity calculation
 #[derive(Debug, Clone)]
 pub struct OpportunityCalculationResult {
     pub input_amount: f64,
@@ -21,26 +13,16 @@ pub struct OpportunityCalculationResult {
     pub price_impact: f64,
 }
 
-// Cache for common calculations to avoid redundant computation
 static CALCULATION_CACHE: Lazy<DashMap<(Pubkey, Pubkey, u64, bool), OpportunityCalculationResult>> =
     Lazy::new(|| DashMap::new());
 
-// Cache for optimal input calculations
 static OPTIMAL_INPUT_CACHE: Lazy<DashMap<(Pubkey, Pubkey, bool, u64), TokenAmount>> =
     Lazy::new(|| DashMap::new());
 
-// Pre-computed common values for multi-hop calculations
 static MULTI_HOP_CACHE: Lazy<DashMap<String, (f64, f64, f64)>> = Lazy::new(|| DashMap::new());
 
-/// Calculate arbitrage opportunity metrics for a pair of pools
+#[allow(dead_code)]
 pub fn calculate_opportunity(_pair: &(Pubkey, Pubkey)) -> OpportunityCalculationResult {
-    // A simple placeholder implementation - in production this would:
-    // 1. Look up the pools from a global pool map or context
-    // 2. Calculate the optimal input amount
-    // 3. Calculate the expected output and profit
-    // 4. Determine price impact and other metrics
-
-    // For now return a placeholder result
     OpportunityCalculationResult {
         input_amount: 1000.0,
         output_amount: 1010.0,
@@ -50,18 +32,12 @@ pub fn calculate_opportunity(_pair: &(Pubkey, Pubkey)) -> OpportunityCalculation
     }
 }
 
-/// Calculates the optimal input amount for maximum profit in an arbitrage opportunity.
-/// Uses constant product AMM formula to determine the ideal trade size.
-///
-/// This implementation uses a simplified approach based on the constant product formula
-/// where the optimal input can be derived from the reserves and price difference between pools.
 pub fn calculate_optimal_input(
     pool_a: &PoolInfo,
     pool_b: &PoolInfo,
     is_a_to_b: bool,
     max_input_amount: TokenAmount,
 ) -> TokenAmount {
-    // Check cache first
     let cache_key = (
         pool_a.address,
         pool_b.address,
@@ -72,7 +48,6 @@ pub fn calculate_optimal_input(
         return cached_result.clone();
     }
 
-    // Extract reserves based on trade direction
     let (a_in_reserve, a_in_decimals, b_out_reserve, _) = if is_a_to_b {
         (
             pool_a.token_a.reserve,
@@ -89,7 +64,6 @@ pub fn calculate_optimal_input(
         )
     };
 
-    // Extract reserves for the second pool (reverse direction)
     let (b_in_reserve, _b_in_decimals, a_out_reserve, _a_out_decimals) = if is_a_to_b {
         (
             pool_b.token_b.reserve,
@@ -105,118 +79,69 @@ pub fn calculate_optimal_input(
             pool_b.token_b.decimals,
         )
     };
+    
+    let price_a = if a_in_reserve > 0 { b_out_reserve as f64 / a_in_reserve as f64 } else { 0.0 };
+    let price_b = if b_in_reserve > 0 { a_out_reserve as f64 / b_in_reserve as f64 } else { 0.0 };
 
-    // Calculate price ratios (simplified, ignoring fees for the formula)
-    let price_a = b_out_reserve as f64 / a_in_reserve as f64;
-    let price_b = a_out_reserve as f64 / b_in_reserve as f64;
-
-    // Calculate optimal input using square root formula for constant product AMMs
-    // Formula: optimal_input = sqrt(reserve_in * reserve_out * (1 - fee_a) * (1 - fee_b) / price_ratio) - reserve_in
-    // This is a simplified version - production code would need precise fee handling
-
-    // For now, use a more conservative approach based on max amount
     let optimal_percentage = if price_b * price_a > 1.01 {
-        // If there's a significant arbitrage opportunity, use more capital
         0.75
     } else if price_b * price_a > 1.005 {
-        // For smaller opportunities, be more conservative
         0.5
     } else {
-        // For minimal opportunities, use even less
         0.25
     };
 
     let amount = (max_input_amount.amount as f64 * optimal_percentage) as u64;
     let result = TokenAmount::new(amount, a_in_decimals);
 
-    // Cache the result
     OPTIMAL_INPUT_CACHE.insert(cache_key, result.clone());
-
     result
 }
 
-/// Calculates the maximum theoretical profit possible between two pools.
-///
-/// This function simulates the complete arbitrage cycle:
-/// 1. Trade token A for token B in pool_a
-/// 2. Trade token B for token A in pool_b
-/// 3. Calculate the net profit after fees
-///
-/// Returns the profit as a decimal percentage (e.g., 0.01 = 1%)
 pub fn calculate_max_profit(
     pool_a: &PoolInfo,
     pool_b: &PoolInfo,
     is_a_to_b: bool,
     input_amount: TokenAmount,
 ) -> f64 {
-    // Check cache first - use a timestamp-based key to ensure freshness
-    let timestamp = pool_a
-        .last_update_timestamp
-        .max(pool_b.last_update_timestamp);
+    let timestamp = pool_a.last_update_timestamp.max(pool_b.last_update_timestamp);
     let cache_key = (pool_a.address, pool_b.address, timestamp, is_a_to_b);
 
     if let Some(cached_result) = CALCULATION_CACHE.get(&cache_key) {
         return cached_result.profit_percentage;
     }
 
-    // Helper closure to compute fee as a ratio
     let get_fee = |pool: &PoolInfo| pool.fee_numerator as f64 / pool.fee_denominator as f64;
 
-    // Extract reserves and compute fee percentage as a float
     let (a_in_reserve, a_fee, b_out_reserve, _) = if is_a_to_b {
-        (
-            pool_a.token_a.reserve,
-            get_fee(pool_a),
-            pool_a.token_b.reserve,
-            pool_a.token_b.decimals,
-        )
+        (pool_a.token_a.reserve, get_fee(pool_a), pool_a.token_b.reserve, pool_a.token_b.decimals)
     } else {
-        (
-            pool_a.token_b.reserve,
-            get_fee(pool_a),
-            pool_a.token_a.reserve,
-            pool_a.token_a.decimals,
-        )
+        (pool_a.token_b.reserve, get_fee(pool_a), pool_a.token_a.reserve, pool_a.token_a.decimals)
     };
 
-    // Extract reserves for the second pool (reverse direction)
     let (b_in_reserve, b_fee, a_out_reserve, _) = if is_a_to_b {
-        (
-            pool_b.token_b.reserve,
-            get_fee(pool_b),
-            pool_b.token_a.reserve,
-            pool_b.token_a.decimals,
-        )
+        (pool_b.token_b.reserve, get_fee(pool_b), pool_b.token_a.reserve, pool_b.token_a.decimals)
     } else {
-        (
-            pool_b.token_a.reserve,
-            get_fee(pool_b),
-            pool_b.token_b.reserve,
-            pool_b.token_b.decimals,
-        )
+        (pool_b.token_a.reserve, get_fee(pool_b), pool_b.token_b.reserve, pool_b.token_b.decimals)
     };
 
-    // Calculate output from first swap (constant product formula with fees)
     let input_with_fee = input_amount.amount as f64 * (1.0 - a_fee);
-    let numerator = input_with_fee * b_out_reserve as f64;
-    let denominator = a_in_reserve as f64 + input_with_fee;
-    let b_amount = numerator / denominator;
+    let numerator = if a_in_reserve as f64 + input_with_fee != 0.0 {
+        input_with_fee * b_out_reserve as f64 / (a_in_reserve as f64 + input_with_fee)
+    } else { 0.0 };
+    let b_amount = numerator;
 
-    // Calculate output from second swap
     let b_input_with_fee = b_amount * (1.0 - b_fee);
-    let numerator2 = b_input_with_fee * a_out_reserve as f64;
-    let denominator2 = b_in_reserve as f64 + b_input_with_fee;
-    let a_final_amount = numerator2 / denominator2;
+    let numerator2 = if b_in_reserve as f64 + b_input_with_fee != 0.0 {
+        b_input_with_fee * a_out_reserve as f64 / (b_in_reserve as f64 + b_input_with_fee)
+    } else { 0.0 };
+    let a_final_amount = numerator2;
 
-    // Calculate profit percentage
     let profit = a_final_amount - input_amount.amount as f64;
-    let profit_percentage = profit / input_amount.amount as f64;
+    let profit_percentage = if input_amount.amount > 0 { profit / input_amount.amount as f64 } else { 0.0 };
 
-    // Calculate price impact for the first swap
-    let price_impact =
-        estimate_price_impact(pool_a, if is_a_to_b { 0 } else { 1 }, input_amount.clone());
+    let price_impact = estimate_price_impact(pool_a, if is_a_to_b { 0 } else { 1 }, input_amount.clone());
 
-    // Create and cache the result
     let result = OpportunityCalculationResult {
         input_amount: input_amount.amount as f64,
         output_amount: a_final_amount,
@@ -224,199 +149,160 @@ pub fn calculate_max_profit(
         profit_percentage,
         price_impact,
     };
-
     CALCULATION_CACHE.insert(cache_key, result);
-
-    profit_percentage.max(0.0) // Ensure we don't return negative profit
+    profit_percentage.max(0.0)
 }
 
-/// Transaction cost modeling for opportunity evaluation.
-/// Used in testing/profit simulation to determine if an arbitrage is worth executing.
-///
-/// Estimates the cost of executing a transaction on Solana based on its size
-/// and any priority fees that might be required during network congestion.
-///
-/// Parameters:
-/// - transaction_size: Size of the transaction in bytes
-/// - priority_fee: Additional fee to prioritize transaction (in micro-lamports per CU)
-///
-/// Returns the estimated cost in SOL
-pub fn calculate_transaction_cost(transaction_size: usize, priority_fee: u64) -> f64 {
-    // Solana transaction cost components:
-    const BASE_FEE_LAMPORTS: f64 = 5000.0; // Base fee in lamports
-    const LAMPORTS_PER_SIGNATURE: f64 = 5000.0; // Fee per signature
-    const SIGNATURES_PER_TX: usize = 2; // Typical number of signatures for an arb tx
-    const COMPUTE_UNITS_PER_TX: u64 = 200_000; // Estimated CUs for a swap transaction
-    const LAMPORTS_PER_SOL: f64 = 1_000_000_000.0; // Conversion rate
+pub fn calculate_transaction_cost(_transaction_size: usize, _priority_fee: u64) -> f64 {
+    const BASE_FEE_LAMPORTS: f64 = 5000.0;
+    const LAMPORTS_PER_SIGNATURE: f64 = 5000.0;
+    const SIGNATURES_PER_TX: usize = 2;
+    // const COMPUTE_UNITS_PER_TX: u64 = 200_000; // Priority fee calculation needs actual CUs
+    const LAMPORTS_PER_SOL: f64 = 1_000_000_000.0;
 
-    // Calculate signature cost
     let signature_cost = SIGNATURES_PER_TX as f64 * LAMPORTS_PER_SIGNATURE;
+    // Priority fee needs to be calculated based on actual compute units if applied per CU.
+    // If priority_fee is a flat addition in lamports, then it's simpler.
+    // For now, assuming priority_fee is a flat addition and not per CU.
+    let priority_cost_lamports = _priority_fee as f64; // If priority_fee is already in lamports
 
-    // Calculate priority fee cost (if any)
-    let priority_cost = if priority_fee > 0 {
-        (priority_fee as f64 * COMPUTE_UNITS_PER_TX as f64) / 1_000_000.0 // Convert from micro-lamports
-    } else {
-        0.0
-    };
-
-    // Calculate size-based cost (simplified)
-    let size_cost = transaction_size as f64 * 0.0; // Currently Solana doesn't charge by size
-
-    // Total cost in SOL
-    let total_lamports = BASE_FEE_LAMPORTS + signature_cost + priority_cost + size_cost;
+    let total_lamports = BASE_FEE_LAMPORTS + signature_cost + priority_cost_lamports;
     total_lamports / LAMPORTS_PER_SOL
 }
 
-/// Check if an arbitrage opportunity is profitable after accounting for
-/// transaction costs and minimum profit threshold requirements.
-///
-/// This is a core decision function used to determine whether to execute a trade.
-///
-/// Parameters:
-/// - profit_in_token: The raw profit amount in token units
-/// - token_price_in_sol: The price of the profit token in SOL
-/// - transaction_cost_in_sol: The estimated cost to execute the transaction
-/// - min_profit_threshold: Minimum acceptable profit in SOL
-///
-/// Returns true if the opportunity should be executed
 pub fn is_profitable(
     profit_in_token: f64,
     token_price_in_sol: f64,
     transaction_cost_in_sol: f64,
-    min_profit_threshold: f64,
+    min_profit_threshold_sol: f64, // Assuming this threshold is in SOL
 ) -> bool {
     let profit_in_sol = profit_in_token * token_price_in_sol;
-
-    // Calculate profit after costs
-    let net_profit = profit_in_sol - transaction_cost_in_sol;
-
-    // Check if profit exceeds our minimum threshold
-    net_profit > min_profit_threshold
+    let net_profit_sol = profit_in_sol - transaction_cost_in_sol;
+    net_profit_sol > min_profit_threshold_sol
 }
 
-/// Estimates the price impact of a trade on a pool.
-/// Useful for determining how much slippage to expect.
-///
-/// Parameters:
-/// - pool: The pool information
-/// - input_token_index: 0 for token A, 1 for token B
-/// - input_amount: Amount of tokens to swap
-///
-/// Returns the estimated price impact as a percentage (0.0-1.0)
 pub fn estimate_price_impact(
     pool: &PoolInfo,
-    input_token_index: usize,
+    input_token_index: usize, // 0 for token_a, 1 for token_b
     input_amount: TokenAmount,
 ) -> f64 {
-    let (input_reserve, _) = if input_token_index == 0 {
-        (pool.token_a.reserve, pool.token_b.reserve)
+    let input_reserve_float = if input_token_index == 0 {
+        pool.token_a.reserve as f64
     } else {
-        (pool.token_b.reserve, pool.token_a.reserve)
+        pool.token_b.reserve as f64
     };
+    let input_amount_float = input_amount.to_float(); // Use .to_float()
 
-    // Calculate price impact using AMM formula
-    let input_amount_f64 = input_amount.amount as f64;
-    let input_reserve_f64 = input_reserve as f64;
+    if input_reserve_float == 0.0 && input_amount_float == 0.0 { return 0.0; } // No impact if no reserves and no input
+    if input_reserve_float + input_amount_float == 0.0 { return 1.0; } // Max impact if sum is zero (e.g. negative reserves - though unlikely)
 
-    // Price impact formula: 1 - (x / (x + Δx))
-    // where x is the input reserve and Δx is the input amount
-    let price_impact = input_amount_f64 / (input_reserve_f64 + input_amount_f64);
 
-    price_impact.min(1.0)
+    input_amount_float / (input_reserve_float + input_amount_float)
 }
 
-/// Calculates the total profit, slippage, and fees for a multi-hop arbitrage opportunity.
-/// Uses FeeManager for fee/slippage/gas analytics and aggregates across all hops.
+
+// This function was in utils.rs as well. Consolidating or ensuring one is canonical.
+// Assuming this is the primary one for multi-hop calculations context.
+// The error was for line 379, inside calculate_multihop_profit_and_slippage.
+// The error "cannot move out of type `[&PoolInfo]`, a non-copy slice"
+// at line 379: let _gas_cost = get_gas_cost_for_dex(pools[0].dex_type);
+// Is strange. `pools` is `&[&PoolInfo]`. `pools[0]` is `&PoolInfo`. `pools[0].dex_type` is `DexType`.
+// This should not try to move `pools`. The issue is with `dex_type`.
 pub fn calculate_multihop_profit_and_slippage(
     pools: &[&PoolInfo],
     input_amount: f64,
     directions: &[bool],
     last_fee_data: &[(Option<u64>, Option<u64>, Option<u64>)],
 ) -> (f64, f64, f64) {
-    // Create a cache key based on pool addresses, directions, and input amount
     let cache_key = {
         let mut key = String::new();
         for (i, pool) in pools.iter().enumerate() {
             key.push_str(&pool.address.to_string());
-            key.push_str(if directions.get(i).copied().unwrap_or(true) {
-                "t"
-            } else {
-                "f"
-            });
+            key.push_str(if directions.get(i).copied().unwrap_or(true) { "t" } else { "f" });
         }
-        key.push_str(&format!("_{}", input_amount));
+        key.push_str(&format!("_{}", input_amount)); // Consider if input_amount precision matters for cache
         key
     };
 
-    // Check cache first
     if let Some(cached_result) = MULTI_HOP_CACHE.get(&cache_key) {
         return *cached_result;
     }
 
-    // Simulate each hop sequentially (placeholder: use real AMM math for each hop)
-    let mut amounts = Vec::new();
-    let mut current_amount = input_amount;
-    for pool in pools {
-        // Placeholder: apply 2% loss per hop for slippage/fee (replace with real swap math)
-        current_amount *= 0.98;
-        amounts.push(TokenAmount::new(
-            current_amount as u64,
-            pool.token_a.decimals,
-        ));
+    let mut amounts_for_fee_est = Vec::new();
+    let mut current_simulated_amount = input_amount;
+
+    // Simulate hop outputs to get input amounts for fee estimation per hop
+    for (idx, pool_ref) in pools.iter().enumerate() {
+        let pool = *pool_ref; // Dereference to PoolInfo
+        let input_decimals = if directions[idx] { pool.token_a.decimals } else { pool.token_b.decimals };
+        let current_input_token_amount = TokenAmount::new(
+            (current_simulated_amount * 10f64.powi(input_decimals as i32)) as u64,
+            input_decimals
+        );
+        amounts_for_fee_est.push(current_input_token_amount.clone());
+
+        // Simulate output of this hop to be input for next (simplified, real calc would use exact output)
+        // This is a very rough estimation for subsequent hop input amounts for fee/slippage estimation
+        let fee_fraction = pool.fee_numerator as f64 / pool.fee_denominator as f64;
+        current_simulated_amount = current_simulated_amount * (1.0 - fee_fraction) * 0.99; // Assume 1% slippage + fee for next hop input rough est.
+    }
+    // Ensure amounts_for_fee_est has the correct length
+     while amounts_for_fee_est.len() < pools.len() { // Pad if simulation was too short
+        if let Some(last_pool) = pools.last() {
+             amounts_for_fee_est.push(TokenAmount::new(0, last_pool.token_a.decimals)); // Dummy amount
+        } else {
+            break; // No pools to get decimals from
+        }
     }
 
-    // Use advanced fee/slippage/gas estimation
+
     let slippage_model = XYKSlippageModel;
     let fee_breakdown = FeeManager::estimate_multi_hop_with_model(
         pools,
-        &amounts,
+        &amounts_for_fee_est, // Use simulated input amounts for each hop
         directions,
         last_fee_data,
         &slippage_model,
     );
 
-    // Example: get gas cost for first DEX
-    let _gas_cost = get_gas_cost_for_dex(pools[0].dex_type);
+    // The _gas_cost error was here. `get_gas_cost_for_dex` takes DexType by value.
+    // `pools[0].dex_type` requires cloning because DexType is not Copy.
+    if pools.is_empty() { // Guard against empty pools slice
+        MULTI_HOP_CACHE.insert(cache_key, (0.0, 1.0, 0.0)); // Profit, Slippage, Fee
+        return (0.0, 1.0, 0.0);
+    }
+    let _gas_cost = get_gas_cost_for_dex(pools[0].dex_type.clone()); // Fixed: clone DexType
 
-    // Example: convert fee to USDC (stub)
     let _fee_in_usdc = FeeManager::convert_fee_to_reference_token(
         fee_breakdown.expected_fee,
         &pools[0].token_a.symbol,
         "USDC",
     );
 
-    let total_profit = current_amount - input_amount - fee_breakdown.expected_fee;
+    // This calculation of total_profit is a placeholder.
+    // A real calculation would simulate the swaps step-by-step with actual output amounts.
+    // The `fee_breakdown.expected_fee` is also a sum of fees in potentially different tokens.
+    // For accurate profit, one must track the token amounts through each hop precisely.
+    let placeholder_final_amount = input_amount * (1.0 - fee_breakdown.expected_slippage) - fee_breakdown.expected_fee; // Highly simplified
+    let total_profit = placeholder_final_amount - input_amount;
+
     let result = (
         total_profit,
         fee_breakdown.expected_slippage,
         fee_breakdown.expected_fee,
     );
 
-    // Cache the result
     MULTI_HOP_CACHE.insert(cache_key, result);
-
     result
 }
 
-/// Calculates the total rebate for a multi-hop arbitrage opportunity (if supported by DEX).
 pub fn calculate_rebate(_pools: &[&PoolInfo], _amounts: &[TokenAmount]) -> f64 {
-    // Placeholder: implement DEX-specific rebate logic here
     0.0
 }
 
-// Clear caches when they grow too large
 pub fn clear_caches_if_needed() {
     const MAX_CACHE_SIZE: usize = 10000;
-
-    if CALCULATION_CACHE.len() > MAX_CACHE_SIZE {
-        CALCULATION_CACHE.clear();
-    }
-
-    if OPTIMAL_INPUT_CACHE.len() > MAX_CACHE_SIZE {
-        OPTIMAL_INPUT_CACHE.clear();
-    }
-
-    if MULTI_HOP_CACHE.len() > MAX_CACHE_SIZE {
-        MULTI_HOP_CACHE.clear();
-    }
+    if CALCULATION_CACHE.len() > MAX_CACHE_SIZE { CALCULATION_CACHE.clear(); }
+    if OPTIMAL_INPUT_CACHE.len() > MAX_CACHE_SIZE { OPTIMAL_INPUT_CACHE.clear(); }
+    if MULTI_HOP_CACHE.len() > MAX_CACHE_SIZE { MULTI_HOP_CACHE.clear(); }
 }

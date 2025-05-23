@@ -2,15 +2,16 @@
 use solana_sdk::{
     pubkey::Pubkey,
     signature::{Keypair, read_keypair_file},
-    // signer::Signer, // Removed unused import
+    signer::Signer,
 };
-use std::error::Error as StdError; // Alias to avoid conflict if you have a local Error type
+use std::error::Error;
+use log::{info, error};
+use async_trait::async_trait; // Added for PoolParser
 
-// Required for fern
-// Ensure 'fern' is in your Cargo.toml dependencies version 0.6 may be a good choice
-use log::{info, error}; // For logging
+// Define PoolInfo, ProgramConfig, etc. as needed by the rest of the application
+// Placeholder structs - these should be defined based on their actual usage.
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)] // Added Serialize, Deserialize for dex/integration_test.rs
+#[derive(Debug, Clone)]
 pub struct PoolInfo {
     pub address: Pubkey,
     pub name: String,
@@ -19,16 +20,17 @@ pub struct PoolInfo {
     pub fee_numerator: u64,
     pub fee_denominator: u64,
     pub last_update_timestamp: u64,
-    pub dex_type: DexType,
+    pub dex_type: DexType, // Now uses the cloneable DexType
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)] // Added Serialize, Deserialize
+#[derive(Debug, Clone)]
 pub struct PoolToken {
     pub mint: Pubkey,
     pub symbol: String,
     pub decimals: u8,
     pub reserve: u64,
 }
+
 
 #[derive(Debug, Clone)]
 pub struct ProgramConfig {
@@ -39,7 +41,7 @@ pub fn setup_logging() -> Result<(), fern::InitError> {
     fern::Dispatch::new()
         .format(|out, message, record| {
             out.finish(format_args!(
-                "[{}][{}] {}", // Corrected string literal
+                "[{}][{}] {}",
                 record.level(),
                 record.target(),
                 message
@@ -54,19 +56,15 @@ pub fn setup_logging() -> Result<(), fern::InitError> {
     Ok(())
 }
 
-pub fn load_keypair(path: &str) -> Result<Keypair, Box<dyn StdError>> { // Using aliased StdError
+pub fn load_keypair(path: &str) -> Result<Keypair, Box<dyn Error>> {
     match read_keypair_file(path) {
         Ok(kp) => {
             info!("Successfully loaded keypair from: {}", path);
             Ok(kp)
         }
         Err(e) => {
-            // The error 'e' from read_keypair_file is a Box<dyn Any + Send>.
-            // We need to convert it to Box<dyn StdError>.
-            // A simple way is to format its debug output into a new error.
-            let err_msg = format!("Failed to load keypair from path '{}': {:?}", path, e);
-            error!("{}", err_msg);
-            Err(err_msg.into()) // Convert String into Box<dyn StdError> via From implemented for Box
+            error!("Failed to load keypair from path '{}': {}", path, e);
+            Err(Box::new(e))
         }
     }
 }
@@ -87,8 +85,8 @@ pub fn calculate_rebate(
     0.0
 }
 
-#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)] // Added Serialize/Deserialize
-pub struct TokenAmount {
+#[derive(Debug, Clone, Copy)]
+pub struct TokenAmount{
     pub amount: u64,
     pub decimals: u8,
 }
@@ -103,36 +101,19 @@ impl TokenAmount {
     }
 }
 
-// Removed `Copy` because String in Unknown(String) is not Copy.
-// If Copy is strictly needed, Unknown might need to store &str or a fixed-size char array,
-// or be represented differently. For now, removing Copy is the simplest fix.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)] // Removed Copy
+// Made DexType Cloneable
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum DexType {
     Orca,
     Raydium,
     Lifinity,
     Meteora,
     Phoenix,
-    Whirlpool, // Added from user's previous manual edit context
+    Whirlpool,
     Unknown(String),
 }
 
-impl DexType {
-    pub fn get_name(&self) -> String {
-        match self {
-            DexType::Orca => "Orca".to_string(),
-            DexType::Raydium => "Raydium".to_string(),
-            DexType::Lifinity => "Lifinity".to_string(),
-            DexType::Meteora => "Meteora".to_string(), // Added from user's previous manual edit context
-            DexType::Phoenix => "Phoenix".to_string(), // Added from user's previous manual edit context
-            DexType::Whirlpool => "Whirlpool".to_string(), // Added from user's previous manual edit context
-            DexType::Unknown(s) => s.clone(),
-        }
-    }
-}
-
-
-#[async_trait::async_trait]
+#[async_trait]
 pub trait PoolParser {
     fn parse_pool_data(address: Pubkey, data: &[u8]) -> anyhow::Result<PoolInfo>;
     fn get_program_id() -> Pubkey;
@@ -144,20 +125,18 @@ pub fn calculate_output_amount(
     input_amount: TokenAmount,
     is_a_to_b: bool,
 ) -> TokenAmount {
-    let (input_reserve_val, output_reserve_val, output_decimals_val, fee_num, fee_den) = if is_a_to_b {
-        (pool.token_a.reserve, pool.token_b.reserve, pool.token_b.decimals, pool.fee_numerator, pool.fee_denominator)
+    let (input_reserve_val, output_reserve_val, output_decimals_val) = if is_a_to_b {
+        (pool.token_a.reserve, pool.token_b.reserve, pool.token_b.decimals)
     } else {
-        (pool.token_b.reserve, pool.token_a.reserve, pool.token_a.decimals, pool.fee_numerator, pool.fee_denominator)
+        (pool.token_b.reserve, pool.token_a.reserve, pool.token_a.decimals)
     };
 
-    if input_reserve_val == 0 || input_amount.amount == 0 || fee_den == 0 {
+    if input_reserve_val == 0 || input_amount.amount == 0 {
         return TokenAmount::new(0, output_decimals_val);
     }
 
-    let input_amount_after_fee = input_amount.amount as u128 * (fee_den as u128 - fee_num as u128) / fee_den as u128;
+    let output_amount_u64 = (output_reserve_val as u128 * input_amount.amount as u128)
+        / (input_reserve_val as u128 + input_amount.amount as u128);
 
-    let output_amount_u128 = (output_reserve_val as u128 * input_amount_after_fee)
-        / (input_reserve_val as u128 + input_amount_after_fee);
-
-    TokenAmount::new(output_amount_u128 as u64, output_decimals_val)
+    TokenAmount::new(output_amount_u64 as u64, output_decimals_val)
 }

@@ -11,6 +11,8 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{broadcast, mpsc, RwLock};
 
+use crate::utils::PoolInfo;
+
 pub type SubscriptionId = u64;
 
 pub type AccountUpdateSender = broadcast::Sender<RawAccountUpdate>;
@@ -52,6 +54,12 @@ impl RawAccountUpdate {
     }
 }
 
+#[derive(Debug, Clone)]
+pub enum WebsocketUpdate {
+    PoolUpdate(PoolInfo),
+    GenericUpdate(String),
+}
+
 pub struct SolanaWebsocketManager {
     ws_url: String,
     #[allow(dead_code)]
@@ -62,6 +70,9 @@ pub struct SolanaWebsocketManager {
     shutdown_sender: mpsc::Sender<()>, // TODO: Expose graceful shutdown in integration/tests
     heartbeat_handle: Arc<RwLock<Option<tokio::task::JoinHandle<()>>>>,
     pubsub_client: Arc<RwLock<Option<Arc<PubsubClient>>>>,
+    // Added for main.rs
+    ws_update_receiver: Option<mpsc::Receiver<WebsocketUpdate>>,
+    ws_update_sender: Option<mpsc::Sender<WebsocketUpdate>>,
 }
 
 impl SolanaWebsocketManager {
@@ -73,6 +84,8 @@ impl SolanaWebsocketManager {
     ) -> (Self, broadcast::Receiver<RawAccountUpdate>) {
         let (update_sender, update_receiver) = broadcast::channel(update_channel_size);
         let (shutdown_sender, _) = mpsc::channel(1);
+        // Added for main.rs
+        let (ws_update_sender, ws_update_receiver) = mpsc::channel(update_channel_size);
         (
             Self {
                 ws_url,
@@ -82,9 +95,26 @@ impl SolanaWebsocketManager {
                 shutdown_sender,
                 heartbeat_handle: Arc::new(RwLock::new(None)),
                 pubsub_client: Arc::new(RwLock::new(None)),
+                // Added for main.rs
+                ws_update_receiver: Some(ws_update_receiver),
+                ws_update_sender: Some(ws_update_sender),
             },
             update_receiver,
         )
+    }
+
+    // Added for main.rs
+    pub async fn is_connected(&self) -> bool {
+        self.pubsub_client.read().await.is_some()
+    }
+
+    // Added for main.rs - Placeholder implementation
+    pub async fn try_recv_update(&mut self) -> Result<Option<WebsocketUpdate>, mpsc::error::TryRecvError> {
+        if let Some(ref mut receiver) = self.ws_update_receiver {
+            receiver.try_recv().map(Some)
+        } else {
+            Ok(None) // Or an appropriate error
+        }
     }
 
     pub fn update_sender(&self) -> &AccountUpdateSender {

@@ -1,10 +1,11 @@
 use crate::arbitrage::fee_manager::{get_gas_cost_for_dex, FeeManager, XYKSlippageModel};
 use crate::utils::{PoolInfo, TokenAmount};
+use dashmap::DashMap;
+use once_cell::sync::Lazy;
 use solana_sdk::pubkey::Pubkey;
 
 /// Represents the result of opportunity calculation
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct OpportunityCalculationResult {
     pub input_amount: f64,
     pub output_amount: f64,
@@ -12,6 +13,17 @@ pub struct OpportunityCalculationResult {
     pub profit_percentage: f64,
     pub price_impact: f64,
 }
+
+// Cache for common calculations to avoid redundant computation
+static CALCULATION_CACHE: Lazy<DashMap<(Pubkey, Pubkey, u64, bool), OpportunityCalculationResult>> =
+    Lazy::new(|| DashMap::new());
+
+// Cache for optimal input calculations
+static OPTIMAL_INPUT_CACHE: Lazy<DashMap<(Pubkey, Pubkey, bool, u64), TokenAmount>> =
+    Lazy::new(|| DashMap::new());
+
+// Pre-computed common values for multi-hop calculations
+static MULTI_HOP_CACHE: Lazy<DashMap<String, (f64, f64, f64)>> = Lazy::new(|| DashMap::new());
 
 /// Calculate arbitrage opportunity metrics for a pair of pools
 #[allow(dead_code)]
@@ -43,6 +55,17 @@ pub fn calculate_optimal_input(
     is_a_to_b: bool,
     max_input_amount: TokenAmount,
 ) -> TokenAmount {
+    // Check cache first
+    let cache_key = (
+        pool_a.address,
+        pool_b.address,
+        is_a_to_b,
+        max_input_amount.amount,
+    );
+    if let Some(cached_result) = OPTIMAL_INPUT_CACHE.get(&cache_key) {
+        return cached_result.clone();
+    }
+
     // Extract reserves based on trade direction
     let (a_in_reserve, a_in_decimals, b_out_reserve, _) = if is_a_to_b {
         (
@@ -98,7 +121,12 @@ pub fn calculate_optimal_input(
     };
 
     let amount = (max_input_amount.amount as f64 * optimal_percentage) as u64;
-    TokenAmount::new(amount, a_in_decimals)
+    let result = TokenAmount::new(amount, a_in_decimals);
+
+    // Cache the result
+    OPTIMAL_INPUT_CACHE.insert(cache_key, result.clone());
+
+    result
 }
 
 /// Calculates the maximum theoretical profit possible between two pools.
@@ -115,6 +143,16 @@ pub fn calculate_max_profit(
     is_a_to_b: bool,
     input_amount: TokenAmount,
 ) -> f64 {
+    // Check cache first - use a timestamp-based key to ensure freshness
+    let timestamp = pool_a
+        .last_update_timestamp
+        .max(pool_b.last_update_timestamp);
+    let cache_key = (pool_a.address, pool_b.address, timestamp, is_a_to_b);
+
+    if let Some(cached_result) = CALCULATION_CACHE.get(&cache_key) {
+        return cached_result.profit_percentage;
+    }
+
     // Helper closure to compute fee as a ratio
     let get_fee = |pool: &PoolInfo| pool.fee_numerator as f64 / pool.fee_denominator as f64;
 
@@ -167,6 +205,21 @@ pub fn calculate_max_profit(
     // Calculate profit percentage
     let profit = a_final_amount - input_amount.amount as f64;
     let profit_percentage = profit / input_amount.amount as f64;
+
+    // Calculate price impact for the first swap
+    let price_impact =
+        estimate_price_impact(pool_a, if is_a_to_b { 0 } else { 1 }, input_amount.clone());
+
+    // Create and cache the result
+    let result = OpportunityCalculationResult {
+        input_amount: input_amount.amount as f64,
+        output_amount: a_final_amount,
+        profit,
+        profit_percentage,
+        price_impact,
+    };
+
+    CALCULATION_CACHE.insert(cache_key, result);
 
     profit_percentage.max(0.0) // Ensure we don't return negative profit
 }
@@ -274,6 +327,26 @@ pub fn calculate_multihop_profit_and_slippage(
     directions: &[bool],
     last_fee_data: &[(Option<u64>, Option<u64>, Option<u64>)],
 ) -> (f64, f64, f64) {
+    // Create a cache key based on pool addresses, directions, and input amount
+    let cache_key = {
+        let mut key = String::new();
+        for (i, pool) in pools.iter().enumerate() {
+            key.push_str(&pool.address.to_string());
+            key.push_str(if directions.get(i).copied().unwrap_or(true) {
+                "t"
+            } else {
+                "f"
+            });
+        }
+        key.push_str(&format!("_{}", input_amount));
+        key
+    };
+
+    // Check cache first
+    if let Some(cached_result) = MULTI_HOP_CACHE.get(&cache_key) {
+        return *cached_result;
+    }
+
     // Simulate each hop sequentially (placeholder: use real AMM math for each hop)
     let mut amounts = Vec::new();
     let mut current_amount = input_amount;
@@ -285,6 +358,7 @@ pub fn calculate_multihop_profit_and_slippage(
             pool.token_a.decimals,
         ));
     }
+
     // Use advanced fee/slippage/gas estimation
     let slippage_model = XYKSlippageModel;
     let fee_breakdown = FeeManager::estimate_multi_hop_with_model(
@@ -294,24 +368,49 @@ pub fn calculate_multihop_profit_and_slippage(
         last_fee_data,
         &slippage_model,
     );
+
     // Example: get gas cost for first DEX
     let _gas_cost = get_gas_cost_for_dex(pools[0].dex_type);
+
     // Example: convert fee to USDC (stub)
     let _fee_in_usdc = FeeManager::convert_fee_to_reference_token(
         fee_breakdown.expected_fee,
         &pools[0].token_a.symbol,
         "USDC",
     );
+
     let total_profit = current_amount - input_amount - fee_breakdown.expected_fee;
-    (
+    let result = (
         total_profit,
         fee_breakdown.expected_slippage,
         fee_breakdown.expected_fee,
-    )
+    );
+
+    // Cache the result
+    MULTI_HOP_CACHE.insert(cache_key, result);
+
+    result
 }
 
 /// Calculates the total rebate for a multi-hop arbitrage opportunity (if supported by DEX).
 pub fn calculate_rebate(_pools: &[&PoolInfo], _amounts: &[TokenAmount]) -> f64 {
     // Placeholder: implement DEX-specific rebate logic here
     0.0
+}
+
+// Clear caches when they grow too large
+pub fn clear_caches_if_needed() {
+    const MAX_CACHE_SIZE: usize = 10000;
+
+    if CALCULATION_CACHE.len() > MAX_CACHE_SIZE {
+        CALCULATION_CACHE.clear();
+    }
+
+    if OPTIMAL_INPUT_CACHE.len() > MAX_CACHE_SIZE {
+        OPTIMAL_INPUT_CACHE.clear();
+    }
+
+    if MULTI_HOP_CACHE.len() > MAX_CACHE_SIZE {
+        MULTI_HOP_CACHE.clear();
+    }
 }

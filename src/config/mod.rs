@@ -1,53 +1,59 @@
-pub mod env; // Handles environment variable management
-pub mod settings; // Handles trading parameters and app settings
+// pub mod env; // env.rs is now simplified, its main logic moved to settings.rs
+pub mod settings;
 
-use log::{error, info};
-use std::env as sys_env; // Rename to avoid conflict with `config::env`
+// Re-export the primary Config struct and the load_config function
+pub use settings::Config;
+// The load_config function is now directly available from the env module,
+// but we can re-export it here for a cleaner import path if desired, e.g. `config::load_config()`.
+// Or, users can call config::env::load_config().
+// For simplicity, let's assume users will call settings::Config::from_env() or a new load_config here.
 
-pub const REQUIRED_ENV_VARS: &[&str] = &[
-    "RPC_URL",
-    "WS_URL",
-    "PAPER_TRADING",
-    "MIN_PROFIT",
-    "MAX_SLIPPAGE",
-    "CYCLE_INTERVAL",
-    "TRADER_WALLET_KEYPAIR_PATH",
-];
+use crate::error::ArbError; // Ensure ArbError is in scope if used here
+use std::sync::Arc;
 
-pub fn check_and_print_env_vars() {
-    let mut missing = Vec::new();
-    info!("--- Environment Variable Check ---");
+// /// Loads and returns the application configuration.
+// /// This function will panic if essential configurations are missing or malformed.
+// /// It centralizes the configuration loading process.
+// pub fn load_app_config() -> settings::Config {
+//     match settings::Config::from_env() {
+//         Ok(config) => {
+//             config.log_settings(); // Log the settings after successful load and validation
+//             config
+//         }
+//         Err(e) => {
+//             log::error!("Failed to load application configuration: {}", e);
+//             panic!("Application configuration error: {}", e);
+//         }
+//     }
+// }
 
-    for &key in REQUIRED_ENV_VARS {
-        match sys_env::var(key) {
-            Ok(val) => {
-                if key.contains("KEYPAIR_PATH") || key.contains("SECRET") || key.contains("KEY") {
-                    info!("{key}: ******** (path hidden)");
-                } else {
-                    info!("{key}: {val}");
-                }
-            }
-            Err(_) => {
-                error!("ERROR: {key} is not set!");
-                missing.push(key);
-            }
-        }
+/// Loads and returns the application configuration as an `Arc<Config>`.
+/// This function will panic if essential configurations are missing or malformed.
+/// It centralizes the configuration loading process.
+pub fn load_config() -> Result<Arc<settings::Config>, ArbError> {
+    dotenv::dotenv().ok(); // Load .env file if present, ignore errors
+
+    // Directly use from_env which now returns Config, not Result<Config, _>
+    let config = settings::Config::from_env();
+
+    // Perform any additional validation if necessary
+    // For example, check if critical URLs are reachable, etc.
+    // This was previously in validate_and_log, but can be expanded here.
+    if config.rpc_url.is_empty() {
+        return Err(ArbError::ConfigError("RPC_URL cannot be empty".to_string()));
     }
-
-    // Optional: Check TRADER_WALLET_ADDRESS
-    match sys_env::var("TRADER_WALLET_ADDRESS") {
-        Ok(wallet) => info!("TRADER_WALLET_ADDRESS: {wallet}"),
-        Err(_) => info!("TRADER_WALLET_ADDRESS: Not set (optional for verification)"),
+    if config.redis_url.is_empty() {
+        return Err(ArbError::ConfigError("REDIS_URL cannot be empty".to_string()));
     }
+    // Add more checks as needed...
 
-    info!("----------------------------------");
+    config.validate_and_log(); // Log the (now Debug-printable) config
 
-    if !missing.is_empty() {
-        error!(
-            "FATAL: The following environment variables are missing: {:?}\n\
-            Please set them in your .env file before running the bot.",
-            missing
-        );
-        std::process::exit(1);
-    }
+    Ok(Arc::new(config))
 }
+
+// The check_and_print_env_vars function from the original config/mod.rs is now
+// effectively handled by Config::from_env() (which errors on missing required vars)
+// and Config::log_settings() (which prints them).
+// The REQUIRED_ENV_VARS constant is also implicitly handled by Config::from_env().
+// Removing the old check_and_print_env_vars and REQUIRED_ENV_VARS from here.

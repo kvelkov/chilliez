@@ -3,62 +3,76 @@ name = "solana-arb-bot"
 version = "0.1.0"
 edition = "2021"
 
+# The print-config feature seems to be for a utility function in utils.rs that was removed.
+# If no other code uses this feature flag, it can also be removed.
 [features]
-print-config = []
+# print-config = [] # Candidate for removal if the associated function is gone.
 
 [dependencies]
-# Solana
+# Solana - Core: Keep these. Consider updating to latest 1.18.x or newer stable.
 solana-client = "1.18.3"
 solana-sdk = "1.18.3"
 solana-account-decoder = "1.18.3"
 spl-token = "4.0.0"
 spl-associated-token-account = "2.3.0"
-spl-token-2022 = "1.0.0"
+spl-token-2022 = "1.0.0" # Keep if Token2022 support is planned/used, else remove.
 
-# Async & runtime
-tokio = { version = "1.36.0", features = ["full"] }
+# Async & runtime - Core: Keep these.
+tokio = { version = "1.36.0", features = ["full"] } # "full" is convenient but pulls in a lot. Could be slimmed if specific features are known.
 futures = "0.3.30"
 async-trait = "0.1.74"
 
-# Data & config
+# Data & config - Core: Keep serde, serde_json, dotenv.
 serde = { version = "1.0.197", features = ["derive"] }
 serde_json = "1.0.114"
-bincode = "1.3.3"
+# bincode: Is this used for binary serialization (e.g., on-chain data, file storage)?
+# If only JSON is used (APIs, Redis cache), this might be unused.
+bincode = "1.3.3" # REVIEW: Candidate for removal if not used.
 dotenv = "0.15.0"
-clap = { version = "4.5.3", features = ["derive"] }
+# clap: Used for CLI argument parsing. Is your bot taking CLI args?
+clap = { version = "4.5.3", features = ["derive"] } # REVIEW: Candidate for removal if no CLI args.
 
-# Logging & errors
-anyhow = "1.0.81"
+# Logging & errors - Core: Keep these.
+anyhow = "1.0.75"
 thiserror = "1.0.57"
-log = "0.4.21"
+log = "0.4.20"
 env_logger = "0.11.2"
-tracing = "0.1.37"
+# tracing: Is this actively used for distributed tracing, or is `log` sufficient?
+tracing = "0.1.37" # REVIEW: Candidate for removal if `log` crate is primary and tracing isn't integrated.
 
-# Networking
-reqwest = { version = "0.11", features = ["json"] }
-tungstenite = "0.20.1"
+# Networking - Core: Keep reqwest, url.
+reqwest = { version = "0.11.27", features = ["json", "rustls-tls"], default-features = false } # Updated to a later 0.11.x, added rustls-tls for common setup. Consider 0.12.x.
+# tungstenite: solana-client's PubsubClient handles websockets. Is this direct dependency needed?
+tungstenite = "0.20.1" # REVIEW: Candidate for removal if solana-client's WS is sufficient.
 url = "2.5.0"
 
-# Utilities
+# Utilities - Core: Keep once_cell, lazy_static, dashmap, chrono, rand, base64.
 once_cell = "1.18.0"
 lazy_static = "1.4.0"
-dashmap = "5.5.3"
-rand = "0.9.1"
-chrono = "0.4.41"
-hex = "0.4.3"
+dashmap = "5.4.0"
+chrono = "0.4.26" # Consider "0.4.38" or latest
+rand = "0.8.5"
 base64 = "0.22.0"
+# hex: Used for hex encoding/decoding. Verify usage.
+hex = "0.4.3" # REVIEW: Candidate for removal if not used.
+# rayon: For data parallelism. Verify if any CPU-bound tasks are parallelized with it.
+rayon = "1.7.0" # REVIEW: Candidate for removal if not used.
 
-# Redis cache (used or planned for real-time quote caching)
-redis = { version = "0.23", features = ["aio", "tokio-comp"] }
+# Redis cache - Core: Keep this.
+redis = { version = "0.25.0", features = ["aio", "tokio-comp", "connection-manager"] } # Updated to 0.25.x, added connection-manager explicitly
 
-# Optional ML layer (commented out until activated)
+# Optional ML layer (commented out until activated) - Fine as is.
 # smartcore = "0.3"
 # ndarray = "0.15"
 
 # Optional helpers (low-cost)
-itertools = "0.12"
-uuid = { version = "1", features = ["v4"] }
+# itertools: Provides extra iterator adaptors. Verify usage.
+itertools = "0.12.0" # REVIEW: Candidate for removal if not significantly used. Updated patch version.
+# uuid: For generating UUIDs. Verify usage.
+uuid = { version = "1.8.0", features = ["v4"] } # REVIEW: Candidate for removal if not used. Updated version.
+fastrand = "2.3.0"
 
-[dev-dependencies]
+[dev-dependencies] # Keep these for tests.
 pretty_assertions = "1.4.0"
 assert_approx_eq = "1.1.0"
+

@@ -1,10 +1,58 @@
 //! FeeManager: Centralized logic for all fee, slippage, and dynamic gas calculations across pools/DEXs.
 
 use crate::utils::{DexType, PoolInfo, TokenAmount};
-use once_cell::sync::Lazy;
-use solana_sdk::pubkey::Pubkey;
-use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
+
+// Slippage model trait and implementations moved to the top
+pub trait SlippageModel: Send + Sync {
+    fn estimate_slippage(
+        &self,
+        pool: &PoolInfo,
+        input_amount: &TokenAmount,
+        is_a_to_b: bool,
+    ) -> f64;
+}
+
+pub struct XYKSlippageModel;
+impl SlippageModel for XYKSlippageModel {
+    fn estimate_slippage(
+        &self,
+        pool: &PoolInfo,
+        input_amount: &TokenAmount,
+        is_a_to_b: bool,
+    ) -> f64 {
+        let input_reserve_float = if is_a_to_b {
+            pool.token_a.reserve as f64
+        } else {
+            pool.token_b.reserve as f64
+        };
+        let input_amount_float = input_amount.to_float();
+
+        if input_reserve_float + input_amount_float == 0.0 {
+            return 1.0;
+        } // Max slippage if no reserve or input
+
+        // Slippage = (input_amount) / (input_reserve + input_amount)
+        // This is one way to estimate slippage in a constant product pool.
+        // More accurate models might consider the output amount.
+        input_amount_float / (input_reserve_float + input_amount_float)
+    }
+}
+
+impl Default for XYKSlippageModel {
+    fn default() -> Self {
+        XYKSlippageModel
+    }
+}
+
+pub fn get_gas_cost_for_dex(dex: DexType) -> u64 {
+    match dex {
+        DexType::Raydium | DexType::Orca => 500_000, // Increased, typical swaps can be complex
+        DexType::Whirlpool | DexType::Lifinity | DexType::Phoenix => 700_000, // CLMMs/Orderbooks can be more
+        DexType::Meteora => 600_000,
+        DexType::Unknown(_) => 500_000, // Default
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct FeeBreakdown {
@@ -126,28 +174,6 @@ impl FeeManager {
         }
     }
 
-    pub fn estimate_pool_swap_integrated(
-        pool: &PoolInfo,
-        input_amount: &TokenAmount,
-        is_a_to_b: bool,
-        // last_update_timestamp from the pool can be passed directly
-        // Or rely on pool.last_update_timestamp inside estimate_pool_swap_with_model
-    ) -> FeeBreakdown {
-        let (last_known_num, last_known_den) = FEE_HISTORY_TRACKER
-            .get_last_fee(pool) // This now correctly calls get_last_fee_by_pubkey internally
-            .unwrap_or((pool.fee_numerator, pool.fee_denominator)); // Use current if no history
-
-        Self::estimate_pool_swap_with_model(
-            pool,
-            input_amount,
-            is_a_to_b,
-            Some(last_known_num),
-            Some(last_known_den),
-            Some(pool.last_update_timestamp), // Pass pool's own timestamp
-            DEFAULT_SLIPPAGE_MODEL.as_ref(), // DEFAULT_SLIPPAGE_MODEL is now used
-        )
-    }
-
     pub fn estimate_multi_hop_with_model(
         pools: &[&PoolInfo],
         amounts: &[TokenAmount],
@@ -228,105 +254,8 @@ impl FeeManager {
         // if from_symbol == to_symbol { Some(amount) } else { None }
         Some(amount * 1.0) // Placeholder: assume 1.0 price for conversion for now
     }
-
-    pub fn record_fee_observation(pool: &PoolInfo, fee_numerator: u64, fee_denominator: u64) {
-        FEE_HISTORY_TRACKER.record_fee(pool.address, fee_numerator, fee_denominator); // FEE_HISTORY_TRACKER is now used
-    }
-
-    pub fn get_last_fee_for_pool(pool: &PoolInfo) -> Option<(u64, u64)> {
-        FEE_HISTORY_TRACKER.get_last_fee_by_pubkey(&pool.address) // FEE_HISTORY_TRACKER is now used
-    }
 }
 
-pub trait SlippageModel: Send + Sync {
-    fn estimate_slippage(
-        &self,
-        pool: &PoolInfo,
-        input_amount: &TokenAmount,
-        is_a_to_b: bool,
-    ) -> f64;
-}
-
-pub struct XYKSlippageModel;
-impl SlippageModel for XYKSlippageModel {
-    fn estimate_slippage(
-        &self,
-        pool: &PoolInfo,
-        input_amount: &TokenAmount,
-        is_a_to_b: bool,
-    ) -> f64 {
-        let input_reserve_float = if is_a_to_b {
-            pool.token_a.reserve as f64
-        } else {
-            pool.token_b.reserve as f64
-        };
-        let input_amount_float = input_amount.to_float();
-
-        if input_reserve_float + input_amount_float == 0.0 {
-            return 1.0;
-        } // Max slippage if no reserve or input
-
-        // Slippage = (input_amount) / (input_reserve + input_amount)
-        // This is one way to estimate slippage in a constant product pool.
-        // More accurate models might consider the output amount.
-        input_amount_float / (input_reserve_float + input_amount_float)
-    }
-}
-
-pub fn get_gas_cost_for_dex(dex: DexType) -> u64 {
-    match dex {
-        DexType::Raydium | DexType::Orca => 500_000, // Increased, typical swaps can be complex
-        DexType::Whirlpool | DexType::Lifinity | DexType::Phoenix => 700_000, // CLMMs/Orderbooks can be more
-        DexType::Meteora => 600_000,
-        DexType::Unknown(_) => 500_000, // Default
-    }
-}
-
-// Simplified FeeHistoryTracker
-// This struct is now used by record_fee_observation, get_last_fee_for_pool, and estimate_pool_swap_integrated.
-pub struct FeeHistoryTracker {
-    // Store last known fee for each pool address
-    // In a real system, this would be more sophisticated (e.g., moving average, multiple samples)
-    // and likely persisted (e.g., Redis or DB).
-    last_fees: dashmap::DashMap<Pubkey, (u64, u64, u64)>, // num, den, timestamp
-}
-impl FeeHistoryTracker {
-    // This method is now used by record_fee_observation.
-    pub fn record_fee(&self, pool_address: Pubkey, fee_numerator: u64, fee_denominator: u64) {
-        let timestamp = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
-        self.last_fees
-            .insert(pool_address, (fee_numerator, fee_denominator, timestamp));
-    }
-    // This method is now used by get_last_fee_for_pool.
-    pub fn get_last_fee_by_pubkey(&self, pool_address: &Pubkey) -> Option<(u64, u64)> {
-        self.last_fees
-            .get(pool_address)
-            .map(|entry| (entry.value().0, entry.value().1))
-    }
-    // This method is now used by estimate_pool_swap_integrated (via get_last_fee).
-    pub fn get_last_fee(&self, pool: &PoolInfo) -> Option<(u64, u64)> {
-        self.get_last_fee_by_pubkey(&pool.address)
-    }
-}
-impl Default for FeeHistoryTracker {
-    fn default() -> Self {
-        FeeHistoryTracker {
-            last_fees: dashmap::DashMap::new(),
-        }
-    }
-}
-
-// This static is now used by estimate_pool_swap_integrated.
-pub static DEFAULT_SLIPPAGE_MODEL: Lazy<Arc<XYKSlippageModel>> =
-    Lazy::new(|| Arc::new(XYKSlippageModel));
-pub static FEE_HISTORY_TRACKER: Lazy<Arc<FeeHistoryTracker>> = Lazy::new(|| {
-    Arc::new(FeeHistoryTracker {
-        last_fees: dashmap::DashMap::new(),
-    })
-});
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -360,24 +289,6 @@ mod tests {
     }
 
     #[test]
-    fn test_estimate_pool_swap_integrated() {
-        let pool = create_test_pool();
-        let in_amt = TokenAmount::new(1 * 10u64.pow(9), 9); // 1 SOL
-
-        FEE_HISTORY_TRACKER.record_fee(pool.address, 25, 10000); // Prime history
-
-        let breakdown = FeeManager::estimate_pool_swap_integrated(&pool, &in_amt, true); // SOL -> USDC
-
-        assert!(breakdown.expected_fee_usd > 0.0); // Fee for 1 SOL at 0.25%
-        assert_eq!(breakdown.expected_fee_usd, 1.0 * (25.0 / 10000.0)); // 1 SOL * 0.0025
-        assert!(breakdown.expected_slippage >= 0.0);
-        assert!(!breakdown.sudden_fee_increase); // Fee matches history
-        assert!(!breakdown.explanation.contains("[POOL STALE!]"));
-        assert!(breakdown.explanation.contains(&pool.name));
-        log::debug!("Test Breakdown: {}", breakdown.explanation);
-    }
-
-    #[test]
     fn test_is_fee_abnormal() {
         assert!(!FeeManager::is_fee_abnormal(25, 10000, 25, 10000, 1.5)); // Same
         assert!(!FeeManager::is_fee_abnormal(30, 10000, 25, 10000, 1.5)); // Slightly higher, within threshold
@@ -392,31 +303,37 @@ mod tests {
         let pool = create_test_pool();
         let in_amt = TokenAmount::new(1 * 10u64.pow(9), 9); // 1 SOL
 
-        // Old fee was 0.25%
-        FEE_HISTORY_TRACKER.record_fee(pool.address, 25, 10000);
-
         // Current pool fee is 0.50% (doubled)
         let mut pool_spiked_fee = pool.clone();
         pool_spiked_fee.fee_numerator = 50;
 
-        let breakdown = FeeManager::estimate_pool_swap_integrated(&pool_spiked_fee, &in_amt, true);
+        let breakdown = FeeManager::estimate_pool_swap_with_model(
+            &pool_spiked_fee,
+            &in_amt,
+            true,
+            Some(pool_spiked_fee.fee_numerator),
+            Some(pool_spiked_fee.fee_denominator),
+            Some(pool_spiked_fee.last_update_timestamp),
+            &XYKSlippageModel::default(),
+        );
         assert!(breakdown.sudden_fee_increase);
         assert!(breakdown.explanation.contains("[FEE SPIKE DETECTED!]"));
-        log::debug!("Spike Test Breakdown: {}", breakdown.explanation);
 
         // Current pool fee is 0.30% (small increase)
         let mut pool_normal_fee_increase = pool.clone();
         pool_normal_fee_increase.fee_numerator = 30;
-        let breakdown_normal =
-            FeeManager::estimate_pool_swap_integrated(&pool_normal_fee_increase, &in_amt, true);
+        let breakdown_normal = FeeManager::estimate_pool_swap_with_model(
+            &pool_normal_fee_increase,
+            &in_amt,
+            true,
+            Some(pool_normal_fee_increase.fee_numerator),
+            Some(pool_normal_fee_increase.fee_denominator),
+            Some(pool_normal_fee_increase.last_update_timestamp),
+            &XYKSlippageModel::default(),
+        );
         assert!(!breakdown_normal.sudden_fee_increase);
         assert!(!breakdown_normal
             .explanation
             .contains("[FEE SPIKE DETECTED!]"));
-    }
-}
-impl Default for XYKSlippageModel {
-    fn default() -> Self {
-        XYKSlippageModel
     }
 }

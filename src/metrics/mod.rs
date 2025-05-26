@@ -21,13 +21,13 @@ pub struct OpportunityDetail {
 
 #[derive(Debug)]
 pub struct ExecutionRecord {
-    #[allow(dead_code)] opportunity_id: String,
-    #[allow(dead_code)] success: bool,
-    #[allow(dead_code)] execution_time_ms: u64,
-    #[allow(dead_code)] actual_profit_usd: Option<f64>,
-    #[allow(dead_code)] transaction_signature: Option<String>,
-    #[allow(dead_code)] error_message: Option<String>,
-    #[allow(dead_code)] timestamp: Instant,
+    opportunity_id: String,
+    success: bool,
+    execution_time_ms: u64,
+    actual_profit_usd: Option<f64>,
+    transaction_signature: Option<String>,
+    error_message: Option<String>,
+    timestamp: Instant,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -53,8 +53,8 @@ pub struct Metrics {
     pub total_tx_cost_sol: f64,
     pub active_pools_gauge: usize,
     pub current_balance_sol: f64,
-    #[allow(dead_code)] sol_price_usd: f64, // Mark unused if only for initialization
-    #[allow(dead_code)] log_path: Option<String>,
+    sol_price_usd: f64, // Mark unused if only for initialization
+    log_path: Option<String>,
     launch_time_utc: Option<chrono::DateTime<chrono::Utc>>,
     main_cycles_executed: u64,
     last_opportunity_timestamp: Option<chrono::DateTime<chrono::Utc>>,

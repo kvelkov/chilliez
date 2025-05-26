@@ -25,11 +25,6 @@ lazy_static::lazy_static! {
     // Placeholder
 }
 
-#[allow(dead_code)]
-fn default_retry_policy() -> RetryPolicy {
-    RetryPolicy::new(3, 500, 10_000, 0.3)
-}
-
 pub struct ArbitrageExecutor {
     wallet: Arc<Keypair>,
     rpc_client: Arc<NonBlockingRpcClient>,

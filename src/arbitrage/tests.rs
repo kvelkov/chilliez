@@ -16,7 +16,8 @@ mod tests {
     use crate::solana::rpc::SolanaRpcClient; 
     use std::time::Duration; 
     use std::str::FromStr;
-    use std::fs; // Added for file operations
+    use std::fs; 
+    use log::info; // Added: Ensure info macro is in scope
 
     // Add env_logger for test output
     use env_logger;
@@ -73,7 +74,14 @@ mod tests {
         Arc::new(RwLock::new(pools))
     }
     
-    struct MockDexClient;
+    struct MockDexClient { }
+
+    impl MockDexClient {
+        pub fn new(_name: &str) -> Self { // Remove name field, keep API for compatibility
+            Self {}
+        }
+    }
+
     #[async_trait::async_trait]
     impl DexClient for MockDexClient {
         async fn get_best_swap_quote(&self, _input_token: &str, _output_token: &str, _amount: u64) -> anyhow::Result<Quote> {
@@ -98,7 +106,7 @@ mod tests {
         let pools_map_arc = create_dummy_pools_map();
         let config_arc = dummy_config_for_multihop_test(); // Use the new test-specific config
         let metrics_arc = dummy_metrics();
-        let dummy_dex_clients: Vec<Arc<dyn DexClient>> = vec![Arc::new(MockDexClient)];
+        let dummy_dex_clients: Vec<Arc<dyn DexClient>> = vec![Arc::new(MockDexClient::new("Mock"))]; // Corrected instantiation
 
         // Engine creates its own detector based on config
         let engine = ArbitrageEngine::new(
@@ -157,12 +165,13 @@ mod tests {
     }
 
 
+    // Added back test_resolve_pools_for_opportunity_missing_pool
     #[tokio::test]
     async fn test_resolve_pools_for_opportunity_missing_pool() {
         let pools_map = create_dummy_pools_map();
         let config = dummy_config();
         let metrics_arc = dummy_metrics();
-        let dummy_dex_clients: Vec<Arc<dyn DexClient>> = vec![Arc::new(MockDexClient)];
+        let dummy_dex_clients: Vec<Arc<dyn DexClient>> = vec![Arc::new(MockDexClient::new("Mock"))]; // Corrected instantiation
 
         let engine = ArbitrageEngine::new(
             pools_map.clone(), None, None, None, config, metrics_arc, dummy_dex_clients
@@ -179,17 +188,14 @@ mod tests {
             ],
             pool_path: vec![existing_pool_arc.address, missing_pool_address], 
             source_pool: existing_pool_arc.clone(), 
-            // Target pool can be a clone of existing or a default if it's part of the missing path.
-            // If the missing pool is the target, this needs careful thought.
-            // For this test, assuming target_pool isn't strictly required for _resolve_pools_for_opportunity if path is used.
-            target_pool: Arc::new(PoolInfo::default()), // Using a default for placeholder
-            input_token_mint: Pubkey::new_unique(), // Placeholder
-            output_token_mint: Pubkey::new_unique(), // Placeholder
-            intermediate_token_mint: Some(Pubkey::new_unique()), // Placeholder
-            ..MultiHopArbOpportunity::default() // Fill with other default values
+            target_pool: Arc::new(PoolInfo::default()), 
+            input_token_mint: Pubkey::new_unique(), 
+            output_token_mint: Pubkey::new_unique(), 
+            intermediate_token_mint: Some(Pubkey::new_unique()), 
+            ..MultiHopArbOpportunity::default()
         };
 
-        let resolved_result = engine.resolve_pools_for_opportunity(&opportunity_with_missing_pool).await;
+        let resolved_result = engine.resolve_pools_for_opportunity(&opportunity_with_missing_pool).await; // Call re-added method
         assert!(resolved_result.is_err(), "resolve_pools_for_opportunity should return Err if any pool in pool_path is missing");
         
         if let Err(ArbError::PoolNotFound(addr_str)) = resolved_result {
@@ -208,7 +214,7 @@ mod tests {
         let config = Arc::new(config_mut);
 
         let metrics_arc = dummy_metrics();
-        let dummy_dex_clients: Vec<Arc<dyn DexClient>> = vec![Arc::new(MockDexClient)];
+        let dummy_dex_clients: Vec<Arc<dyn DexClient>> = vec![Arc::new(MockDexClient::new("Mock"))]; // Corrected instantiation
         let dummy_sol_rpc_client = Some(Arc::new(SolanaRpcClient::new("http://dummy.rpc", vec![], 3, Duration::from_secs(1))));
 
 
@@ -240,28 +246,57 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_engine_initialization_with_dex_clients() {
+        let config = Arc::new(Config::test_default());
+        let pools = Arc::new(RwLock::new(HashMap::new()));
+        let metrics = Arc::new(Mutex::new(Metrics::default()));
+
+        // Create mock DEX clients
+        let mock_dex_client1 = Arc::new(MockDexClient::new("Raydium"));
+        let mock_dex_client2 = Arc::new(MockDexClient::new("Orca"));
+        let dex_clients: Vec<Arc<dyn DexClient>> = vec![mock_dex_client1, mock_dex_client2];
+
+        let engine = ArbitrageEngine::new(
+            pools,
+            None,
+            None,
+            None,
+            config,
+            metrics,
+            dex_clients, 
+        );
+
+        assert_eq!(engine._dex_providers.len(), 2, "Engine should have 2 DEX providers"); // Changed to _dex_providers
+        assert_eq!(engine._dex_providers[0].get_name(), "Raydium"); 
+        assert_eq!(engine._dex_providers[1].get_name(), "Orca");   
+        info!("Engine initialized with {} DEX providers.", engine._dex_providers.len()); // Changed to _dex_providers
+    }
+
+    #[tokio::test]
     async fn test_engine_all_fields_and_methods_referenced() {
         let pools_map = create_dummy_pools_map();
         let config = dummy_config();
         let metrics_arc = dummy_metrics();
-        let dummy_dex_clients: Vec<Arc<dyn DexClient>> = vec![Arc::new(MockDexClient)];
+        let dummy_dex_clients: Vec<Arc<dyn DexClient>> = vec![Arc::new(MockDexClient::new("Mock"))]; // Corrected instantiation
         let engine = ArbitrageEngine::new(
             pools_map.clone(), None, None, None, config, metrics_arc, dummy_dex_clients
         );
         // Reference degradation_mode
         let _ = engine.degradation_mode.load(std::sync::atomic::Ordering::Relaxed);
         // Reference dex_providers
-        assert!(!engine.dex_providers.is_empty() || engine.dex_providers.len() == 0);
+        assert!(!engine._dex_providers.is_empty() || engine._dex_providers.len() == 0); // Changed to _dex_providers
         // Reference get_min_profit_threshold_pct
         let _ = engine.get_min_profit_threshold_pct().await;
-        // Reference discover_multihop_opportunities
+        // Reference discover_multihop_opportunities (re-added)
         let _ = engine.discover_multihop_opportunities().await;
-        // Reference with_pool_guard_async (call with dummy closure)
+        // Reference with_pool_guard_async (re-added)
         let _ = engine.with_pool_guard_async("test", false, |_pools| async { Ok::<_, ArbError>(()) }).await;
-        // Reference update_pools
+        // Reference update_pools (re-added)
         let _ = engine.update_pools(HashMap::new()).await;
         // Reference get_current_status_string
         let _ = engine.get_current_status_string().await;
+        // Reference start_services (implicitly tests dynamic_threshold_updater setup if Some)
+        let _ = engine.start_services().await;
     }
 
     #[test]
@@ -287,25 +322,20 @@ mod tests {
 
     #[test]
     fn test_exercise_all_fee_manager_functions() {
-        use crate::arbitrage::fee_manager::{FeeManager, XYKSlippageModel, FeeHistoryTracker, DEFAULT_SLIPPAGE_MODEL, FEE_HISTORY_TRACKER};
+        use crate::arbitrage::fee_manager::{FeeManager, XYKSlippageModel};
         use crate::utils::PoolInfo;
-        use solana_sdk::pubkey::Pubkey;
         let pool = PoolInfo::default();
-        // Exercise estimate_pool_swap_integrated
+        // Exercise estimate_pool_swap_with_model (replaces estimate_pool_swap_integrated)
         let input_amt = crate::utils::TokenAmount::new(100_000_000, 6); // 100 USDC, 6 decimals
-        let _ = FeeManager::estimate_pool_swap_integrated(&pool, &input_amt, true);
-        // Exercise record_fee_observation
-        FeeManager::record_fee_observation(&pool, 30, 10000);
-        // Exercise get_last_fee_for_pool
-        let _ = FeeManager::get_last_fee_for_pool(&pool);
-        // Exercise FeeHistoryTracker methods
-        let tracker = FeeHistoryTracker::default();
-        tracker.record_fee(Pubkey::new_unique(), 30, 10000);
-        let _ = tracker.get_last_fee_by_pubkey(&Pubkey::new_unique());
-        let _ = tracker.get_last_fee(&pool);
-        // Reference statics
-        let _ = &*DEFAULT_SLIPPAGE_MODEL;
-        let _ = &*FEE_HISTORY_TRACKER;
+        let _ = FeeManager::estimate_pool_swap_with_model(
+            &pool,
+            &input_amt,
+            true,
+            Some(pool.fee_numerator),
+            Some(pool.fee_denominator),
+            Some(pool.last_update_timestamp),
+            &XYKSlippageModel::default(),
+        );
         // Exercise XYKSlippageModel
         let _ = XYKSlippageModel::default();
     }

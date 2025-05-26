@@ -1,7 +1,7 @@
 // src/dex/http_utils_shared.rs
 //! Centralized HTTP and logging utilities for DEX API access.
 
-use reqwest::header::{HeaderMap, HeaderValue, CONTENT_TYPE};
+use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE};
 use std::env;
 // Ensure tracing or log is imported if used. The original file uses `tracing::error, info;`
 // If you've standardized on `log` crate, it should be `log::{error, info};`
@@ -15,7 +15,7 @@ pub fn headers_with_api_key(api_key_env_name: &str) -> HeaderMap {
     match env::var(api_key_env_name) {
         Ok(key_string) => match HeaderValue::from_str(&key_string) {
             Ok(header_val) => {
-                headers.insert("api-key", header_val);
+                headers.insert(AUTHORIZATION, header_val);
             }
             Err(e) => {
                 let partial_key_display = if key_string.len() > 5 {
@@ -53,3 +53,20 @@ pub async fn log_timed_request<T>(label: &str, f: impl std::future::Future<Outpu
     info!("Completed: {} in {} ms", label, duration);
     result
 }
+
+// Example integration in a DEX client HTTP request:
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn test_headers_with_api_key() {
+        let api_key = "testkey";
+        let headers = headers_with_api_key(api_key);
+        assert_eq!(headers.get(AUTHORIZATION).unwrap(), "testkey");
+    }
+}
+
+// Usage in DEX client (pseudo-code):
+// let client = reqwest::Client::new();
+// let headers = headers_with_api_key(&self.api_key);
+// let resp = client.get(url).headers(headers).send().await?;

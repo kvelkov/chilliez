@@ -105,7 +105,6 @@ impl Cache {
         }
     }
 
-    #[allow(dead_code)]
     pub async fn delete(&self, key_prefix: &str, key_params: &[&str]) -> Result<bool, ArbError> {
         let key = Cache::generate_key(key_prefix, key_params);
         debug!("Attempting to DEL cache for key: {}", key);

@@ -51,7 +51,6 @@ impl Quote {
     }
 }
 
-#[allow(dead_code)] // This allowance was already here
 impl dyn DexClient {
     // Trait methods are defined above.
 }

@@ -17,7 +17,7 @@ use crate::{
         executor::ArbitrageExecutor,
     },
     cache::Cache,
-    config::load_config,
+    config::init_and_get_config,
     dex::get_all_clients_arc,
     error::ArbError,
     metrics::Metrics,
@@ -43,7 +43,8 @@ async fn main() -> Result<(), ArbError> {
     setup_logging().expect("Failed to initialize logging");
     info!("Solana Arbitrage Bot starting...");
 
-    let app_config = load_config()?;
+    // Use the unified config loader:
+    let app_config = init_and_get_config();
     info!("Application configuration loaded and validated successfully.");
 
     let program_config = ProgramConfig::new("ChillarezBot".to_string(), env!("CARGO_PKG_VERSION").to_string());
@@ -109,7 +110,7 @@ async fn main() -> Result<(), ArbError> {
     ).with_solana_rpc(ha_solana_rpc_client.clone()));
     info!("ArbitrageExecutor initialized.");
 
-    let ws_manager_instance = if !app_config.ws_url.is_empty() {
+    let ws_manager = if !app_config.ws_url.is_empty() {
         let (manager, _raw_update_receiver) = SolanaWebsocketManager::new(
             app_config.ws_url.clone(),
             app_config.rpc_url_backup
@@ -121,14 +122,11 @@ async fn main() -> Result<(), ArbError> {
         Some(Arc::new(Mutex::new(manager)))
     } else { warn!("WebSocket URL not configured, WebSocket manager not started."); None };
 
-    // price_provider can be initialized here if a concrete implementation is chosen
-    let price_provider_instance: Option<Arc<dyn CryptoDataProvider + Send + Sync>> = None; // Placeholder
-    // Example: if you had a CoinGeckoProvider:
-    // let price_provider_instance = Some(Arc::new(CoinGeckoProvider::new()));
+    let price_provider_instance: Option<Arc<dyn CryptoDataProvider + Send + Sync>> = None;
 
     let arbitrage_engine: Arc<ArbitrageEngine> = Arc::new(ArbitrageEngine::new(
         pools_map.clone(),
-        ws_manager_instance.clone(),
+        ws_manager.clone(),
         price_provider_instance,
         Some(ha_solana_rpc_client.clone()),
         app_config.clone(),
@@ -137,7 +135,8 @@ async fn main() -> Result<(), ArbError> {
     ));
     info!("ArbitrageEngine initialized.");
     
-    if ws_manager_instance.is_some() {
+
+    if let Some(ws_manager) = &ws_manager {
         arbitrage_engine.start_services().await; 
     }
 
@@ -187,9 +186,8 @@ async fn main() -> Result<(), ArbError> {
 
                 calculator::clear_caches_if_needed();
 
-                // Use the primary detection method from the engine
                 match arbitrage_engine.detect_arbitrage().await {
-                    Ok(mut all_opportunities) => { // Made mutable for sorting
+                    Ok(mut all_opportunities) => {
                         if !all_opportunities.is_empty() {
                             info!("Detected {} total opportunities in this cycle.", all_opportunities.len());
                             all_opportunities.sort_by(|a, b| b.profit_pct.partial_cmp(&a.profit_pct).unwrap_or(std::cmp::Ordering::Equal));
@@ -207,7 +205,6 @@ async fn main() -> Result<(), ArbError> {
                                         }
                                     }
                                 } else {
-                                    // Real trading logic would go here
                                     info!("Real Trading Mode: Attempting to execute opportunity {}", best_opp.id);
                                      match tx_executor.execute_opportunity(best_opp).await {
                                         Ok(signature) => {

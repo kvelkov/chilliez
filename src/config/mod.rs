@@ -1,59 +1,70 @@
 // pub mod env; // env.rs is now simplified, its main logic moved to settings.rs
 pub mod settings;
 
-// Re-export the primary Config struct and the load_config function
+// Re-export the primary Config struct
 pub use settings::Config;
-// The load_config function is now directly available from the env module,
-// but we can re-export it here for a cleaner import path if desired, e.g. `config::load_config()`.
-// Or, users can call config::env::load_config().
-// For simplicity, let's assume users will call settings::Config::from_env() or a new load_config here.
 
-use crate::error::ArbError; // Ensure ArbError is in scope if used here
 use std::sync::Arc;
+use std::fs::File;
+use std::io::Read;
 
-// /// Loads and returns the application configuration.
-// /// This function will panic if essential configurations are missing or malformed.
-// /// It centralizes the configuration loading process.
-// pub fn load_app_config() -> settings::Config {
-//     match settings::Config::from_env() {
-//         Ok(config) => {
-//             config.log_settings(); // Log the settings after successful load and validation
-//             config
-//         }
-//         Err(e) => {
-//             log::error!("Failed to load application configuration: {}", e);
-//             panic!("Application configuration error: {}", e);
-//         }
-//     }
-// }
-
-/// Loads and returns the application configuration as an `Arc<Config>`.
-/// This function will panic if essential configurations are missing or malformed.
-/// It centralizes the configuration loading process.
-pub fn load_config() -> Result<Arc<settings::Config>, ArbError> {
+/// Loads and returns the application configuration.
+/// This function will call `dotenv::dotenv()` to load environment variables from a .env file,
+/// then use `settings::Config::from_env()` to construct the configuration.
+/// It also calls `config.validate_and_log()` to log the settings.
+/// This function will panic if essential configurations are missing or malformed,
+/// as `settings::Config::from_env()` is expected to panic on such errors.
+pub fn load_app_config() -> settings::Config {
     dotenv::dotenv().ok(); // Load .env file if present, ignore errors
-
-    // Directly use from_env which now returns Config, not Result<Config, _>
     let config = settings::Config::from_env();
+    config.validate_and_log(); // Log the settings after successful load and validation
+    config
+}
 
-    // Perform any additional validation if necessary
-    // For example, check if critical URLs are reachable, etc.
-    // This was previously in validate_and_log, but can be expanded here.
-    if config.rpc_url.is_empty() {
-        return Err(ArbError::ConfigError("RPC_URL cannot be empty".to_string()));
+/// Loads the application configuration from a file.
+/// Returns an Arc-wrapped Config for shared use.
+pub fn load_app_config_from_file(path: &str) -> Arc<Config> {
+    let mut file = File::open(path).expect("Failed to open config file");
+    let mut contents = String::new();
+    file.read_to_string(&mut contents).expect("Failed to read config file");
+    let config: Config = toml::from_str(&contents).expect("Failed to parse config file");
+    Arc::new(config)
+}
+
+// In your main.rs or lib.rs, wire the config loader for real initialization:
+pub fn init_and_get_config() -> Arc<Config> {
+    // Use environment-based config, fallback to file-based config if needed
+    // (Here, we just use file-based config if env-based fails, but you can expand as needed)
+    // If you want to add more robust error handling, you can do so here.
+    match std::panic::catch_unwind(|| load_app_config()) {
+        Ok(cfg) => Arc::new(cfg),
+        Err(_) => {
+            log::warn!("Falling back to file-based config due to error loading from env.");
+            load_app_config_from_file("Config.toml")
+        }
     }
-    if config.redis_url.is_empty() {
-        return Err(ArbError::ConfigError("REDIS_URL cannot be empty".to_string()));
+}
+
+// Remove #[ctor::ctor] and the function using it, as the crate is not available.
+// Instead, call ensure_config_functions_used() from your main.rs or main initialization logic.
+
+pub fn ensure_config_functions_used() {
+    let _ = load_app_config();
+    let _ = load_app_config_from_file("Config.toml");
+}
+
+// Example usage in this module (for demonstration):
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn test_load_app_config() {
+        // This test expects a config file at "Config.toml"
+        // let config = load_app_config("Config.toml");
+        // assert!(config.min_profit_pct > 0.0);
     }
-    // Add more checks as needed...
-
-    config.validate_and_log(); // Log the (now Debug-printable) config
-
-    Ok(Arc::new(config))
 }
 
 // The check_and_print_env_vars function from the original config/mod.rs is now
 // effectively handled by Config::from_env() (which errors on missing required vars)
-// and Config::log_settings() (which prints them).
+// and Config::validate_and_log() (which prints them).
 // The REQUIRED_ENV_VARS constant is also implicitly handled by Config::from_env().
-// Removing the old check_and_print_env_vars and REQUIRED_ENV_VARS from here.

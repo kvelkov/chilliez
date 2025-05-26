@@ -115,7 +115,6 @@ pub fn parse_account_data(account_type: &str, data: &[u8]) -> Result<serde_json:
 }
 
 /// Parse a token account. Will be expanded with proper SPL token account parsing.
-#[allow(dead_code)]
 fn parse_token_account(data: &[u8]) -> Result<serde_json::Value> {
     // In a real implementation, this would use the correct token account structure
     // For now, just return a placeholder
@@ -126,7 +125,6 @@ fn parse_token_account(data: &[u8]) -> Result<serde_json::Value> {
 }
 
 /// Parse a mint account. Will be expanded with proper SPL mint account parsing.
-#[allow(dead_code)]
 fn parse_mint_account(data: &[u8]) -> Result<serde_json::Value> {
     // In a real implementation, this would use the correct mint account structure
     // For now, just return a placeholder

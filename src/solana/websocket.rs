@@ -22,15 +22,12 @@ pub enum RawAccountUpdate {
     Account {
         pubkey: Pubkey,
         data: Vec<u8>,
-        #[allow(dead_code)]
         timestamp: u64,
     },
     Disconnected {
         pubkey: Pubkey,
-        #[allow(dead_code)]
         timestamp: u64,
     },
-    #[allow(dead_code)]
     Error {
         pubkey: Pubkey,
         message: String,
@@ -62,11 +59,9 @@ pub enum WebsocketUpdate {
 
 pub struct SolanaWebsocketManager {
     ws_url: String,
-    #[allow(dead_code)]
     fallback_urls: Vec<String>, // TODO: Enable fallback WS logic for resilience
     subscriptions: Arc<RwLock<HashMap<Pubkey, SubscriptionId>>>,
     update_sender: AccountUpdateSender,
-    #[allow(dead_code)]
     shutdown_sender: mpsc::Sender<()>, // TODO: Expose graceful shutdown in integration/tests
     heartbeat_handle: Arc<RwLock<Option<tokio::task::JoinHandle<()>>>>,
     pubsub_client: Arc<RwLock<Option<Arc<PubsubClient>>>>,
@@ -236,7 +231,6 @@ impl SolanaWebsocketManager {
     }
 
     /// Stop background tasks
-    #[allow(dead_code)]
     pub async fn stop(&self) {
         // TODO: Wire stop logic as needed in workflow
         if let Some(handle) = self.heartbeat_handle.write().await.take() {
@@ -359,7 +353,6 @@ impl SolanaWebsocketManager {
     }
 
     /// Unsubscribe locally (remote unsub not supported)
-    #[allow(dead_code)]
     pub async fn unsubscribe(&self, pubkey: &Pubkey) -> Result<(), PubsubClientError> {
         // TODO: Expose in live workflow
         let mut subscriptions = self.subscriptions.write().await;

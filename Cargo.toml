@@ -22,6 +22,7 @@ spl-token-2022 = "1.0.0" # Keep if Token2022 support is planned/used, else remov
 tokio = { version = "1.36.0", features = ["full"] } # "full" is convenient but pulls in a lot. Could be slimmed if specific features are known.
 futures = "0.3.30"
 async-trait = "0.1.74"
+toml = "0.8"
 
 # Data & config - Core: Keep serde, serde_json, dotenv.
 serde = { version = "1.0.197", features = ["derive"] }

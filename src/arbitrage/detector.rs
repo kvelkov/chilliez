@@ -2,78 +2,130 @@
 use crate::{
     arbitrage::{
         calculator::{
-            calculate_max_profit, calculate_optimal_input, // Removed unused calculate_transaction_cost, estimate_price_impact, is_profitable_calc
-            OpportunityCalculationResult,
+            calculate_max_profit_result, calculate_optimal_input, calculate_transaction_cost,
+            is_profitable as is_profitable_calc, // Renamed to avoid conflict
+            OpportunityCalculationResult, calculate_multihop_profit_and_slippage,
         },
-        fee_manager::{FeeManager, XYKSlippageModel}, // Removed unused FeeEstimationResult
+        // Removed unused: fee_manager::{FeeManager, XYKSlippageModel, FeeEstimationResult},
         opportunity::{ArbHop, MultiHopArbOpportunity},
     },
     error::ArbError,
     metrics::Metrics,
-    utils::{
-        calculate_multihop_profit_and_slippage, calculate_output_amount, PoolInfo, TokenAmount, DexType, // Added DexType
-        // Removed unused calculate_rebate
-    },
+    utils::{PoolInfo, TokenAmount, DexType, calculate_output_amount}, // Added calculate_output_amount, DexType
 };
 use log::{debug, error, info, warn};
 use solana_sdk::pubkey::Pubkey;
 use std::{
-    collections::HashMap, // Removed HashSet as it's unused
+    collections::HashMap,
     fs::OpenOptions,
     io::Write,
     sync::Arc,
 };
-// Removed: use tokio::io::AsyncWriteExt; // Not used directly here
+
 
 #[derive(Clone)]
 pub struct ArbitrageDetector {
-    min_profit_threshold: f64,
+    min_profit_threshold_pct: f64,    // Store as percentage, e.g., 0.5 for 0.5%
+    min_profit_threshold_usd: f64,   // Absolute USD profit threshold
+    sol_price_usd: f64,              // For cost calculation
+    default_priority_fee_lamports: u64, // For cost calculation
 }
 
-#[allow(dead_code)]
 impl ArbitrageDetector {
-    pub fn new(min_profit_threshold_pct: f64) -> Self {
+    pub fn new(
+        min_profit_threshold_pct: f64,
+        min_profit_threshold_usd: f64,
+        sol_price_usd: f64,
+        default_priority_fee_lamports: u64,
+    ) -> Self {
+        info!(
+            "ArbitrageDetector initialized with: Min Profit Pct = {:.4}%, Min Profit USD = ${:.2}, SOL Price = ${:.2}, Default Priority Fee = {} lamports",
+            min_profit_threshold_pct, min_profit_threshold_usd, sol_price_usd, default_priority_fee_lamports
+        );
         Self {
-            min_profit_threshold: min_profit_threshold_pct,
+            min_profit_threshold_pct,
+            min_profit_threshold_usd,
+            sol_price_usd,
+            default_priority_fee_lamports,
         }
     }
 
     pub fn set_min_profit_threshold(&mut self, new_threshold_pct: f64) {
-        self.min_profit_threshold = new_threshold_pct;
+        self.min_profit_threshold_pct = new_threshold_pct;
         info!(
-            "ArbitrageDetector min_profit_threshold updated to: {:.4}%",
+            "ArbitrageDetector min_profit_threshold_pct updated to: {:.4}%",
             new_threshold_pct
         );
     }
 
-    pub fn get_min_profit_threshold(&self) -> f64 {
-        self.min_profit_threshold
+    pub fn get_min_profit_threshold_pct(&self) -> f64 {
+        self.min_profit_threshold_pct
+    }
+    
+    // Helper to check profitability considering costs
+    fn is_opportunity_profitable_after_costs(
+        &self,
+        opp_calc_result: &OpportunityCalculationResult,
+        input_token_price_usd: f64, // Price of the specific input token for the opportunity
+        num_hops: usize,
+    ) -> bool {
+        let transaction_cost_usd = calculate_transaction_cost(
+            num_hops * 2, // Rough estimate of instructions per hop (e.g., budget + swap)
+            self.default_priority_fee_lamports,
+            self.sol_price_usd,
+        );
+
+        // Check against percentage threshold (on token profit)
+        let meets_pct_threshold = opp_calc_result.profit_percentage * 100.0 >= self.min_profit_threshold_pct;
+
+        // Check against absolute USD threshold (after costs)
+        let meets_usd_threshold = is_profitable_calc(
+            opp_calc_result,
+            input_token_price_usd,
+            transaction_cost_usd,
+            self.min_profit_threshold_usd,
+        );
+        
+        debug!("Profitability detail: Result: {:?}, InputTokenPriceUSD: {}, TxCostUSD: {}, MinProfitUSD: {}, MeetsPct: {}, MeetsUSD: {}",
+            opp_calc_result, input_token_price_usd, transaction_cost_usd, self.min_profit_threshold_usd, meets_pct_threshold, meets_usd_threshold);
+
+        meets_pct_threshold && meets_usd_threshold
     }
 
-    pub fn log_banned_pair(token_a: &str, token_b: &str, ban_type: &str, reason: &str) {
-        let log_entry = format!("{},{},{},{}\n", token_a, token_b, ban_type, reason);
+
+    pub fn log_banned_pair(token_a_symbol: &str, token_b_symbol: &str, ban_type: &str, reason: &str) {
+        let log_entry = format!("{},{},{},{}\n", token_a_symbol, token_b_symbol, ban_type, reason);
+        // Standardize on using the CSV file in the `src` directory if no other path is configured.
+        // For consistency, ensure this path matches where the test might expect it or where the bot runs.
+        // Assuming "banned_pairs_log.csv" is in the current working directory or src.
+        // For robustness, this should ideally use a path from Config.
+        let log_file_path = "banned_pairs_log.csv"; // TODO: Make this configurable
         match OpenOptions::new()
             .create(true)
             .append(true)
-            .open("banned_pairs_log.csv")
+            .open(log_file_path)
         {
             Ok(mut file) => {
                 if let Err(e) = file.write_all(log_entry.as_bytes()) {
-                    error!("Failed to write to ban log file: {}", e);
+                    error!("Failed to write to ban log file '{}': {}", log_file_path, e);
+                } else {
+                    info!("Logged banned pair to '{}': {} <-> {} ({}, Reason: {})", log_file_path, token_a_symbol, token_b_symbol, ban_type, reason);
                 }
             }
             Err(e) => {
-                error!("Cannot open ban log file: {}", e);
+                error!("Cannot open ban log file '{}': {}", log_file_path, e);
             }
         }
     }
 
-    pub fn is_permanently_banned(token_a: &str, token_b: &str) -> bool {
-        if let Ok(content) = std::fs::read_to_string("banned_pairs_log.csv") {
-            for line in content.lines() {
+    pub fn is_permanently_banned(token_a_symbol: &str, token_b_symbol: &str) -> bool {
+        let log_file_path = "banned_pairs_log.csv"; // TODO: Make this configurable
+        if let Ok(content) = std::fs::read_to_string(log_file_path) {
+            for line in content.lines().skip(1) { // Skip header
                 let parts: Vec<_> = line.split(',').collect();
-                if parts.len() >= 3 && parts[2] == "permanent" && 
-                   ((parts[0] == token_a && parts[1] == token_b) || (parts[0] == token_b && parts[1] == token_a)) {
+                if parts.len() >= 3 && parts[2].trim() == "permanent" && 
+                   ((parts[0].trim() == token_a_symbol && parts[1].trim() == token_b_symbol) || 
+                    (parts[0].trim() == token_b_symbol && parts[1].trim() == token_a_symbol)) {
                     return true;
                 }
             }
@@ -81,19 +133,21 @@ impl ArbitrageDetector {
         false
     }
 
-    pub fn is_temporarily_banned(token_a: &str, token_b: &str) -> bool {
-        if let Ok(content) = std::fs::read_to_string("banned_pairs_log.csv") {
+    pub fn is_temporarily_banned(token_a_symbol: &str, token_b_symbol: &str) -> bool {
+        let log_file_path = "banned_pairs_log.csv"; // TODO: Make this configurable
+        if let Ok(content) = std::fs::read_to_string(log_file_path) {
             let now = chrono::Utc::now().timestamp() as u64;
-            for line in content.lines() {
+            for line in content.lines().skip(1) { // Skip header
                 let parts: Vec<_> = line.split(',').collect();
-                if parts.len() >= 4 && parts[2] == "temporary" {
+                if parts.len() >= 4 && parts[2].trim() == "temporary" {
                     if let Some(expiry_str) = parts.get(3) {
-                        if let Ok(expiry) = expiry_str.parse::<u64>() {
-                            if ((parts[0] == token_a && parts[1] == token_b) || (parts[0] == token_b && parts[1] == token_a)) && expiry > now {
+                        if let Ok(expiry) = expiry_str.trim().parse::<u64>() {
+                            if ((parts[0].trim() == token_a_symbol && parts[1].trim() == token_b_symbol) || 
+                                (parts[0].trim() == token_b_symbol && parts[1].trim() == token_a_symbol)) && expiry > now {
                                 return true;
                             }
                         } else {
-                            warn!("Failed to parse expiry timestamp '{}' in ban log for pair {}/{}", expiry_str, token_a, token_b);
+                            warn!("Failed to parse expiry timestamp '{}' in ban log for pair {}/{}", expiry_str.trim(), token_a_symbol, token_b_symbol);
                         }
                     }
                 }
@@ -107,196 +161,194 @@ impl ArbitrageDetector {
         pools: &HashMap<Pubkey, Arc<PoolInfo>>,
         metrics: &mut Metrics,
     ) -> Result<Vec<MultiHopArbOpportunity>, ArbError> {
-        println!("find_all_opportunities called with {} pools", pools.len());
+        info!("find_all_opportunities (2-hop cyclic) called with {} pools. Min Profit Pct: {:.4}%, Min Profit USD: ${:.2}", pools.len(), self.min_profit_threshold_pct, self.min_profit_threshold_usd);
         let mut opportunities = Vec::new();
-        for (src_id, src_pool_arc) in pools {
+
+        for (_src_pool_addr, src_pool_arc) in pools.iter() {
             let src_pool = src_pool_arc.as_ref();
-            println!("  Outer loop: src_id {} pool {}", src_id, src_pool.name);
-            let tokens_in_src_pool = [
-                (&src_pool.token_a.mint, &src_pool.token_a.symbol, src_pool.token_a.decimals),
-                (&src_pool.token_b.mint, &src_pool.token_b.symbol, src_pool.token_b.decimals),
-            ];
 
-            for &(input_token_mint_for_cycle, input_token_symbol_for_cycle, input_decimals_for_cycle) in &tokens_in_src_pool {
-                let (intermediate_token_mint_val, intermediate_token_symbol_val, _intermediate_decimals_val) =
-                    if src_pool.token_a.mint == *input_token_mint_for_cycle {
-                        (src_pool.token_b.mint, src_pool.token_b.symbol.clone(), src_pool.token_b.decimals)
-                    } else {
-                        (src_pool.token_a.mint, src_pool.token_a.symbol.clone(), src_pool.token_a.decimals)
-                    };
+            // Try starting with token_a from src_pool
+            let input_mint_leg1 = src_pool.token_a.mint;
+            let input_symbol_leg1 = &src_pool.token_a.symbol;
+            let input_decimals_leg1 = src_pool.token_a.decimals;
+            let intermediate_mint_leg1 = src_pool.token_b.mint;
+            let intermediate_symbol_leg1 = &src_pool.token_b.symbol;
 
-                println!("    Checking input_token_mint_for_cycle {} vs intermediate_token_mint_val {}", input_token_mint_for_cycle, intermediate_token_mint_val);
-                if *input_token_mint_for_cycle == intermediate_token_mint_val { 
-                    println!("    Skipped: input_token_mint_for_cycle == intermediate_token_mint_val");
-                    continue; 
-                }
-                if Self::is_permanently_banned(input_token_symbol_for_cycle, &intermediate_token_symbol_val) || Self::is_temporarily_banned(input_token_symbol_for_cycle, &intermediate_token_symbol_val) {
-                    debug!("Skipping banned pair for first hop: {} <-> {}", input_token_symbol_for_cycle, intermediate_token_symbol_val);
-                    continue;
-                }
-
-                for (tgt_id, tgt_pool_arc) in pools {
-                    if src_id == tgt_id { continue; }
-                    let tgt_pool = tgt_pool_arc.as_ref();
-
-                    // Print all candidate pool pairs and their tokens and mints
-                    println!("Candidate pair: src_pool {} ({}:{}) [{} {}] <-> tgt_pool {} ({}:{}) [{} {}]", 
-                        src_pool.name, src_pool.token_a.symbol, src_pool.token_b.symbol, src_pool.token_a.mint, src_pool.token_b.mint,
-                        tgt_pool.name, tgt_pool.token_a.symbol, tgt_pool.token_b.symbol, tgt_pool.token_a.mint, tgt_pool.token_b.mint);
-                    println!("  input_token_mint_for_cycle: {} (symbol: {})", input_token_mint_for_cycle, input_token_symbol_for_cycle);
-                    println!("  intermediate_token_mint_val: {} (symbol: {})", intermediate_token_mint_val, intermediate_token_symbol_val);
-                    println!("  src_pool token_a: {} token_b: {}", src_pool.token_a.mint, src_pool.token_b.mint);
-                    println!("  tgt_pool token_a: {} token_b: {}", tgt_pool.token_a.mint, tgt_pool.token_b.mint);
-
-                    // Only require: pools are not the same, and both tokens are present in both pools
-                    let src_has = |mint| src_pool.token_a.mint == mint || src_pool.token_b.mint == mint;
-                    let tgt_has = |mint| tgt_pool.token_a.mint == mint || tgt_pool.token_b.mint == mint;
-                    println!("  Checking candidate for 2-hop cycle: src_pool {} ({}:{}) [{} {}] <-> tgt_pool {} ({}:{}) [{} {}]", 
-                        src_pool.name, src_pool.token_a.symbol, src_pool.token_b.symbol, src_pool.token_a.mint, src_pool.token_b.mint,
-                        tgt_pool.name, tgt_pool.token_a.symbol, tgt_pool.token_b.symbol, tgt_pool.token_a.mint, tgt_pool.token_b.mint);
-                    let is_2hop_cycle = src_has(*input_token_mint_for_cycle)
-                        && src_has(intermediate_token_mint_val)
-                        && tgt_has(*input_token_mint_for_cycle)
-                        && tgt_has(intermediate_token_mint_val)
-                        && src_id != tgt_id;
-                    let is_test_pools =
-                        (src_pool.name.starts_with("A/USDC-Orca") && tgt_pool.name.starts_with("USDC/A-Raydium")) ||
-                        (src_pool.name.starts_with("USDC/A-Raydium") && tgt_pool.name.starts_with("A/USDC-Orca"));
-                    println!("  [DEBUG] is_test_pools: {} | src_pool.name: '{}' | tgt_pool.name: '{}'", is_test_pools, src_pool.name, tgt_pool.name);
-                    if is_test_pools {
-                        println!("  [DEBUG] MATCHED TEST POOLS! About to construct opportunity.");
-                    }
-                    // Always print for every candidate
-                    println!("  [DEBUG] src_pool.name: {} | tgt_pool.name: {}", src_pool.name, tgt_pool.name);
-                    println!("  [DEBUG] src contains 'A/USDC-Orca': {}", src_pool.name.contains("A/USDC-Orca"));
-                    println!("  [DEBUG] tgt contains 'USDC/A-Raydium': {}", tgt_pool.name.contains("USDC/A-Raydium"));
-                    println!("  [DEBUG] src contains 'USDC/A-Raydium': {}", src_pool.name.contains("USDC/A-Raydium"));
-                    println!("  [DEBUG] tgt contains 'A/USDC-Orca': {}", tgt_pool.name.contains("A/USDC-Orca"));
-                    if !is_2hop_cycle && !is_test_pools {
-                        println!("    Skipped: Not a valid 2-hop cycle (directional) for src {} tgt {}", src_pool.name, tgt_pool.name);
-                        continue;
-                    }
-                    // --- FIX: allow both directions for the second pool ---
-                    let tgt_trades_intermediate_to_input = tgt_pool.token_a.mint == intermediate_token_mint_val && tgt_pool.token_b.mint == *input_token_mint_for_cycle;
-                    let tgt_trades_input_to_intermediate = tgt_pool.token_b.mint == intermediate_token_mint_val && tgt_pool.token_a.mint == *input_token_mint_for_cycle;
-                    println!("    tgt_pool.token_a.mint: {}", tgt_pool.token_a.mint);
-                    println!("    tgt_pool.token_b.mint: {}", tgt_pool.token_b.mint);
-                    println!("    intermediate_token_mint_val: {}", intermediate_token_mint_val);
-                    println!("    input_token_mint_for_cycle: {}", input_token_mint_for_cycle);
-                    println!("    tgt_trades_intermediate_to_input: {}", tgt_trades_intermediate_to_input);
-                    println!("    tgt_trades_input_to_intermediate: {}", tgt_trades_input_to_intermediate);
-                    if !(tgt_trades_intermediate_to_input || tgt_trades_input_to_intermediate) {
-                        println!("  Skipped: No valid direction for 2-hop cycle in tgt_pool");
-                        continue;
-                    }
-                    // Set swap direction for tgt_pool dynamically
-                    let tgt_swaps_intermediate_for_input = tgt_pool.token_a.mint == intermediate_token_mint_val && tgt_pool.token_b.mint == *input_token_mint_for_cycle;
-                    let final_output_token_symbol_val = if tgt_swaps_intermediate_for_input { &tgt_pool.token_b.symbol } else { &tgt_pool.token_a.symbol };
-                    // Set swap direction for src_pool dynamically
-                    let src_swaps_input_for_intermediate = src_pool.token_a.mint == *input_token_mint_for_cycle && src_pool.token_b.mint == intermediate_token_mint_val;
-                    let src_hop_output_token = if src_swaps_input_for_intermediate { &src_pool.token_b.symbol } else { &src_pool.token_a.symbol };
-                    let max_input_token_amount = TokenAmount::new(1_000_000, input_decimals_for_cycle);
-                    let optimal_in = calculate_optimal_input(src_pool, tgt_pool, src_swaps_input_for_intermediate, max_input_token_amount);
-                    let price_a = if src_swaps_input_for_intermediate {
-                        src_pool.token_b.reserve as f64 / src_pool.token_a.reserve as f64
-                    } else {
-                        src_pool.token_a.reserve as f64 / src_pool.token_b.reserve as f64
-                    };
-                    let price_b = if tgt_swaps_intermediate_for_input {
-                        tgt_pool.token_b.reserve as f64 / tgt_pool.token_a.reserve as f64
-                    } else {
-                        tgt_pool.token_a.reserve as f64 / tgt_pool.token_b.reserve as f64
-                    };
-                    println!("    price_a: {} price_b: {}", price_a, price_b);
-                    println!("    optimal_in: {:?}", optimal_in);
-                    if Self::is_permanently_banned(&intermediate_token_symbol_val, final_output_token_symbol_val) || Self::is_temporarily_banned(&intermediate_token_symbol_val, final_output_token_symbol_val) {
-                        debug!("Skipping banned pair for second hop: {} <-> {}", intermediate_token_symbol_val, final_output_token_symbol_val);
-                        continue;
-                    }
-                    let intermediate_amt_received = calculate_output_amount(src_pool, optimal_in.clone(), src_swaps_input_for_intermediate);
-                    let final_output_amt = calculate_output_amount(tgt_pool, intermediate_amt_received.clone(), tgt_swaps_intermediate_for_input);
-                    let profit_pct_calc_fractional = calculate_max_profit(src_pool, tgt_pool, src_swaps_input_for_intermediate, optimal_in.clone());
-                    let profit_abs_tokens = (final_output_amt.to_float() - optimal_in.to_float()).max(0.0);
-                    
-                    let input_token_price_usd = 1.0; 
-                    let profit_usd = profit_abs_tokens * input_token_price_usd;
-                    let input_amount_usd_val = optimal_in.to_float() * input_token_price_usd;
-                    let output_amount_usd_val = final_output_amt.to_float() * input_token_price_usd;
-
-                    println!("  Candidate profit_pct: {} (threshold: {})", profit_pct_calc_fractional * 100.0, self.min_profit_threshold);
-                    println!("    Debug: optimal_in = {:?}, intermediate_amt_received = {:?}, final_output_amt = {:?}, profit_abs_tokens = {:?}", optimal_in, intermediate_amt_received, final_output_amt, profit_abs_tokens);
-
-                    let is_test_pools =
-                        (src_pool.name.starts_with("A/USDC-Orca") && tgt_pool.name.starts_with("USDC/A-Raydium")) ||
-                        (src_pool.name.starts_with("USDC/A-Raydium") && tgt_pool.name.starts_with("A/USDC-Orca"));
-                    if profit_pct_calc_fractional * 100.0 > self.min_profit_threshold || is_test_pools {
-                        if is_test_pools {
-                            println!("  [DEBUG] Entering forced opportunity construction for test pools!");
-                        }
-                        let opp_id = format!("2hop-{}-{}-{}-{}", input_token_symbol_for_cycle, src_pool.address, tgt_pool.address, chrono::Utc::now().timestamp_millis());
-                        let current_opportunity = MultiHopArbOpportunity {
-                            id: opp_id.clone(),
-                            hops: vec![
-                                ArbHop {
-                                    dex: src_pool.dex_type.clone(), pool: src_pool.address, // Clone DexType
-                                    input_token: input_token_symbol_for_cycle.to_string(),
-                                    output_token: src_hop_output_token.to_string(),
-                                    input_amount: optimal_in.to_float(),
-                                    expected_output: intermediate_amt_received.to_float(),
-                                },
-                                ArbHop {
-                                    dex: tgt_pool.dex_type.clone(), pool: tgt_pool.address, // Clone DexType
-                                    input_token: intermediate_token_symbol_val.clone(),
-                                    output_token: final_output_token_symbol_val.to_string(),
-                                    input_amount: intermediate_amt_received.to_float(),
-                                    expected_output: final_output_amt.to_float(),
-                                },
-                            ],
-                            total_profit: profit_abs_tokens,
-                            profit_pct: profit_pct_calc_fractional * 100.0,
-                            input_token: input_token_symbol_for_cycle.to_string(),
-                            output_token: final_output_token_symbol_val.to_string(),
-                            input_amount: optimal_in.to_float(),
-                            expected_output: final_output_amt.to_float(),
-                            dex_path: vec![src_pool.dex_type.clone(), tgt_pool.dex_type.clone()], // Clone DexType
-                            pool_path: vec![src_pool.address, tgt_pool.address],
-                            risk_score: None, notes: Some("Direct 2-hop cyclic opportunity".to_string()),
-                            estimated_profit_usd: Some(profit_usd), input_amount_usd: Some(input_amount_usd_val),
-                            intermediate_tokens: vec![intermediate_token_symbol_val.clone()],
-                            output_amount_usd: Some(output_amount_usd_val),
-                            source_pool: Arc::clone(src_pool_arc), target_pool: Arc::clone(tgt_pool_arc),
-                            input_token_mint: *input_token_mint_for_cycle, output_token_mint: *input_token_mint_for_cycle,
-                            intermediate_token_mint: Some(intermediate_token_mint_val),
-                        };
-                        println!("  [DEBUG] Forcing opportunity construction for test pools: {}", is_test_pools);
-                        info!("Potential 2-hop Arb Opp: {} -> {} (Profit: {:.4}%)", current_opportunity.input_token, current_opportunity.output_token, current_opportunity.profit_pct);
-                        current_opportunity.log_summary();
-                        let dex_path_strings_log: Vec<String> = current_opportunity.dex_path.iter().map(|d| format!("{:?}", d)).collect();
-                        if let Err(e) = metrics.record_opportunity_detected(
-                            &current_opportunity.input_token,
-                            &current_opportunity.intermediate_tokens.get(0).cloned().unwrap_or_default(),
-                            current_opportunity.profit_pct, // Pass as percentage
-                            current_opportunity.estimated_profit_usd,
-                            current_opportunity.input_amount_usd,
-                            dex_path_strings_log,
-                        ) { error!("Failed to record 2-hop opportunity detection metric: {}", e); }
-                        opportunities.push(current_opportunity);
-                    }
-                }
+            if Self::is_permanently_banned(input_symbol_leg1, intermediate_symbol_leg1) || 
+               Self::is_temporarily_banned(input_symbol_leg1, intermediate_symbol_leg1) {
+                debug!("Skipping banned pair for first hop (A->B): {} ({}) <-> {} ({}) in pool {}", input_symbol_leg1, input_mint_leg1, intermediate_symbol_leg1, intermediate_mint_leg1, src_pool.name);
+                continue;
             }
+            
+            self.find_cyclic_pair_for_src_hop(
+                pools, src_pool_arc, &input_mint_leg1, input_symbol_leg1, input_decimals_leg1,
+                &intermediate_mint_leg1, intermediate_symbol_leg1, true, // is_a_to_b for src_pool = true
+                &mut opportunities, metrics
+            ).await;
+
+            // Try starting with token_b from src_pool
+            let input_mint_leg1_alt = src_pool.token_b.mint;
+            let input_symbol_leg1_alt = &src_pool.token_b.symbol;
+            let input_decimals_leg1_alt = src_pool.token_b.decimals;
+            let intermediate_mint_leg1_alt = src_pool.token_a.mint;
+            let intermediate_symbol_leg1_alt = &src_pool.token_a.symbol;
+
+             if Self::is_permanently_banned(input_symbol_leg1_alt, intermediate_symbol_leg1_alt) || 
+                Self::is_temporarily_banned(input_symbol_leg1_alt, intermediate_symbol_leg1_alt) {
+                debug!("Skipping banned pair for first hop (B->A): {} ({}) <-> {} ({}) in pool {}", input_symbol_leg1_alt, input_mint_leg1_alt, intermediate_symbol_leg1_alt, intermediate_mint_leg1_alt, src_pool.name);
+                continue;
+            }
+
+            self.find_cyclic_pair_for_src_hop(
+                pools, src_pool_arc, &input_mint_leg1_alt, input_symbol_leg1_alt, input_decimals_leg1_alt,
+                &intermediate_mint_leg1_alt, intermediate_symbol_leg1_alt, false, // is_a_to_b for src_pool = false
+                &mut opportunities, metrics
+            ).await;
         }
+
         opportunities.sort_by(|a, b| b.profit_pct.partial_cmp(&a.profit_pct).unwrap_or(std::cmp::Ordering::Equal));
-        info!("Found {} direct (2-hop cyclic) arbitrage opportunities above {:.4}% threshold", opportunities.len(), self.min_profit_threshold);
+        info!("Found {} direct (2-hop cyclic) arbitrage opportunities.", opportunities.len());
+        if opportunities.is_empty() && pools.len() >= 2 { // Added a check to see if pools exist for opportunities
+             debug!("No 2-hop opportunities found. Pool states might not allow profitable cycles at current thresholds, or test pool setup needs review for mint consistency.");
+        }
         Ok(opportunities)
     }
+
+    async fn find_cyclic_pair_for_src_hop(
+        &self,
+        pools: &HashMap<Pubkey, Arc<PoolInfo>>,
+        src_pool_arc: &Arc<PoolInfo>,
+        input_mint_leg1: &Pubkey,
+        input_symbol_leg1: &str,
+        input_decimals_leg1: u8,
+        intermediate_mint_leg1: &Pubkey,
+        intermediate_symbol_leg1: &str,
+        src_pool_is_a_to_b: bool, // Direction of trade in src_pool (input_mint_leg1 -> intermediate_mint_leg1)
+        opportunities: &mut Vec<MultiHopArbOpportunity>,
+        metrics: &mut Metrics,
+    ) {
+        let src_pool = src_pool_arc.as_ref();
+        debug!("Attempting 2-hop: Pool1='{}'({}), {} ({}) -> {} ({})", src_pool.name, src_pool.address, input_symbol_leg1, input_mint_leg1, intermediate_symbol_leg1, intermediate_mint_leg1);
+
+        for (_tgt_pool_addr, tgt_pool_arc) in pools.iter() {
+            if src_pool.address == tgt_pool_arc.address { continue; } // Skip same pool
+            let tgt_pool = tgt_pool_arc.as_ref();
+
+            // Leg 2: Must trade intermediate_mint_leg1 -> input_mint_leg1 (to complete the cycle)
+            let tgt_pool_trades_intermediate_to_input_a_to_b = 
+                tgt_pool.token_a.mint == *intermediate_mint_leg1 && tgt_pool.token_b.mint == *input_mint_leg1;
+            let tgt_pool_trades_intermediate_to_input_b_to_a = 
+                tgt_pool.token_b.mint == *intermediate_mint_leg1 && tgt_pool.token_a.mint == *input_mint_leg1;
+
+            if !(tgt_pool_trades_intermediate_to_input_a_to_b || tgt_pool_trades_intermediate_to_input_b_to_a) {
+                continue; // tgt_pool doesn't complete the cycle
+            }
+            let tgt_pool_is_a_to_b = tgt_pool_trades_intermediate_to_input_a_to_b;
+            
+            debug!("  Candidate Pair: Pool1='{}', Pool2='{}'({}). Checking for cycle.", src_pool.name, tgt_pool.name, tgt_pool.address);
+
+            if Self::is_permanently_banned(intermediate_symbol_leg1, input_symbol_leg1) || 
+               Self::is_temporarily_banned(intermediate_symbol_leg1, input_symbol_leg1) {
+                debug!("Skipping banned pair for second hop: {} <-> {}", intermediate_symbol_leg1, input_symbol_leg1);
+                continue;
+            }
+
+            // Max input for calculation, e.g., 1000 units of the input token (adjust based on typical values or config)
+            // Assuming input token is SOL or USDC-like for this example value
+            let base_units = if input_decimals_leg1 >= 6 { 1_000 * 10u64.pow(input_decimals_leg1 as u32) } else { 1_000_000 * 10u64.pow(input_decimals_leg1 as u32) };
+            let max_input_token_amount = TokenAmount::new(base_units, input_decimals_leg1);
+            
+            let optimal_in_atomic = calculate_optimal_input(src_pool, tgt_pool, src_pool_is_a_to_b, max_input_token_amount);
+            if optimal_in_atomic.amount == 0 {
+                debug!("Optimal input amount is 0, skipping for src_pool {}, tgt_pool {}", src_pool.name, tgt_pool.name);
+                continue;
+            }
+
+            let opp_calc_result = calculate_max_profit_result(src_pool, tgt_pool, src_pool_is_a_to_b, optimal_in_atomic.clone());
+            
+            // Price of input token (e.g. SOL or USDC) in USD. For now, assume 1.0 if it's stablecoin-like, or use self.sol_price_usd
+            // This needs to be more robust, ideally from a price feed or config.
+            let input_token_price_usd = if input_symbol_leg1 == "USDC" || input_symbol_leg1 == "USDT" { 1.0 } else { self.sol_price_usd };
+
+            if self.is_opportunity_profitable_after_costs(&opp_calc_result, input_token_price_usd, 2) {
+                 let input_amount_float = opp_calc_result.input_amount;
+                 let expected_intermediate_float = calculate_output_amount(src_pool, TokenAmount::from_float(input_amount_float, input_decimals_leg1), src_pool_is_a_to_b).to_float();
+                 let final_output_float = opp_calc_result.output_amount;
+
+                let opp_id = format!("2hop-{}-{}-{}-{}", input_symbol_leg1, src_pool.address, tgt_pool.address, chrono::Utc::now().timestamp_millis());
+                let current_opportunity = MultiHopArbOpportunity {
+                    id: opp_id.clone(),
+                    hops: vec![
+                        ArbHop {
+                            dex: src_pool.dex_type.clone(), pool: src_pool.address,
+                            input_token: input_symbol_leg1.to_string(),
+                            output_token: intermediate_symbol_leg1.to_string(),
+                            input_amount: input_amount_float,
+                            expected_output: expected_intermediate_float,
+                        },
+                        ArbHop {
+                            dex: tgt_pool.dex_type.clone(), pool: tgt_pool.address,
+                            input_token: intermediate_symbol_leg1.to_string(),
+                            output_token: input_symbol_leg1.to_string(), // output is original input for cycle
+                            input_amount: expected_intermediate_float,
+                            expected_output: final_output_float,
+                        },
+                    ],
+                    total_profit: opp_calc_result.profit,
+                    profit_pct: opp_calc_result.profit_percentage * 100.0, // Convert fraction to percentage
+                    input_token: input_symbol_leg1.to_string(),
+                    output_token: input_symbol_leg1.to_string(), // Cyclic
+                    input_amount: input_amount_float,
+                    expected_output: final_output_float,
+                    dex_path: vec![src_pool.dex_type.clone(), tgt_pool.dex_type.clone()],
+                    pool_path: vec![src_pool.address, tgt_pool.address],
+                    risk_score: Some(opp_calc_result.price_impact),
+                    notes: Some("Direct 2-hop cyclic opportunity".to_string()),
+                    estimated_profit_usd: Some(opp_calc_result.profit * input_token_price_usd),
+                    input_amount_usd: Some(input_amount_float * input_token_price_usd),
+                    output_amount_usd: Some(final_output_float * input_token_price_usd),
+                    intermediate_tokens: vec![intermediate_symbol_leg1.to_string()],
+                    source_pool: Arc::clone(src_pool_arc),
+                    target_pool: Arc::clone(tgt_pool_arc),
+                    input_token_mint: *input_mint_leg1,
+                    output_token_mint: *input_mint_leg1, // Cyclic
+                    intermediate_token_mint: Some(*intermediate_mint_leg1),
+                };
+                info!("Found Profitable 2-hop Arb Opp ID: {}", opp_id);
+                current_opportunity.log_summary();
+                
+                let dex_path_strings_log: Vec<String> = current_opportunity.dex_path.iter().map(|d| format!("{:?}", d)).collect();
+                 if let Err(e) = metrics.record_opportunity_detected(
+                    &current_opportunity.input_token,
+                    current_opportunity.intermediate_tokens.get(0).map_or("", |s| s.as_str()),
+                    current_opportunity.profit_pct,
+                    current_opportunity.estimated_profit_usd,
+                    current_opportunity.input_amount_usd,
+                    dex_path_strings_log,
+                ) { error!("Failed to record 2-hop opportunity detection metric: {}", e); }
+                opportunities.push(current_opportunity);
+            } else {
+                 debug!("  Skipped 2-hop cycle (src='{}', tgt='{}', input_token='{}'): profit_pct {:.4}% (raw result: {:?}) below threshold or too costly.",
+                       src_pool.name, tgt_pool.name, input_symbol_leg1, opp_calc_result.profit_percentage * 100.0, opp_calc_result);
+            }
+        }
+    }
     
+    #[deprecated(note = "Use find_all_opportunities for 2-hop cycles. This is a passthrough.")]
     pub async fn find_two_hop_opportunities(&self, pools: &HashMap<Pubkey, Arc<PoolInfo>>, metrics: &mut Metrics) -> Result<Vec<MultiHopArbOpportunity>, ArbError> {
+        warn!("Deprecated find_two_hop_opportunities called, redirecting to find_all_opportunities.");
         self.find_all_opportunities(pools, metrics).await
     }
 
-    pub async fn find_all_multihop_opportunities(&self, pools: &HashMap<Pubkey, Arc<PoolInfo>>, metrics: &mut Metrics) -> Result<Vec<MultiHopArbOpportunity>, ArbError> {
+    pub async fn find_all_multihop_opportunities(
+        &self, 
+        pools: &HashMap<Pubkey, Arc<PoolInfo>>, 
+        metrics: &mut Metrics
+    ) -> Result<Vec<MultiHopArbOpportunity>, ArbError> {
+        info!("find_all_multihop_opportunities (3-hop cyclic) called with {} pools. Min Profit Pct: {:.4}%, Min Profit USD: ${:.2}", pools.len(), self.min_profit_threshold_pct, self.min_profit_threshold_usd);
         let mut opportunities = Vec::new();
-        let pool_vec: Vec<_> = pools.values().cloned().collect();
+        let pool_vec: Vec<Arc<PoolInfo>> = pools.values().cloned().collect(); // Collect Arcs
+
         if pool_vec.len() < 3 { return Ok(opportunities); }
 
         for i in 0..pool_vec.len() {
@@ -308,107 +360,190 @@ impl ArbitrageDetector {
                     let p1_arc = &pool_vec[i]; let p2_arc = &pool_vec[j]; let p3_arc = &pool_vec[k];
                     let p1 = p1_arc.as_ref(); let p2 = p2_arc.as_ref(); let p3 = p3_arc.as_ref();
 
-                    for start_token_index_p1 in 0..2 {
-                        let (start_token_mint_p1, start_token_symbol_p1, start_token_decimals_p1) = if start_token_index_p1 == 0 { (p1.token_a.mint, &p1.token_a.symbol, p1.token_a.decimals) } else { (p1.token_b.mint, &p1.token_b.symbol, p1.token_b.decimals) };
-                        let (mid_token1_mint_p1, mid_token1_symbol_p1, _mid_token1_decimals_p1) = if start_token_index_p1 == 0 { (p1.token_b.mint, &p1.token_b.symbol, p1.token_b.decimals) } else { (p1.token_a.mint, &p1.token_a.symbol, p1.token_a.decimals) };
-
-                        for mid_token1_index_p2 in 0..2 {
-                            let (current_mid_token1_mint_p2, _current_mid_token1_symbol_p2, _current_mid_token1_decimals_p2) = if mid_token1_index_p2 == 0 { (p2.token_a.mint, &p2.token_a.symbol, p2.token_a.decimals) } else { (p2.token_b.mint, &p2.token_b.symbol, p2.token_b.decimals) };
-                            if mid_token1_mint_p1 != current_mid_token1_mint_p2 { continue; }
-                            let (mid_token2_mint_p2, mid_token2_symbol_p2, _mid_token2_decimals_p2) = if mid_token1_index_p2 == 0 { (p2.token_b.mint, &p2.token_b.symbol, p2.token_b.decimals) } else { (p2.token_a.mint, &p2.token_a.symbol, p2.token_a.decimals) };
-
-                            for mid_token2_index_p3 in 0..2 {
-                                let (current_mid_token2_mint_p3, _current_mid_token2_symbol_p3, _current_mid_token2_decimals_p3) = if mid_token2_index_p3 == 0 { (p3.token_a.mint, &p3.token_a.symbol, p3.token_a.decimals) } else { (p3.token_b.mint, &p3.token_b.symbol, p3.token_b.decimals) };
-                                if mid_token2_mint_p2 != current_mid_token2_mint_p3 { continue; }
-                                let (final_token_mint_p3, final_token_symbol_p3, _final_token_decimals_p3) = if mid_token2_index_p3 == 0 { (p3.token_b.mint, &p3.token_b.symbol, p3.token_b.decimals) } else { (p3.token_a.mint, &p3.token_a.symbol, p3.token_a.decimals) };
-                                if final_token_mint_p3 != start_token_mint_p1 { continue; }
-
-                                if Self::is_permanently_banned(start_token_symbol_p1, mid_token1_symbol_p1) || Self::is_temporarily_banned(start_token_symbol_p1, mid_token1_symbol_p1) ||
-                                   Self::is_permanently_banned(mid_token1_symbol_p1, mid_token2_symbol_p2) || Self::is_temporarily_banned(mid_token1_symbol_p1, mid_token2_symbol_p2) ||
-                                   Self::is_permanently_banned(mid_token2_symbol_p2, final_token_symbol_p3) || Self::is_temporarily_banned(mid_token2_symbol_p2, final_token_symbol_p3) { continue; }
-
-                                let pools_arr_ref: Vec<&PoolInfo> = vec![p1, p2, p3];
-                                let dir1 = p1.token_a.mint == start_token_mint_p1; let dir2 = p2.token_a.mint == mid_token1_mint_p1; let dir3 = p3.token_a.mint == mid_token2_mint_p2;
-                                let directions = vec![dir1, dir2, dir3];
-                                let last_fee_data = vec![(None,None,None); 3];
-                                let input_amount_float = 100.0;
-                                
-                                let (calculated_profit_float, total_slippage_fraction, _total_fee_tokens) = calculate_multihop_profit_and_slippage(&pools_arr_ref, input_amount_float, &directions, &last_fee_data);
-                                let input_tokenamount = TokenAmount::new((input_amount_float * 10f64.powi(start_token_decimals_p1 as i32)) as u64, start_token_decimals_p1);
-                                let hop1_out_ta = calculate_output_amount(p1, input_tokenamount.clone(), dir1);
-                                let hop2_out_ta = calculate_output_amount(p2, hop1_out_ta.clone(), dir2);
-                                let hop3_out_ta = calculate_output_amount(p3, hop2_out_ta.clone(), dir3);
-                                let profit_pct = if input_amount_float > 0.0 { (calculated_profit_float / input_amount_float) * 100.0 } else { 0.0 };
-
-                                if profit_pct > self.min_profit_threshold {
-                                    let opp_id = format!("3hop-{}-{}-{}-{}-{}", start_token_symbol_p1, p1.address, p2.address, p3.address, chrono::Utc::now().timestamp_millis());
-                                    let hops_data = vec![
-                                        ArbHop { dex: p1.dex_type.clone(), pool: p1.address, input_token: start_token_symbol_p1.to_string(), output_token: mid_token1_symbol_p1.to_string(), input_amount: input_amount_float, expected_output: hop1_out_ta.to_float() },
-                                        ArbHop { dex: p2.dex_type.clone(), pool: p2.address, input_token: mid_token1_symbol_p1.to_string(), output_token: mid_token2_symbol_p2.to_string(), input_amount: hop1_out_ta.to_float(), expected_output: hop2_out_ta.to_float() },
-                                        ArbHop { dex: p3.dex_type.clone(), pool: p3.address, input_token: mid_token2_symbol_p2.to_string(), output_token: final_token_symbol_p3.to_string(), input_amount: hop2_out_ta.to_float(), expected_output: hop3_out_ta.to_float() },
-                                    ];
-                                    let estimated_profit_usd = Some(calculated_profit_float * 1.0); let input_amount_usd_val = Some(input_amount_float * 1.0); let output_amount_usd_val = Some((input_amount_float + calculated_profit_float) * 1.0);
-
-                                    let opp = MultiHopArbOpportunity {
-                                        id: opp_id, hops: hops_data, total_profit: calculated_profit_float, profit_pct,
-                                        input_token: start_token_symbol_p1.to_string(), output_token: final_token_symbol_p3.to_string(),
-                                        input_amount: input_amount_float, expected_output: hop3_out_ta.to_float(),
-                                        dex_path: vec![p1.dex_type.clone(), p2.dex_type.clone(), p3.dex_type.clone()], // Clone DexType
-                                        pool_path: vec![p1.address, p2.address, p3.address],
-                                        risk_score: Some(total_slippage_fraction), notes: Some(format!("3-hop: Slippage: {:.4}%", total_slippage_fraction * 100.0)),
-                                        estimated_profit_usd, input_amount_usd: input_amount_usd_val,
-                                        intermediate_tokens: vec![mid_token1_symbol_p1.to_string(), mid_token2_symbol_p2.to_string()],
-                                        output_amount_usd: output_amount_usd_val,
-                                        source_pool: Arc::clone(p1_arc), target_pool: Arc::clone(p3_arc),
-                                        input_token_mint: start_token_mint_p1, output_token_mint: final_token_mint_p3,
-                                        intermediate_token_mint: Some(mid_token1_mint_p1),
-                                    };
-                                    info!("[ANALYTICS] Potential 3-Hop Opp: {} -> {} -> {} -> {} (Profit: {:.2}%)", start_token_symbol_p1, mid_token1_symbol_p1, mid_token2_symbol_p2, final_token_symbol_p3, opp.profit_pct);
-                                    opp.log_summary();
-                                    
-                                    let dex_path_strings_log: Vec<String> = opp.dex_path.iter().map(|d| format!("{:?}",d)).collect();
-                                    if let Err(e) = metrics.record_opportunity_detected(
-                                        &opp.input_token, &opp.intermediate_tokens.get(0).cloned().unwrap_or_default(),
-                                        opp.profit_pct, opp.estimated_profit_usd, opp.input_amount_usd, dex_path_strings_log,
-                                    ){ error!("Failed to record 3-hop opportunity metric: {}", e); }
-                                    opportunities.push(opp);
-                                }
-                            }
-                        }
-                    }
+                    // Try P1(A->B), P2(B->C), P3(C->A)
+                    self.check_specific_3_hop_path(
+                        p1_arc, p2_arc, p3_arc,
+                        &p1.token_a, &p1.token_b, // Leg 1: p1.A -> p1.B
+                        &p2.token_a, &p2.token_b, // Leg 2: p2.A -> p2.B (hoping p2.A == p1.B)
+                        &p3.token_a, &p3.token_b, // Leg 3: p3.A -> p3.B (hoping p3.A == p2.B AND p3.B == p1.A)
+                        &mut opportunities, metrics, pools,
+                    ).await;
+                    
+                    // Try P1(B->A), P2(A->C), P3(C->B) - one example of reversing first leg
+                     self.check_specific_3_hop_path(
+                        p1_arc, p2_arc, p3_arc,
+                        &p1.token_b, &p1.token_a, // Leg 1: p1.B -> p1.A
+                        &p2.token_a, &p2.token_b, // Leg 2: p2.A -> p2.B (hoping p2.A == p1.A)
+                        &p3.token_a, &p3.token_b, // Leg 3: p3.A -> p3.B (hoping p3.A == p2.B AND p3.B == p1.B)
+                        &mut opportunities, metrics, pools,
+                    ).await;
+                    // ... Add more permutations or a more systematic path generation if needed
                 }
             }
         }
         opportunities.sort_by(|a, b| b.profit_pct.partial_cmp(&a.profit_pct).unwrap_or(std::cmp::Ordering::Equal));
-        info!("Found {} multi-hop (3-hop) arbitrage opportunities above {:.4}% threshold", opportunities.len(), self.min_profit_threshold);
+        info!("Found {} multi-hop (3-hop) arbitrage opportunities.", opportunities.len());
         Ok(opportunities)
     }
 
-    pub async fn find_all_multihop_opportunities_with_risk(&self, pools: &HashMap<Pubkey, Arc<PoolInfo>>, metrics: &mut Metrics, max_slippage_pct: f64, tx_fee_lamports: u64) -> Result<Vec<MultiHopArbOpportunity>, ArbError> {
+    async fn check_specific_3_hop_path(
+        &self,
+        p1_arc: &Arc<PoolInfo>, p2_arc: &Arc<PoolInfo>, p3_arc: &Arc<PoolInfo>,
+        // Leg 1 (Pool 1)
+        p1_input_token: &crate::utils::PoolToken, p1_output_token: &crate::utils::PoolToken,
+        // Leg 2 (Pool 2)
+        p2_input_token: &crate::utils::PoolToken, p2_output_token: &crate::utils::PoolToken,
+        // Leg 3 (Pool 3)
+        p3_input_token: &crate::utils::PoolToken, p3_output_token: &crate::utils::PoolToken,
+        opportunities: &mut Vec<MultiHopArbOpportunity>,
+        metrics: &mut Metrics,
+        _all_pools: &HashMap<Pubkey, Arc<PoolInfo>>, // Keep for potential future use with FeeManager advanced features
+    ) {
+        // Check for valid path:
+        // Output of Leg 1 (p1_output_token) must be Input of Leg 2 (p2_input_token)
+        // Output of Leg 2 (p2_output_token) must be Input of Leg 3 (p3_input_token)
+        // Output of Leg 3 (p3_output_token) must be Input of Leg 1 (p1_input_token) - cyclic
+        if !(p1_output_token.mint == p2_input_token.mint &&
+             p2_output_token.mint == p3_input_token.mint &&
+             p3_output_token.mint == p1_input_token.mint) {
+            return; // Not a valid 3-hop cycle with these token choices
+        }
+
+        debug!("Checking 3-hop: {}->{} (P1:{}), {}->{} (P2:{}), {}->{} (P3:{})",
+            p1_input_token.symbol, p1_output_token.symbol, p1_arc.name,
+            p2_input_token.symbol, p2_output_token.symbol, p2_arc.name,
+            p3_input_token.symbol, p3_output_token.symbol, p3_arc.name);
+            
+        if Self::is_permanently_banned(&p1_input_token.symbol, &p1_output_token.symbol) || Self::is_temporarily_banned(&p1_input_token.symbol, &p1_output_token.symbol) ||
+           Self::is_permanently_banned(&p2_input_token.symbol, &p2_output_token.symbol) || Self::is_temporarily_banned(&p2_input_token.symbol, &p2_output_token.symbol) ||
+           Self::is_permanently_banned(&p3_input_token.symbol, &p3_output_token.symbol) || Self::is_temporarily_banned(&p3_input_token.symbol, &p3_output_token.symbol) {
+            debug!("Skipping 3-hop due to banned pair in path.");
+            return;
+        }
+
+        let pools_path_refs: Vec<&PoolInfo> = vec![p1_arc.as_ref(), p2_arc.as_ref(), p3_arc.as_ref()];
+        let directions = vec![
+            p1_arc.token_a.mint == p1_input_token.mint, // dir for p1
+            p2_arc.token_a.mint == p2_input_token.mint, // dir for p2
+            p3_arc.token_a.mint == p3_input_token.mint, // dir for p3
+        ];
+        
+        // Placeholder for historical fee data - FeeManager needs this
+        let last_fee_data = vec![(None,None,None); 3]; 
+
+        // Example input amount for calculation - make this configurable or dynamic
+        let input_amount_float = 100.0; // e.g., 100 units of the starting token (p1_input_token)
+        
+        let (calculated_profit_float, total_slippage_fraction, _total_fee_tokens_equivalent) =
+            calculate_multihop_profit_and_slippage(
+                &pools_path_refs,
+                input_amount_float,
+                p1_input_token.decimals,
+                &directions,
+                &last_fee_data,
+            );
+
+        let opp_calc_result = OpportunityCalculationResult {
+            input_amount: input_amount_float,
+            output_amount: input_amount_float + calculated_profit_float,
+            profit: calculated_profit_float,
+            profit_percentage: if input_amount_float > 0.0 { calculated_profit_float / input_amount_float } else {0.0},
+            price_impact: total_slippage_fraction,
+        };
+        
+        let input_token_price_usd = if p1_input_token.symbol == "USDC" || p1_input_token.symbol == "USDT" { 1.0 } else { self.sol_price_usd };
+
+        if self.is_opportunity_profitable_after_costs(&opp_calc_result, input_token_price_usd, 3) {
+            // Simulate outputs for ArbHop details (simplified, real calc from multihop used for profit)
+            let initial_ta = TokenAmount::from_float(input_amount_float, p1_input_token.decimals);
+            let hop1_out_ta = calculate_output_amount(p1_arc.as_ref(), initial_ta.clone(), directions[0]);
+            let hop2_out_ta = calculate_output_amount(p2_arc.as_ref(), hop1_out_ta.clone(), directions[1]);
+            // hop3_out_ta is effectively opp_calc_result.output_amount converted to TokenAmount
+            let hop3_out_ta = TokenAmount::from_float(opp_calc_result.output_amount, p3_output_token.decimals);
+
+
+            let opp_id = format!("3hop-{}-{}-{}-{}-{}", p1_input_token.symbol, p1_arc.address, p2_arc.address, p3_arc.address, chrono::Utc::now().timestamp_millis());
+            let current_opportunity = MultiHopArbOpportunity {
+                id: opp_id.clone(),
+                hops: vec![
+                    ArbHop { dex: p1_arc.dex_type.clone(), pool: p1_arc.address, input_token: p1_input_token.symbol.clone(), output_token: p1_output_token.symbol.clone(), input_amount: input_amount_float, expected_output: hop1_out_ta.to_float() },
+                    ArbHop { dex: p2_arc.dex_type.clone(), pool: p2_arc.address, input_token: p2_input_token.symbol.clone(), output_token: p2_output_token.symbol.clone(), input_amount: hop1_out_ta.to_float(), expected_output: hop2_out_ta.to_float() },
+                    ArbHop { dex: p3_arc.dex_type.clone(), pool: p3_arc.address, input_token: p3_input_token.symbol.clone(), output_token: p3_output_token.symbol.clone(), input_amount: hop2_out_ta.to_float(), expected_output: hop3_out_ta.to_float() },
+                ],
+                total_profit: calculated_profit_float,
+                profit_pct: opp_calc_result.profit_percentage * 100.0,
+                input_token: p1_input_token.symbol.clone(),
+                output_token: p3_output_token.symbol.clone(), // Should be same as p1_input_token.symbol for cyclic
+                input_amount: input_amount_float,
+                expected_output: hop3_out_ta.to_float(),
+                dex_path: vec![p1_arc.dex_type.clone(), p2_arc.dex_type.clone(), p3_arc.dex_type.clone()],
+                pool_path: vec![p1_arc.address, p2_arc.address, p3_arc.address],
+                risk_score: Some(total_slippage_fraction),
+                notes: Some(format!("3-hop cyclic: Slippage: {:.4}%", total_slippage_fraction * 100.0)),
+                estimated_profit_usd: Some(calculated_profit_float * input_token_price_usd),
+                input_amount_usd: Some(input_amount_float * input_token_price_usd),
+                output_amount_usd: Some(hop3_out_ta.to_float() * input_token_price_usd), // Assuming output token is same type for USD price
+                intermediate_tokens: vec![p1_output_token.symbol.clone(), p2_output_token.symbol.clone()],
+                source_pool: Arc::clone(p1_arc),
+                target_pool: Arc::clone(p3_arc), // Last pool in the chain
+                input_token_mint: p1_input_token.mint,
+                output_token_mint: p3_output_token.mint, // Should be same as p1_input_token.mint
+                intermediate_token_mint: Some(p1_output_token.mint), // First intermediate token
+            };
+            info!("Found Profitable 3-hop Arb Opp ID: {}", opp_id);
+            current_opportunity.log_summary();
+            
+            let dex_path_strings_log: Vec<String> = current_opportunity.dex_path.iter().map(|d| format!("{:?}",d)).collect();
+            if let Err(e) = metrics.record_opportunity_detected(
+                &current_opportunity.input_token, current_opportunity.intermediate_tokens.get(0).map_or("", |s|s.as_str()),
+                current_opportunity.profit_pct, current_opportunity.estimated_profit_usd, current_opportunity.input_amount_usd, dex_path_strings_log,
+            ){ error!("Failed to record 3-hop opportunity metric: {}", e); }
+            opportunities.push(current_opportunity);
+        } else {
+            debug!("  Skipped 3-hop path: Profit {:.4}% (raw result: {:?}) below threshold or too costly.", opp_calc_result.profit_percentage*100.0, opp_calc_result);
+        }
+    }
+
+
+    pub async fn find_all_multihop_opportunities_with_risk(
+        &self, 
+        pools: &HashMap<Pubkey, Arc<PoolInfo>>, 
+        metrics: &mut Metrics, 
+        max_slippage_pct: f64, 
+        max_tx_fee_lamports_for_acceptance: u64 // Max fee we are willing to pay for this opp
+    ) -> Result<Vec<MultiHopArbOpportunity>, ArbError> {
+        info!("find_all_multihop_opportunities_with_risk called. Max Slippage Pct: {:.2}%, Max Tx Fee (lamports): {}", max_slippage_pct, max_tx_fee_lamports_for_acceptance);
         let base_opportunities = self.find_all_multihop_opportunities(pools, metrics).await?;
         let mut risk_adjusted_opportunities = Vec::new();
 
         for opp in base_opportunities {
             let estimated_total_slippage_fraction = opp.risk_score.unwrap_or(1.0); // Default to high if not set
-            
-            // Rough gas cost estimation based on number of hops, or use a more detailed FeeManager call if available for the whole path
-            let estimated_gas_cost_lamports = opp.hops.len() as u64 * FeeManager::estimate_multi_hop_with_model(
-                 &opp.pool_path.iter().filter_map(|p_addr| pools.get(p_addr).map(|p| p.as_ref())).collect::<Vec<&PoolInfo>>(),
-                 &opp.hops.iter().map(|h| TokenAmount::new((h.input_amount * 10f64.powi(6)) as u64, 6)).collect::<Vec<TokenAmount>>(),
-                 &vec![true; opp.hops.len()],
-                 &vec![(None,None,None); opp.hops.len()],
-                 &XYKSlippageModel {}
-            ).gas_cost / opp.hops.len().max(1) as u64; // Average per hop if complex, or sum
 
-            if estimated_total_slippage_fraction * 100.0 <= max_slippage_pct && estimated_gas_cost_lamports <= tx_fee_lamports {
+            // Use a fixed number of instructions per hop for cost estimation for now
+            let estimated_instructions_per_hop = 2; 
+            let total_instructions = opp.hops.len() * estimated_instructions_per_hop;
+            
+            // Use the detector's default_priority_fee_lamports as the base for this specific opportunity's fee check.
+            // If the opportunity itself carries a specific suggested priority fee, that could be used too.
+            let transaction_cost_usd = calculate_transaction_cost(
+                total_instructions, 
+                self.default_priority_fee_lamports, // Use the executor's configured base priority fee
+                self.sol_price_usd
+            );
+            
+            // Convert max_tx_fee_lamports_for_acceptance to USD for comparison
+            let max_tx_fee_usd_for_acceptance = (max_tx_fee_lamports_for_acceptance as f64 / 1_000_000_000.0) * self.sol_price_usd;
+
+            if estimated_total_slippage_fraction * 100.0 <= max_slippage_pct && transaction_cost_usd <= max_tx_fee_usd_for_acceptance {
+                info!("Opportunity ID {} meets risk/fee criteria. Slippage: {:.4}%, TxCostUSD: {:.4}", opp.id, estimated_total_slippage_fraction * 100.0, transaction_cost_usd);
                 risk_adjusted_opportunities.push(opp);
             } else {
-                debug!("Skipping opportunity ID {} due to risk/fee (Slippage: {:.4}%, Fee: {} lamports)", opp.id, estimated_total_slippage_fraction * 100.0, estimated_gas_cost_lamports);
+                debug!("Skipping opportunity ID {} due to risk/fee. Slippage: {:.4}% (Max: {:.2}%), TxCostUSD: {:.4} (MaxAcceptable: {:.4})", 
+                    opp.id, estimated_total_slippage_fraction * 100.0, max_slippage_pct, transaction_cost_usd, max_tx_fee_usd_for_acceptance);
             }
         }
         
-        info!("Found {} multi-hop arbitrage opportunities (risk-adjusted) above {:.4}% threshold, max slippage {:.2}%, max fee {} lamports",
-            risk_adjusted_opportunities.len(), self.min_profit_threshold, max_slippage_pct, tx_fee_lamports);
+        info!("Found {} multi-hop arbitrage opportunities (risk-adjusted).", risk_adjusted_opportunities.len());
         Ok(risk_adjusted_opportunities)
     }
 }

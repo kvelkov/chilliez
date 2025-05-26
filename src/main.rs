@@ -7,11 +7,15 @@ mod error;
 mod metrics;
 mod solana;
 pub mod utils;
-pub mod websocket;
+pub mod websocket; // Ensuring this is present
 
 use crate::{
-    arbitrage::engine::ArbitrageEngine, 
-    arbitrage::executor::ArbitrageExecutor,
+    arbitrage::{
+        calculator, 
+        // detector::ArbitrageDetector, // No longer need to instantiate detector here
+        engine::ArbitrageEngine, 
+        executor::ArbitrageExecutor,
+    },
     cache::Cache,
     config::load_config,
     dex::get_all_clients_arc,
@@ -19,12 +23,12 @@ use crate::{
     metrics::Metrics,
     solana::{
         rpc::SolanaRpcClient,
-        websocket::SolanaWebsocketManager, // RawAccountUpdate was removed
+        websocket::SolanaWebsocketManager,
     },
-    utils::{setup_logging, PoolInfo},
-    // websocket::CryptoDataProvider, // This was removed as unused in main
+    utils::{setup_logging, PoolInfo, ProgramConfig},
+    websocket::CryptoDataProvider, // Added for price_provider in Engine
 };
-use log::{info, warn}; 
+use log::{error, info, warn}; 
 use solana_client::nonblocking::rpc_client::RpcClient as NonBlockingRpcClient;
 use solana_sdk::{pubkey::Pubkey, signature::read_keypair_file, signer::Signer};
 use std::collections::HashMap;
@@ -40,10 +44,13 @@ async fn main() -> Result<(), ArbError> {
     info!("Solana Arbitrage Bot starting...");
 
     let app_config = load_config()?;
-    info!("Configuration loaded and validated successfully.");
+    info!("Application configuration loaded and validated successfully.");
+
+    let program_config = ProgramConfig::new("ChillarezBot".to_string(), env!("CARGO_PKG_VERSION").to_string());
+    program_config.log_details();
 
     let metrics = Arc::new(Mutex::new(Metrics::new(
-        app_config.sol_price_usd.unwrap_or(100.0),
+        app_config.sol_price_usd.unwrap_or(100.0), 
         app_config.metrics_log_path.clone(),
     )));
     metrics.lock().await.log_launch();
@@ -75,8 +82,8 @@ async fn main() -> Result<(), ArbError> {
     info!("DEX API clients initialized.");
 
     let pools_map: Arc<RwLock<HashMap<Pubkey, Arc<PoolInfo>>>> = Arc::new(RwLock::new(HashMap::new()));
-    metrics.lock().await.log_pools_fetched(0);
-    info!("Initial pool data map initialized.");
+    metrics.lock().await.log_pools_fetched(pools_map.read().await.len());
+    info!("Initial pool data map initialized (current size: {}).", pools_map.read().await.len());
 
     let wallet_path = app_config.trader_wallet_keypair_path.clone();
     let wallet = match read_keypair_file(&wallet_path) {
@@ -90,7 +97,7 @@ async fn main() -> Result<(), ArbError> {
         .parse::<bool>()
         .unwrap_or(false); 
 
-    let tx_executor: Arc<ArbitrageExecutor> = Arc::new(ArbitrageExecutor::new( // Added type annotation
+    let tx_executor: Arc<ArbitrageExecutor> = Arc::new(ArbitrageExecutor::new(
         wallet.clone(), direct_rpc_client.clone(),
         app_config.default_priority_fee_lamports,
         Duration::from_secs(app_config.max_transaction_timeout_seconds),
@@ -100,31 +107,44 @@ async fn main() -> Result<(), ArbError> {
     info!("ArbitrageExecutor initialized.");
 
     let ws_manager_instance = if !app_config.ws_url.is_empty() {
-        let (manager, _raw_receiver) = SolanaWebsocketManager::new(
+        let (manager, _raw_update_receiver) = SolanaWebsocketManager::new(
             app_config.ws_url.clone(),
-            app_config.rpc_url_backup.clone().unwrap_or_default(),
+            app_config.rpc_url_backup.clone().unwrap_or_default(), // Fallback URLs
             app_config.ws_update_channel_size.unwrap_or(1024),
         );
         Some(Arc::new(Mutex::new(manager)))
-    } else { warn!("WebSocket URL not configured."); None };
+    } else { warn!("WebSocket URL not configured, WebSocket manager not started."); None };
+
+    // price_provider can be initialized here if a concrete implementation is chosen
+    let price_provider_instance: Option<Arc<dyn CryptoDataProvider + Send + Sync>> = None; // Placeholder
+    // Example: if you had a CoinGeckoProvider:
+    // let price_provider_instance = Some(Arc::new(CoinGeckoProvider::new()));
 
     let arbitrage_engine: Arc<ArbitrageEngine> = Arc::new(ArbitrageEngine::new(
-        pools_map.clone(), Some(ha_solana_rpc_client.clone()), // Use ha_solana_rpc_client
-        app_config.clone(), metrics.clone(), None, 
-        ws_manager_instance.clone(), dex_api_clients.clone(),
+        pools_map.clone(), 
+        Some(ha_solana_rpc_client.clone()), 
+        app_config.clone(), 
+        metrics.clone(), 
+        price_provider_instance, // Pass the initialized price provider
+        ws_manager_instance.clone(), 
+        dex_api_clients.clone(),
+        // Detector is created inside the engine now
     ));
     info!("ArbitrageEngine initialized.");
-    arbitrage_engine.start_services().await;
+    
+    if ws_manager_instance.is_some() {
+        arbitrage_engine.start_services().await; 
+    }
 
-    let engine_for_threshold_task: Arc<ArbitrageEngine> = Arc::clone(&arbitrage_engine); // Line 121
-    let mut threshold_task_handle = tokio::spawn(async move {
+    let engine_for_threshold_task: Arc<ArbitrageEngine> = Arc::clone(&arbitrage_engine);
+    let threshold_task_handle = tokio::spawn(async move {
         engine_for_threshold_task.run_dynamic_threshold_updates().await;
-        info!("Dynamic threshold update task finished.");
+        info!("Dynamic threshold update task finished (normally runs indefinitely).");
     });
 
     let executor_for_congestion_task: Arc<ArbitrageExecutor> = Arc::clone(&tx_executor); 
     let congestion_update_interval_secs = app_config.congestion_update_interval_secs.unwrap_or(30);
-    let mut congestion_task_handle = tokio::spawn(async move {
+    let congestion_task_handle = tokio::spawn(async move {
         info!("Starting congestion update task (interval: {}s).", congestion_update_interval_secs);
         let mut interval_timer = interval(Duration::from_secs(congestion_update_interval_secs));
         loop {
@@ -135,9 +155,9 @@ async fn main() -> Result<(), ArbError> {
         }
     });
     
-    let engine_for_health_task: Arc<ArbitrageEngine> = Arc::clone(&arbitrage_engine); // Line 140
+    let engine_for_health_task: Arc<ArbitrageEngine> = Arc::clone(&arbitrage_engine);
     let health_check_interval_from_config = Duration::from_secs(app_config.health_check_interval_secs.unwrap_or(60));
-    let mut health_check_task_handle = tokio::spawn(async move {
+    let health_check_task_handle = tokio::spawn(async move {
         info!("Starting health check task (interval: {:?}).", health_check_interval_from_config);
         let mut interval_timer = interval(health_check_interval_from_config);
         loop {
@@ -153,16 +173,54 @@ async fn main() -> Result<(), ArbError> {
     loop {
         tokio::select! {
             _ = main_cycle_interval.tick() => {
-                info!("Main arbitrage cycle tick.");
-                // Example arbitrage detection
-                // if let Ok(opportunities) = arbitrage_engine.detect_arbitrage().await {
-                //    if !opportunities.is_empty() {
-                //        info!("Detected {} opportunities.", opportunities.len());
-                //        // for opp in opportunities {
-                //        //     // tx_executor.execute_opportunity(&opp).await;
-                //        // }
-                //    }
-                // }
+                let current_time_str = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+                info!("Main arbitrage cycle tick at {}.", current_time_str);
+                metrics.lock().await.increment_main_cycles();
+                let cycle_start_time = std::time::Instant::now();
+
+                calculator::clear_caches_if_needed();
+
+                // Use the primary detection method from the engine
+                match arbitrage_engine.detect_arbitrage().await {
+                    Ok(mut all_opportunities) => { // Made mutable for sorting
+                        if !all_opportunities.is_empty() {
+                            info!("Detected {} total opportunities in this cycle.", all_opportunities.len());
+                            all_opportunities.sort_by(|a, b| b.profit_pct.partial_cmp(&a.profit_pct).unwrap_or(std::cmp::Ordering::Equal));
+                            
+                            if let Some(best_opp) = all_opportunities.first() {
+                                info!("Best opportunity ID: {} with profit: {:.4}%", best_opp.id, best_opp.profit_pct);
+                                if app_config.paper_trading || simulation_mode_from_env {
+                                    info!("Paper/Simulation Mode: Logging execution for opportunity {}", best_opp.id);
+                                    match tx_executor.execute_opportunity(best_opp).await {
+                                        Ok(signature) => {
+                                            info!("(Paper/Simulated) Successfully processed opportunity {} with signature: {}", best_opp.id, signature);
+                                        }
+                                        Err(e) => {
+                                            error!("(Paper/Simulated) Failed to process opportunity {}: {}", best_opp.id, e);
+                                        }
+                                    }
+                                } else {
+                                    // Real trading logic would go here
+                                    info!("Real Trading Mode: Attempting to execute opportunity {}", best_opp.id);
+                                     match tx_executor.execute_opportunity(best_opp).await {
+                                        Ok(signature) => {
+                                            info!("Successfully EXECUTED opportunity {} with signature: {}", best_opp.id, signature);
+                                        }
+                                        Err(e) => {
+                                            error!("Failed to EXECUTE opportunity {}: {}", best_opp.id, e);
+                                        }
+                                    }
+                                }
+                            }
+                        } else {
+                            info!("No arbitrage opportunities found in this cycle.");
+                        }
+                    }
+                    Err(e) => {
+                        error!("Error during arbitrage detection cycle: {}", e);
+                    }
+                }
+                metrics.lock().await.record_main_cycle_duration(cycle_start_time.elapsed().as_millis() as u64);
             },
             _ = tokio::signal::ctrl_c() => {
                 info!("CTRL-C received, shutting down tasks...");
@@ -174,5 +232,6 @@ async fn main() -> Result<(), ArbError> {
             }
         }
     }
+    metrics.lock().await.summary();
     Ok(())
 }

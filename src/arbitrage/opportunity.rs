@@ -1,81 +1,113 @@
 // src/arbitrage/opportunity.rs
 //! Defines the core struct for representing multi-hop, cross-DEX arbitrage opportunities.
 
-use crate::arbitrage::fee_manager::{FeeBreakdown, FeeManager}; // FeeManager might not be directly used here but good for context
-use crate::utils::{DexType, PoolInfo, TokenAmount};
+// FeeManager might not be directly used here but good for context
+// Removed: use crate::arbitrage::fee_manager::{FeeBreakdown, FeeManager}; 
+use crate::utils::{DexType, PoolInfo, TokenAmount}; // TokenAmount for context if needed
 use solana_sdk::pubkey::Pubkey;
 use std::sync::Arc;
+use log; // For logging
 
 /// Represents a single hop in a multi-hop arbitrage route.
 #[derive(Debug, Clone)]
 pub struct ArbHop {
     pub dex: DexType,
-    pub pool: Pubkey, // Address of the pool for this hop
-    pub input_token: String,  // Symbol of the input token for this hop
-    pub output_token: String, // Symbol of the output token for this hop
-    pub input_amount: f64,    // Amount of input_token (human-readable format)
-    pub expected_output: f64, // Amount of output_token expected (human-readable format)
+    pub pool: Pubkey, 
+    pub input_token: String,  
+    pub output_token: String, 
+    pub input_amount: f64,    
+    pub expected_output: f64, 
 }
 
 /// Represents a full arbitrage opportunity, possibly spanning multiple DEXes and hops.
-/// This struct now consolidates fields from the previous ArbitrageOpportunity.
 #[derive(Debug, Clone)]
 pub struct MultiHopArbOpportunity {
-    pub id: String, // Unique identifier for the opportunity
-    /// Ordered list of hops (DEX+pool+token transitions)
+    pub id: String, 
     pub hops: Vec<ArbHop>,
-    /// Total profit in terms of the final output token (human-readable amount, after all hops, ideally net of estimated fees/slippage)
-    pub total_profit: f64,
-    /// Profit as a percentage of the initial input amount (human-readable)
-    pub profit_pct: f64, // Example: 1.5 for 1.5%
+    pub total_profit: f64, 
+    pub profit_pct: f64, 
 
-    /// The initial input token symbol for the entire arbitrage cycle
     pub input_token: String,
-    /// The final output token symbol for the entire arbitrage cycle (should match input_token for cyclic arbitrage)
-    pub output_token: String,
-    /// The amount of the initial input_token (human-readable format)
+    pub output_token: String, 
     pub input_amount: f64,
-    /// The expected amount of the final output_token after all hops (human-readable format)
     pub expected_output: f64,
 
-    /// The sequence of DEX types involved in the arbitrage path
     pub dex_path: Vec<DexType>,
-    /// The sequence of pool public keys traversed
     pub pool_path: Vec<Pubkey>,
 
-    // Optional: risk/score/metadata fields
     pub risk_score: Option<f64>,
     pub notes: Option<String>,
 
-    // Fields for USD value estimation
-    pub estimated_profit_usd: Option<f64>, // Estimated profit converted to USD
-    pub input_amount_usd: Option<f64>,     // Initial input amount converted to USD
-    pub output_amount_usd: Option<f64>,    // Final output amount converted to USD
-    pub intermediate_tokens: Vec<String>, // Symbols of intermediate tokens in the path
+    pub estimated_profit_usd: Option<f64>, 
+    pub input_amount_usd: Option<f64>,     
+    pub output_amount_usd: Option<f64>,    // Made sure this is logged
+    pub intermediate_tokens: Vec<String>, 
 
-    // Fields from the former simple ArbitrageOpportunity struct, mainly for 2-hop context
-    // For multi-hop (more than 2 hops), these might represent the first and last significant pools or be less relevant.
-    // The `hops` vector is the primary source of truth for the path.
-    pub source_pool: Arc<PoolInfo>, // First pool in the chain
-    pub target_pool: Arc<PoolInfo>, // Last pool in the chain (for a simple 2-hop cycle, this would be the second pool)
+    // For 2-hop, source_pool is the first pool, target_pool is the second.
+    // For >2 hops, source is first, target is last.
+    pub source_pool: Arc<PoolInfo>, 
+    pub target_pool: Arc<PoolInfo>, 
 
-    // Mint addresses for the primary tokens involved in the cycle
-    pub input_token_mint: Pubkey,    // Mint of the initial input_token
-    pub output_token_mint: Pubkey,   // Mint of the final output_token
-    // Mint of the token after the first hop, particularly relevant for 2-hop or first step of multi-hop.
-    // For longer chains, `intermediate_tokens` symbols list might be more useful.
-    pub intermediate_token_mint: Option<Pubkey>,
+    pub input_token_mint: Pubkey,    
+    pub output_token_mint: Pubkey,   
+    // Mint of the token after the first hop for 2-hop, or first intermediate for multi-hop.
+    pub intermediate_token_mint: Option<Pubkey>, 
 }
+
+// Default implementation for easier testing or placeholder creation
+impl Default for MultiHopArbOpportunity {
+    fn default() -> Self {
+        // Create default PoolInfo instances for source and target pools
+        let default_pool_info = Arc::new(PoolInfo::default());
+        MultiHopArbOpportunity {
+            id: "default_opportunity_id".to_string(),
+            hops: vec![],
+            total_profit: 0.0,
+            profit_pct: 0.0,
+            input_token: "UNKNOWN_IN".to_string(),
+            output_token: "UNKNOWN_OUT".to_string(),
+            input_amount: 0.0,
+            expected_output: 0.0,
+            dex_path: vec![],
+            pool_path: vec![],
+            risk_score: None,
+            notes: Some("Default Opportunity".to_string()),
+            estimated_profit_usd: None,
+            input_amount_usd: None,
+            output_amount_usd: None,
+            intermediate_tokens: vec![],
+            source_pool: Arc::clone(&default_pool_info),
+            target_pool: Arc::clone(&default_pool_info),
+            input_token_mint: Pubkey::default(),
+            output_token_mint: Pubkey::default(),
+            intermediate_token_mint: None,
+        }
+    }
+}
+
 
 impl MultiHopArbOpportunity {
     /// Returns true if the opportunity's profit_pct meets or exceeds the minimum threshold.
-    /// Note: min_profit_pct here is expected as a percentage, e.g., 0.5 for 0.5%.
-    pub fn is_profitable(&self, min_profit_pct_threshold: f64) -> bool {
+    /// min_profit_pct_threshold is expected as a percentage, e.g., 0.5 for 0.5%.
+    pub fn is_profitable_by_pct(&self, min_profit_pct_threshold: f64) -> bool {
         self.profit_pct >= min_profit_pct_threshold
     }
 
+    // Added a new method to check profitability in USD, if available
+    pub fn is_profitable_by_usd(&self, min_profit_usd_threshold: f64) -> bool {
+        match self.estimated_profit_usd {
+            Some(profit_usd) => profit_usd >= min_profit_usd_threshold,
+            None => false, // If USD profit isn't estimated, consider it not meeting USD threshold
+        }
+    }
+
+
     /// Logs details of each hop in the arbitrage opportunity.
     pub fn log_hop_details(&self) {
+        if self.hops.is_empty() {
+            log::warn!("[OPP ID: {}] No hops to log.", self.id);
+            return;
+        }
         for (i, hop) in self.hops.iter().enumerate() {
             log::info!(
                 "[OPP ID: {}][HOP {}] DEX: {:?}, Pool: {}, Input: {} {:.6}, Output: {} {:.6}",
@@ -94,8 +126,13 @@ impl MultiHopArbOpportunity {
     /// Logs a summary of the multi-hop arbitrage opportunity.
     pub fn log_summary(&self) {
         let path_str = self.dex_path.iter().map(|d| format!("{:?}", d)).collect::<Vec<String>>().join(" -> ");
+        let intermediate_mints_str = self.intermediate_token_mint.map_or_else(
+            || "N/A".to_string(), 
+            |mint| mint.to_string()
+        );
+
         log::info!(
-            "[ARB OPPORTUNITY ID: {}] Path: {} | Input: {:.6} {} ({}) -> Output: {:.6} {} ({}) | Profit: {:.6} {} ({:.4}%) | Est. USD Profit: {:?} | Pools: {:?} | Notes: {}",
+            "[ARB OPPORTUNITY ID: {}] Path: {} | Input: {:.6} {} (Mint: {}) -> Output: {:.6} {} (Mint: {}) | Intermediate Mint(s): {} | Profit: {:.6} {} ({:.4}%) | Est. USD Profit: {:?}, Input USD: {:?}, Output USD: {:?} | Source Pool: {} ({}), Target Pool: {} ({}) | Pools Path: {:?} | Notes: {}",
             self.id,
             path_str,
             self.input_amount,
@@ -104,33 +141,27 @@ impl MultiHopArbOpportunity {
             self.expected_output,
             self.output_token,
             self.output_token_mint,
+            intermediate_mints_str, // Using the formatted string for Option<Pubkey>
             self.total_profit,
-            self.output_token, // Profit is in terms of the output token
+            self.output_token, 
             self.profit_pct,
             self.estimated_profit_usd.map_or_else(|| "N/A".to_string(), |p| format!("{:.2}", p)),
+            self.input_amount_usd.map_or_else(|| "N/A".to_string(), |p| format!("{:.2}", p)),
+            self.output_amount_usd.map_or_else(|| "N/A".to_string(), |p| format!("{:.2}", p)),
+            self.source_pool.name, self.source_pool.address, // Log source_pool name and address
+            self.target_pool.name, self.target_pool.address, // Log target_pool name and address
             self.pool_path,
             self.notes.as_deref().unwrap_or("N/A")
         );
         if !self.hops.is_empty() {
             self.log_hop_details();
+        } else {
+            log::warn!("[OPP ID: {}] Summary logged, but no hops were present in the opportunity.", self.id);
         }
     }
 }
 
-#[allow(dead_code)]
-/// Example analysis function (remains for context, not directly called by detector)
-pub fn analyze_arbitrage_opportunity(
-    pools: &[&PoolInfo],
-    amounts: &[TokenAmount],
-    directions: &[bool],
-    last_fee_data: &[(Option<u64>, Option<u64>, Option<u64>)],
-) -> FeeBreakdown {
-    let slippage_model = crate::arbitrage::fee_manager::XYKSlippageModel;
-    FeeManager::estimate_multi_hop_with_model(
-        pools,
-        amounts,
-        directions,
-        last_fee_data,
-        &slippage_model,
-    )
-}
+// analyze_arbitrage_opportunity was previously here.
+// It's specific to FeeManager's capabilities and less about the Opportunity struct itself.
+// If needed, it should live in `fee_manager.rs` or be a free function in `arbitrage/mod.rs`
+// that uses FeeManager. For now, removing it from here to keep this file focused on the struct.

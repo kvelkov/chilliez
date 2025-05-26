@@ -4,18 +4,30 @@
 use crate::error::ArbError;
 use anyhow::{anyhow, Result as AnyhowResult};
 use log::{debug, error, info, warn};
-use redis::{aio::ConnectionManager, AsyncCommands}; // Removed RedisError as it's not directly used
+use redis::{aio::ConnectionManager, AsyncCommands};
 use serde::{de::DeserializeOwned, Serialize};
-// Removed: use std::sync::Arc; // Not used here
-// Removed: use std::time::Duration; // Not used here
+use std::fmt; // For manual Debug impl
 
 /// A shared Redis cache client.
 /// Uses a `ConnectionManager` for automatic reconnection and resilience.
-#[derive(Clone, Debug)] // Added Debug
+#[derive(Clone)] // Removed Debug derive initially
 pub struct Cache {
-    conn_manager: ConnectionManager,
+    conn_manager: ConnectionManager, // This type might not be Debug
     default_ttl_secs: u64,
+    redis_url: String, // Store for debug purposes
 }
+
+// Manual Debug implementation for Cache
+impl fmt::Debug for Cache {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Cache")
+         .field("redis_url", &self.redis_url) // Use stored redis_url
+         .field("default_ttl_secs", &self.default_ttl_secs)
+         .field("conn_manager", &"<ConnectionManager instance>") // Placeholder for non-Debug field
+         .finish()
+    }
+}
+
 
 impl Cache {
     pub async fn new(redis_url: &str, default_ttl_secs: u64) -> AnyhowResult<Self> {
@@ -29,13 +41,9 @@ impl Cache {
         Ok(Self {
             conn_manager,
             default_ttl_secs,
+            redis_url: redis_url.to_string(), // Store for debug
         })
     }
-
-    // get_connection is not strictly needed if conn_manager.clone() is used directly.
-    // async fn get_connection(&self) -> AnyhowResult<ConnectionManager> {
-    //     Ok(self.conn_manager.clone())
-    // }
 
     fn generate_key(prefix: &str, params: &[&str]) -> String {
         let mut key = prefix.to_string();
@@ -73,7 +81,6 @@ impl Cache {
         }
     }
 
-    // Renamed from set_ex to set_json_with_ttl for clarity if preferred, or keep set_ex
     pub async fn set_ex<T: Serialize>(
         &self,
         prefix: &str,
@@ -83,10 +90,10 @@ impl Cache {
     ) -> AnyhowResult<()> {
         let key = Self::generate_key(prefix, params);
         let value_str = serde_json::to_string(value)?;
-        let mut conn = self.conn_manager.clone(); // Get a connection from the manager
+        let mut conn = self.conn_manager.clone();
         let ttl_to_use = ttl_seconds.unwrap_or(self.default_ttl_secs);
 
-        match conn.set_ex::<_, _, ()>(&key, value_str, ttl_to_use).await { // Ensure value_str is passed by ref if needed by redis crate version
+        match conn.set_ex::<_, _, ()>(&key, value_str, ttl_to_use).await {
             Ok(_) => {
                 debug!("Cache SETEX success for key: {} with TTL: {}s", key, ttl_to_use);
                 Ok(())
@@ -100,7 +107,7 @@ impl Cache {
 
     #[allow(dead_code)]
     pub async fn delete(&self, key_prefix: &str, key_params: &[&str]) -> Result<bool, ArbError> {
-        let key = Cache::generate_key(key_prefix, key_params); // Corrected call
+        let key = Cache::generate_key(key_prefix, key_params);
         debug!("Attempting to DEL cache for key: {}", key);
         let mut conn = self.conn_manager.clone();
         match conn.del::<_, i32>(&key).await {

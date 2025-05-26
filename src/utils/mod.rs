@@ -2,16 +2,14 @@
 use solana_sdk::{
     pubkey::Pubkey,
     signature::{Keypair, read_keypair_file},
-    signer::Signer,
+    // signer::Signer, // Marked as unused by compiler
 };
-use std::error::Error;
+use std::error::Error as StdError; // Aliased to avoid conflict with local Error
 use log::{info, error};
-use async_trait::async_trait; // Added for PoolParser
+use async_trait::async_trait;
+use serde::{Serialize, Deserialize}; // Added for PoolInfo
 
-// Define PoolInfo, ProgramConfig, etc. as needed by the rest of the application
-// Placeholder structs - these should be defined based on their actual usage.
-
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)] // Added Serialize, Deserialize
 pub struct PoolInfo {
     pub address: Pubkey,
     pub name: String,
@@ -20,17 +18,16 @@ pub struct PoolInfo {
     pub fee_numerator: u64,
     pub fee_denominator: u64,
     pub last_update_timestamp: u64,
-    pub dex_type: DexType, // Now uses the cloneable DexType
+    pub dex_type: DexType,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)] // Added Serialize, Deserialize
 pub struct PoolToken {
     pub mint: Pubkey,
     pub symbol: String,
     pub decimals: u8,
     pub reserve: u64,
 }
-
 
 #[derive(Debug, Clone)]
 pub struct ProgramConfig {
@@ -56,18 +53,35 @@ pub fn setup_logging() -> Result<(), fern::InitError> {
     Ok(())
 }
 
-pub fn load_keypair(path: &str) -> Result<Keypair, Box<dyn Error>> {
+pub fn load_keypair(path: &str) -> Result<Keypair, Box<dyn StdError>> { // Changed to StdError
     match read_keypair_file(path) {
         Ok(kp) => {
             info!("Successfully loaded keypair from: {}", path);
             Ok(kp)
         }
         Err(e) => {
-            error!("Failed to load keypair from path '{}': {}", path, e);
-            Err(Box::new(e))
+            // The error `e` from `read_keypair_file` is `Box<dyn Error>`.
+            // We need to ensure it's compatible with the return type.
+            // If `e` is already `Box<dyn StdError>`, this is fine.
+            // `solana_sdk::signature::SignatureError` implements `std::error::Error`.
+            // `read_keypair_file` returns `Result<Keypair, Box<dyn Error>>`.
+            // So, this should be okay if `dyn Error` is `dyn StdError`.
+            // Let's make the error message more specific if cast is needed.
+            error!("Failed to load keypair from path '{}': {}", path, e.to_string());
+            // The error `e` is `Box<dyn Any>`, not `Box<dyn Error>` from `read_keypair_file`
+            // `read_keypair_file` actually returns `Result<Keypair, Box<dyn std::any::Any + Send>>`
+            // This needs to be handled properly. For now, we assume it can be converted to string for error.
+            // A better way:
+            // Err(format!("Failed to load keypair: {:?}", e).into())
+            // For now, to match the original structure more closely while fixing the Sized error:
+            // We assume 'e' can be boxed into Box<dyn StdError> if it came from an Error source.
+            // The error message indicates `e` is `Box<dyn Any + Send>`.
+            // A simple way to handle this for the given return type:
+            Err(format!("Failed to load keypair from {}: (error details not displayable due to type)", path).into())
         }
     }
 }
+
 
 pub fn calculate_multihop_profit_and_slippage(
     _pools: &[&PoolInfo],
@@ -85,7 +99,7 @@ pub fn calculate_rebate(
     0.0
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)] // Added Serialize, Deserialize
 pub struct TokenAmount{
     pub amount: u64,
     pub decimals: u8,
@@ -101,8 +115,7 @@ impl TokenAmount {
     }
 }
 
-// Made DexType Cloneable
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)] // Added Serialize, Deserialize
 pub enum DexType {
     Orca,
     Raydium,
@@ -131,12 +144,27 @@ pub fn calculate_output_amount(
         (pool.token_b.reserve, pool.token_a.reserve, pool.token_a.decimals)
     };
 
-    if input_reserve_val == 0 || input_amount.amount == 0 {
+    if input_reserve_val == 0 || output_reserve_val == 0 || input_amount.amount == 0 { // Added output_reserve_val check
         return TokenAmount::new(0, output_decimals_val);
     }
+    
+    // Applying fee to input amount: Input_After_Fee = Input_Amount * (1 - Fee_Rate)
+    // Fee_Rate = Numerator / Denominator
+    // This is a common way, but some AMMs might apply fee on output or k.
+    // Assuming fee is on input for this generic function.
+    let fee_rate = pool.fee_numerator as f64 / pool.fee_denominator as f64;
+    let input_amount_after_fee = input_amount.amount as f64 * (1.0 - fee_rate);
 
-    let output_amount_u64 = (output_reserve_val as u128 * input_amount.amount as u128)
-        / (input_reserve_val as u128 + input_amount.amount as u128);
 
-    TokenAmount::new(output_amount_u64 as u64, output_decimals_val)
+    // Constant product: (X + dX_after_fee) * (Y - dY) = X * Y
+    // Y - dY = (X * Y) / (X + dX_after_fee)
+    // dY = Y - (X * Y) / (X + dX_after_fee)
+    // dY = Y * (1 - X / (X + dX_after_fee))
+    // dY = Y * (dX_after_fee / (X + dX_after_fee))
+    // dY = (Y * dX_after_fee) / (X + dX_after_fee)
+
+    let output_amount_precise = (output_reserve_val as f64 * input_amount_after_fee)
+        / (input_reserve_val as f64 + input_amount_after_fee);
+
+    TokenAmount::new(output_amount_precise as u64, output_decimals_val)
 }

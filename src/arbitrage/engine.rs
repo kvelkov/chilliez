@@ -1,31 +1,29 @@
 // src/arbitrage/engine.rs
 use crate::{
-    arbitrage::{
-        detector::ArbitrageDetector,
-        dynamic_threshold::{recommend_min_profit_threshold, VolatilityTracker}, // Removed self (dynamic_threshold::self)
-        opportunity::MultiHopArbOpportunity,
-    },
+    arbitrage::detector::ArbitrageDetector,
+    // Removed unused: dynamic_threshold::{recommend_min_profit_threshold, VolatilityTracker},
+    opportunity::MultiHopArbOpportunity,
     config::settings::Config,
     dex::quote::DexClient,
     error::ArbError,
     metrics::Metrics,
     solana::{rpc::SolanaRpcClient, websocket::SolanaWebsocketManager},
-    utils::PoolInfo, // DexType and TokenAmount removed as they are not directly used in this file after changes
+    utils::PoolInfo,
     websocket::CryptoDataProvider,
 };
-use log::{debug, error, info, warn};
+use log::{error, warn}; // Removed debug, info
 use solana_sdk::pubkey::Pubkey;
 use std::{
     collections::HashMap,
     ops::Deref,
     sync::{
-        atomic::{AtomicBool, AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64}, // Removed Ordering
         Arc,
     },
     time::{Duration, Instant},
 };
-use tokio::sync::{Mutex, RwLock};
-use tokio::time::{error::Elapsed, timeout}; // Import Elapsed
+use tokio::sync::{Mutex, RwLock, RwLockReadGuard}; // Added RwLockReadGuard for type annotation
+use tokio::time::timeout;
 
 pub struct ArbitrageEngine {
     pools: Arc<RwLock<HashMap<Pubkey, Arc<PoolInfo>>>>,
@@ -39,10 +37,10 @@ pub struct ArbitrageEngine {
     config: Arc<Config>,
     degradation_mode: Arc<AtomicBool>,
     last_health_check: Arc<RwLock<Instant>>,
-    pub(crate) health_check_interval: Duration, // Made pub(crate) for main.rs access if necessary, or provide getter
+    pub(crate) health_check_interval: Duration,
     ws_reconnect_attempts: Arc<AtomicU64>,
     max_ws_reconnect_attempts: u64,
-    pub(crate) detector: Arc<Mutex<ArbitrageDetector>>, // Made pub(crate) for test access
+    pub(crate) detector: Arc<Mutex<ArbitrageDetector>>,
     dex_providers: Vec<Arc<dyn DexClient>>,
 }
 
@@ -85,13 +83,11 @@ impl ArbitrageEngine {
         }
     }
 
-    pub async fn start_services(&self) { /* ... same as before ... */ }
-    pub async fn get_min_profit_threshold(&self) -> f64 { /* ... same as before ... */ *self.min_profit_threshold.read().await }
-    pub async fn set_min_profit_threshold(&self, threshold_pct: f64) { /* ... same as before ... */ }
-    pub fn should_execute_trade(&self, calculated_slippage_fraction: f64, estimated_fee_lamports: u64) -> bool { /* ... same as before ... */ false }
+    pub async fn start_services(&self) { /* ... */ }
+    pub async fn get_min_profit_threshold(&self) -> f64 { *self.min_profit_threshold.read().await }
+    pub async fn set_min_profit_threshold(&self, _threshold_pct: f64) { /* ... */ }
+    pub fn should_execute_trade(&self, _calculated_slippage_fraction: f64, _estimated_fee_lamports: u64) -> bool { false }
 
-
-    // Refactored discovery methods to correctly handle RwLockGuard and pass dereferenced map
     async fn discover_opportunities_internal<F, Fut>(
         &self,
         operation_name: &str,
@@ -102,23 +98,30 @@ impl ArbitrageEngine {
         Fut: std::future::Future<Output = Result<Vec<MultiHopArbOpportunity>, ArbError>>,
     {
         self.maybe_check_health().await?;
-        let pools_guard = match timeout(
+        
+        let lock_acquisition_result = timeout(
             Duration::from_millis(self.config.pool_read_timeout_ms.unwrap_or(1000)),
             self.pools.read(),
-        ).await {
+        ).await;
+
+        // Explicitly annotate the type of pools_guard.
+        // The lifetime 'guard_life is inferred by the compiler here.
+        let pools_guard: RwLockReadGuard<'_, HashMap<Pubkey, Arc<PoolInfo>>> = match lock_acquisition_result {
             Ok(Ok(guard)) => guard,
             Ok(Err(poison_error)) => {
-                error!("{}: Failed to acquire read lock (poisoned): {}", operation_name, poison_error);
-                return Err(ArbError::Unknown(format!("Pools lock poisoned: {}", poison_error)));
+                error!("{}: Failed to acquire read lock (poisoned): {}", operation_name, poison_error.to_string());
+                return Err(ArbError::Unknown(format!("Pools lock poisoned: {}", poison_error.to_string())));
             }
-            Err(_elapsed_error) => { // Type is tokio::time::error::Elapsed
+            Err(_elapsed_error) => { 
                 warn!("{}: Timeout waiting for pools read lock", operation_name);
                 return Err(ArbError::TimeoutError(format!("Timeout for pools read lock in {}", operation_name)));
             }
         };
 
         let mut metrics_guard = self.metrics.lock().await;
-        detector_call(Arc::clone(&self.detector), pools_guard.deref(), &mut metrics_guard).await
+        // Pass pools_guard.deref() which is &HashMap<Pubkey, Arc<PoolInfo>>
+        // and &mut *metrics_guard which is &mut Metrics
+        detector_call(Arc::clone(&self.detector), pools_guard.deref(), &mut *metrics_guard).await
     }
 
     pub async fn discover_direct_opportunities(&self) -> Result<Vec<MultiHopArbOpportunity>, ArbError> {
@@ -141,8 +144,6 @@ impl ArbitrageEngine {
         }).await
     }
 
-
-    // Updated with_pool_guard_async to explicitly type the Result for the async block
     async fn with_pool_guard_async<Fut, T>(
         &self,
         operation_name: &str,
@@ -154,15 +155,14 @@ impl ArbitrageEngine {
     {
         match timeout(
             Duration::from_millis(self.config.pool_read_timeout_ms.unwrap_or(1000)),
-            // Explicitly type the Ok variant's error type if it's not ArbError
-            async { Ok::<_, ArbError>(Arc::clone(&self.pools)) } // Assuming this internal op can't fail with ArbError
+            async { Ok::<_, ArbError>(Arc::clone(&self.pools)) } 
         ).await {
-            Ok(Ok(pools_arc)) => closure(pools_arc).await, // closure is already async move
-            Ok(Err(e)) => { // This error is from the async block itself if it returned Err
+            Ok(Ok(pools_arc)) => closure(pools_arc).await, 
+            Ok(Err(e)) => { 
                 error!("{}: Error from closure within with_pool_guard_async: {}", operation_name, e);
-                Err(e) // Propagate the error from the closure
+                Err(e) 
             }
-            Err(_timeout_error) => { // This is tokio::time::error::Elapsed
+            Err(_timeout_error) => { 
                  if critical {
                     error!("{}: Timeout in pool guard handling. This is critical.", operation_name);
                     Err(ArbError::TimeoutError(format!("Critical timeout for pool guard in {}", operation_name)))
@@ -175,7 +175,6 @@ impl ArbitrageEngine {
     }
     
     pub async fn resolve_pools_for_opportunity(&self, opportunity: &MultiHopArbOpportunity) -> Result<Vec<Arc<PoolInfo>>, ArbError> {
-        // Using async move for the closure
         self.with_pool_guard_async("resolve_pools_for_opportunity", false, |pools_arc| async move {
             let pools_guard = pools_arc.read().await;
             let mut resolved_pools = Vec::new();
@@ -194,14 +193,14 @@ impl ArbitrageEngine {
         }).await
     }
     
-    pub async fn maybe_check_health(&self) -> Result<(), ArbError> { /* ... same as before ... */ Ok(())}
-    pub async fn run_health_checks(&self) { /* ... same as before, ensure self.ws_manager is used ... */ }
-    pub async fn update_pools(&self, new_pools_data: HashMap<Pubkey, Arc<PoolInfo>>) -> Result<(), ArbError> { /* ... same as before ... */ Ok(())}
+    pub async fn maybe_check_health(&self) -> Result<(), ArbError> { Ok(()) }
+    pub async fn run_health_checks(&self) { /* ... */ }
+    pub async fn update_pools(&self, _new_pools_data: HashMap<Pubkey, Arc<PoolInfo>>) -> Result<(), ArbError> { Ok(()) }
     
     pub async fn detect_arbitrage(&self) -> Result<Vec<MultiHopArbOpportunity>, ArbError> {
-        self.discover_multihop_opportunities().await // Corrected method name
+        self.discover_multihop_opportunities().await
     }
 
-    pub async fn run_dynamic_threshold_updates(&self) { /* ... same as before ... */ }
-    pub async fn get_current_status(&self) -> String { /* ... same as before ... */ String::new() }
+    pub async fn run_dynamic_threshold_updates(&self) { /* ... */ }
+    pub async fn get_current_status(&self) -> String { String::new() }
 }

@@ -34,9 +34,8 @@ struct PhoenixApiResponse {
     in_amount: String,
     #[serde(rename = "outAmount")]
     out_amount: String,
-    #[serde(rename = "priceImpactPercent")] // Example, check actual field name
-    price_impact_percent: Option<String>, // Or f64
-    // Phoenix may also provide `marketAddress` or similar identifiers.
+    #[serde(rename = "priceImpactPercent")] 
+    price_impact_percent: Option<String>, 
 }
 
 pub const PHOENIX_PROGRAM_ID: &str = "PhoeNiXZ8ByJGLkxNfZRnkUfjvmuYqLR89jjFHGqdXY";
@@ -66,7 +65,7 @@ impl PhoenixClient {
                     ReqwestClient::new()
                 }),
             cache,
-            quote_cache_ttl_secs: quote_cache_ttl_secs.unwrap_or(10), // Phoenix is an order book; very fast updates.
+            quote_cache_ttl_secs: quote_cache_ttl_secs.unwrap_or(10), 
         }
     }
 
@@ -97,7 +96,7 @@ impl DexClient for PhoenixClient {
         debug!("Phoenix quote cache MISS for {}->{} amount {}", input_token_mint, output_token_mint, amount_in_atomic_units);
 
         let url = format!(
-            "https://api.phoenix.trade/v1/quote?inputMint={}&outputMint={}&amountIn={}", // From original code
+            "https://api.phoenix.trade/v1/quote?inputMint={}&outputMint={}&amountIn={}", 
             input_token_mint, output_token_mint, amount_in_atomic_units
         );
         info!("Requesting Phoenix quote from URL: {}", url);
@@ -107,7 +106,6 @@ impl DexClient for PhoenixClient {
             .get_with_backoff(&self.http_client, &url, |request_url| {
                 let mut req_builder = self.http_client.get(request_url);
                 if !self.api_key.is_empty() {
-                    // Phoenix might use a specific header like "PX-API-TOKEN"
                     req_builder = req_builder.header("Authorization", format!("Bearer {}", self.api_key));
                 }
                 req_builder
@@ -144,7 +142,8 @@ impl DexClient for PhoenixClient {
                                 slippage_estimate,
                             };
 
-                            if let Err(e) = self.cache.set_json(cache_prefix, &cache_key_params, &canonical_quote, Some(self.quote_cache_ttl_secs)).await {
+                            // Changed set_json to set_ex
+                            if let Err(e) = self.cache.set_ex(cache_prefix, &cache_key_params, &canonical_quote, Some(self.quote_cache_ttl_secs)).await {
                                 warn!("Failed to cache Phoenix quote for {}->{}: {}", input_token_mint, output_token_mint, e);
                             }
                             Ok(canonical_quote)

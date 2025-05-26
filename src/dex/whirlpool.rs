@@ -142,7 +142,8 @@ impl DexClient for WhirlpoolClient {
                                 slippage_estimate: None, // Populate if API provides
                             };
 
-                            if let Err(e) = self.cache.set_json(cache_prefix, &cache_key_params, &canonical_quote, Some(self.quote_cache_ttl_secs)).await {
+                            // Changed set_json to set_ex
+                            if let Err(e) = self.cache.set_ex(cache_prefix, &cache_key_params, &canonical_quote, Some(self.quote_cache_ttl_secs)).await {
                                 warn!("Failed to cache Whirlpool quote for {}->{}: {}", input_token_mint, output_token_mint, e);
                             }
                             Ok(canonical_quote)

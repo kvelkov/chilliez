@@ -3,7 +3,7 @@ use crate::arbitrage::opportunity::MultiHopArbOpportunity;
 use crate::error::{ArbError, RetryPolicy};
 use crate::solana::rpc::SolanaRpcClient;
 
-use log::{debug, error, info, warn}; // Added debug
+use log::{debug, error, info, warn}; // Ensure debug is here
 use solana_client::nonblocking::rpc_client::RpcClient as NonBlockingRpcClient;
 use solana_client::rpc_config::RpcSimulateTransactionConfig;
 use solana_sdk::{
@@ -12,8 +12,7 @@ use solana_sdk::{
     signature::{Keypair, Signature, Signer},
     transaction::Transaction,
 };
-// use solana_account_decoder::UiAccountEncoding; // Removed unused import
-use solana_transaction_status::UiTransactionEncoding; // Requires solana-transaction-status in Cargo.toml
+use solana_transaction_status::UiTransactionEncoding; // Assumes solana-transaction-status is in Cargo.toml
 
 use std::sync::{
     atomic::{AtomicBool, AtomicU64, Ordering},
@@ -120,12 +119,12 @@ impl ArbitrageExecutor {
         }
 
 
-        if self.paper_trading_mode { // self.paper_trading_mode is bool
+        if self.paper_trading_mode {
             info!("[PAPER TRADING] Simulated execution for opportunity ID: {}", opportunity.id);
             return Ok(Signature::default()); 
         }
 
-        if self.simulation_mode && !self.paper_trading_mode { // self.simulation_mode and self.paper_trading_mode are bool
+        if self.simulation_mode && !self.paper_trading_mode { 
             info!("[SIMULATION MODE] Simulating execution for opportunity ID: {}", opportunity.id);
             return Ok(Signature::new_unique());
         }
@@ -199,7 +198,7 @@ impl ArbitrageExecutor {
             sig_verify: false,
             replace_recent_blockhash: true,
             commitment: Some(solana_sdk::commitment_config::CommitmentConfig::confirmed()),
-            encoding: Some(UiTransactionEncoding::Base64), // Using UiTransactionEncoding
+            encoding: Some(UiTransactionEncoding::Base64), 
             accounts: None, 
             min_context_slot: None,
             inner_instructions: Some(false), 

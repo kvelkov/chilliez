@@ -18,7 +18,7 @@ use std::{
     sync::{atomic::{AtomicBool, AtomicU64}, Arc},
     time::{Duration, Instant},
 };
-use tokio::sync::{Mutex, RwLock, RwLockReadGuard};
+use tokio::sync::{Mutex, RwLock}; // Removed RwLockReadGuard as 'guard' will be used directly
 use tokio::time::timeout;
 
 pub struct ArbitrageEngine {
@@ -95,35 +95,29 @@ impl ArbitrageEngine {
     {
         self.maybe_check_health().await?;
         
-        let opportunities_result = { // Scoping the guards
-            let lock_acquisition_result = timeout( // This is line 109 in the error messages for "related information"
-                Duration::from_millis(self.config.pool_read_timeout_ms.unwrap_or(1000)),
-                self.pools.read(),
-            ).await;
+        let lock_acquisition_result = timeout( // Line 105 in error's related info
+            Duration::from_millis(self.config.pool_read_timeout_ms.unwrap_or(1000)),
+            self.pools.read(),
+        ).await;
 
-            // Explicitly typed guard
-            let pools_guard: RwLockReadGuard<'_, HashMap<Pubkey, Arc<PoolInfo>>> = match lock_acquisition_result {
-                Ok(Ok(guard)) => guard, // If this arm, pools_guard is RwLockReadGuard
-                Ok(Err(poison_error)) => {
-                    error!("{}: Failed to acquire read lock (poisoned): {}", operation_name, poison_error.to_string());
-                    return Err(ArbError::Unknown(format!("Pools lock poisoned: {}", poison_error.to_string())));
-                }
-                Err(_elapsed_error) => { 
-                    warn!("{}: Timeout waiting for pools read lock", operation_name);
-                    return Err(ArbError::TimeoutError(format!("Timeout for pools read lock in {}", operation_name)));
-                }
-            };
-
-            let mut metrics_guard = self.metrics.lock().await;
-            // Lines 110/111 from error message refer to these arguments in the call below
-            detector_call(
-                Arc::clone(&self.detector),
-                pools_guard.deref(), // This should be &HashMap<...>
-                &mut *metrics_guard  // This should be &mut Metrics
-            ).await
-        };
-        
-        opportunities_result
+        match lock_acquisition_result {
+            Ok(Ok(guard)) => { // 'guard' is RwLockReadGuard. Error line 106/107 points to params of detector_call.
+                let mut metrics_guard = self.metrics.lock().await;
+                detector_call(
+                    Arc::clone(&self.detector),
+                    guard.deref(), // Use guard directly
+                    &mut *metrics_guard
+                ).await // This call site is where the lifetime errors (130, 136, 144) originate
+            }
+            Ok(Err(poison_error)) => {
+                error!("{}: Failed to acquire read lock (poisoned): {}", operation_name, poison_error.to_string());
+                Err(ArbError::Unknown(format!("Pools lock poisoned: {}", poison_error.to_string())))
+            }
+            Err(_elapsed_error) => { 
+                warn!("{}: Timeout waiting for pools read lock", operation_name);
+                Err(ArbError::TimeoutError(format!("Timeout for pools read lock in {}", operation_name)))
+            }
+        }
     }
 
     pub async fn discover_direct_opportunities(&self) -> Result<Vec<MultiHopArbOpportunity>, ArbError> {

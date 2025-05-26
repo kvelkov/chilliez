@@ -1,7 +1,6 @@
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 use thiserror::Error;
-// use rand::Rng; // Was already removed
 
 #[derive(Error, Debug)]
 pub enum ArbError {
@@ -89,12 +88,12 @@ impl From<solana_client::client_error::ClientError> for ArbError {
     }
 }
 
-// The errors regarding variable `s` (lines 161-167 in your error list) likely refer to a
+// The errors regarding variable `s` (lines 122-127 in your error list) likely refer to a
 // local version of this From<anyhow::Error> implementation that is different from
 // the file content provided to me. The implementation below is based on the
 // uploaded file content, which does not use `s` in a problematic way.
 // Please inspect your local file for the `impl From<anyhow::Error> for ArbError` function
-// around lines 161-167 to fix the issue with variable `s`.
+// around lines 122-127 to fix the issue with variable `s`.
 impl From<anyhow::Error> for ArbError {
     fn from(error: anyhow::Error) -> Self {
         let error_str = error.to_string();
@@ -104,8 +103,8 @@ impl From<anyhow::Error> for ArbError {
             let expected_str = error_str.split("expected ").nth(1).and_then(|val| val.split('%').next());
             let actual_str = error_str.split("actual ").nth(1).and_then(|val| val.split('%').next());
 
-            if let (Some(exp_s), Some(act_s)) = (expected_str, actual_str) {
-                if let (Ok(expected), Ok(actual)) = (exp_s.parse::<f64>(), act_s.parse::<f64>()) {
+            if let (Some(exp_s_val), Some(act_s_val)) = (expected_str, actual_str) { // Renamed internal s to s_val to avoid confusion
+                if let (Ok(expected), Ok(actual)) = (exp_s_val.parse::<f64>(), act_s_val.parse::<f64>()) {
                     return ArbError::SlippageTooHigh { expected, actual };
                 }
             }
@@ -124,8 +123,8 @@ impl ArbError {
             | ArbError::NetworkCongestion(_)
             | ArbError::Recoverable(_)
             | ArbError::WebSocketError(_)
-            | ArbError::SolanaRpcError(s) if s.contains("blockhash not found") || s.contains("slot unavailable") || s.contains("connection closed") || s.contains("node is behind") => true,
-            ArbError::RpcError(s) if s.contains("blockhash not found") || s.contains("slot unavailable") || s.contains("connection closed") || s.contains("node is behind") => true,
+            | ArbError::SolanaRpcError(s_val) if s_val.contains("blockhash not found") || s_val.contains("slot unavailable") || s_val.contains("connection closed") || s_val.contains("node is behind") => true, // Renamed s to s_val
+            ArbError::RpcError(s_val) if s_val.contains("blockhash not found") || s_val.contains("slot unavailable") || s_val.contains("connection closed") || s_val.contains("node is behind") => true, // Renamed s to s_val
             _ => false,
         }
     }
@@ -188,7 +187,7 @@ impl RetryPolicy {
     pub fn new(max_attempts: u32, base_delay_ms: u64, max_delay_ms: u64, jitter_factor: f64) -> Self {
         Self { max_attempts, base_delay_ms, max_delay_ms, jitter_factor: jitter_factor.clamp(0.0, 1.0) }
     }
-    pub fn delay_for_attempt(&self, _attempt: u32) -> Duration { Duration::from_millis(0)} // Prefixed unused attempt
+    pub fn delay_for_attempt(&self, _attempt: u32) -> Duration { Duration::from_millis(0)}
     pub async fn execute<F, Fut, T>(&self, f: F) -> Result<T, ArbError>
     where F: Fn() -> Fut, Fut: std::future::Future<Output = Result<T, ArbError>>,
     { f().await } 

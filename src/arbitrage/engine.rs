@@ -8,9 +8,7 @@ use crate::{
     metrics::Metrics,
     solana::{rpc::SolanaRpcClient, websocket::SolanaWebsocketManager},
     utils::PoolInfo,
-    websocket::CryptoDataProvider, // This was previously removed due to an 'unused' warning in main.rs,
-                                   // but engine.rs itself might use it via self.price_provider. Let's keep if self.price_provider is used.
-                                   // Checking struct: self.price_provider IS Option<Arc<dyn CryptoDataProvider ...>>. So this import is needed here.
+    websocket::CryptoDataProvider,
 };
 use log::{error, warn};
 use solana_sdk::pubkey::Pubkey;
@@ -20,12 +18,12 @@ use std::{
     sync::{
         atomic::{AtomicBool, AtomicU64},
         Arc,
-    }, // Corrected potential trailing comma issue here if any.
+    },
     time::{Duration, Instant},
 };
-// Ensuring imports are clean:
-use tokio::sync::{Mutex, RwLock}; // Line 21 from error. This syntax is correct.
-use tokio::time::timeout;
+use tokio::sync::{Mutex, RwLock};
+use tokio::time::{timeout};
+use tokio::time::error::Elapsed;
 
 pub struct ArbitrageEngine {
     pools: Arc<RwLock<HashMap<Pubkey, Arc<PoolInfo>>>>,
@@ -115,102 +113,115 @@ impl ArbitrageEngine {
     {
         self.maybe_check_health().await?;
 
-        // Line 103 in new error list's related info for type mismatch
-        let lock_acquisition_result = timeout(
+        // Step 1: Handle Timeout (Tokio async locks do not return poison errors)
+        let guard = match timeout(
             Duration::from_millis(self.config.pool_read_timeout_ms.unwrap_or(1000)),
             self.pools.read(),
         )
-        .await;
-
-        match lock_acquisition_result {
-            Ok(Ok(guard)) => {
-                // 'guard' is RwLockReadGuard.
-                // Error lines 104 & 107 (new list) are for params of detector_call: guard.deref() and &mut *metrics_guard
-                let mut metrics_guard = self.metrics.lock().await;
-                detector_call(
-                    Arc::clone(&self.detector),
-                    guard.deref(),
-                    &mut *metrics_guard,
-                )
-                .await
-            }
-            Ok(Err(poison_error)) => {
-                error!(
-                    "{}: Failed to acquire read lock (poisoned): {}",
-                    operation_name,
-                    poison_error.to_string()
-                );
-                Err(ArbError::Unknown(format!(
-                    "Pools lock poisoned: {}",
-                    poison_error.to_string()
-                )))
-            }
-            Err(_elapsed_error) => {
+        .await
+        {
+            Ok(g) => g, // Successfully acquired lock
+            Err(_elapsed) => {
                 warn!("{}: Timeout waiting for pools read lock", operation_name);
-                Err(ArbError::TimeoutError(format!(
+                return Err(ArbError::TimeoutError(format!(
                     "Timeout for pools read lock in {}",
                     operation_name
-                )))
+                )));
             }
-        }
+        };
+
+        let mut metrics_guard = self.metrics.lock().await;
+        detector_call(
+            Arc::clone(&self.detector),
+            guard.deref(),
+            &mut *metrics_guard,
+        )
+        .await
     }
 
     pub async fn discover_direct_opportunities(
         &self,
     ) -> Result<Vec<MultiHopArbOpportunity>, ArbError> {
-        self.discover_opportunities_internal(
-            "discover_direct_opportunities",
-            |detector, pools_map, metrics| async move {
-                // Line 124 for lifetime error
-                detector
-                    .lock()
-                    .await
-                    .find_all_opportunities(pools_map, metrics)
-                    .await
-            },
+        self.maybe_check_health().await?;
+        let guard = match timeout(
+            Duration::from_millis(self.config.pool_read_timeout_ms.unwrap_or(1000)),
+            self.pools.read(),
         )
         .await
+        {
+            Ok(g) => g,
+            Err(_elapsed) => {
+                warn!("discover_direct_opportunities: Timeout waiting for pools read lock");
+                return Err(ArbError::TimeoutError(
+                    "Timeout for pools read lock in discover_direct_opportunities".to_string(),
+                ));
+            }
+        };
+        let mut metrics_guard = self.metrics.lock().await;
+        self.detector
+            .lock()
+            .await
+            .find_all_opportunities(guard.deref(), &mut *metrics_guard)
+            .await
     }
 
     pub async fn discover_multihop_opportunities(
         &self,
     ) -> Result<Vec<MultiHopArbOpportunity>, ArbError> {
-        self.discover_opportunities_internal(
-            "discover_multihop_opportunities",
-            |detector, pools_map, metrics| async move {
-                // Line 130 for lifetime error
-                detector
-                    .lock()
-                    .await
-                    .find_all_multihop_opportunities(pools_map, metrics)
-                    .await
-            },
+        self.maybe_check_health().await?;
+        let guard = match timeout(
+            Duration::from_millis(self.config.pool_read_timeout_ms.unwrap_or(1000)),
+            self.pools.read(),
         )
         .await
+        {
+            Ok(g) => g,
+            Err(_elapsed) => {
+                warn!("discover_multihop_opportunities: Timeout waiting for pools read lock");
+                return Err(ArbError::TimeoutError(
+                    "Timeout for pools read lock in discover_multihop_opportunities".to_string(),
+                ));
+            }
+        };
+        let mut metrics_guard = self.metrics.lock().await;
+        self.detector
+            .lock()
+            .await
+            .find_all_multihop_opportunities(guard.deref(), &mut *metrics_guard)
+            .await
     }
 
     pub async fn discover_multihop_opportunities_with_risk(
         &self,
     ) -> Result<Vec<MultiHopArbOpportunity>, ArbError> {
-        let max_slippage = self.max_slippage;
-        let tx_fee_lamports = self.tx_fee_lamports;
-        self.discover_opportunities_internal(
-            "discover_multihop_opportunities_with_risk",
-            move |detector, pools_map, metrics| async move {
-                // Line 138 for lifetime error
-                detector
-                    .lock()
-                    .await
-                    .find_all_multihop_opportunities_with_risk(
-                        pools_map,
-                        metrics,
-                        max_slippage,
-                        tx_fee_lamports,
-                    )
-                    .await
-            },
+        self.maybe_check_health().await?;
+        let guard = match timeout(
+            Duration::from_millis(self.config.pool_read_timeout_ms.unwrap_or(1000)),
+            self.pools.read(),
         )
         .await
+        {
+            Ok(g) => g,
+            Err(_elapsed) => {
+                warn!("discover_multihop_opportunities_with_risk: Timeout waiting for pools read lock");
+                return Err(ArbError::TimeoutError(
+                    "Timeout for pools read lock in discover_multihop_opportunities_with_risk".to_string(),
+                ));
+            }
+        };
+        let mut metrics_guard = self.metrics.lock().await;
+        let max_slippage = self.max_slippage;
+        let tx_fee_lamports = self.tx_fee_lamports;
+        self.detector
+            .lock()
+            .await
+            .find_all_multihop_opportunities_with_risk(
+                guard.deref(),
+                &mut *metrics_guard,
+                max_slippage,
+                tx_fee_lamports,
+            )
+            .await
     }
 
     async fn with_pool_guard_async<Fut, T>(

@@ -44,73 +44,99 @@ pub enum ArbError {
 
 impl From<solana_client::client_error::ClientError> for ArbError {
     fn from(error: solana_client::client_error::ClientError) -> Self {
-        let error_str = error.to_string(); 
+        let error_str = error.to_string();
 
         match error.kind() {
             solana_client::client_error::ClientErrorKind::RpcError(rpc_err_kind) => {
-                if error_str.contains("Node is behind") || error_str.contains("SlotSkipped") || error_str.contains("slot was not processed") {
-                    ArbError::NetworkCongestion(format!("RPC Node Sync/Slot Issue: {} (Kind: {:?})", error_str, rpc_err_kind))
+                if error_str.contains("Node is behind")
+                    || error_str.contains("SlotSkipped")
+                    || error_str.contains("slot was not processed")
+                {
+                    ArbError::NetworkCongestion(format!(
+                        "RPC Node Sync/Slot Issue: {} (Kind: {:?})",
+                        error_str, rpc_err_kind
+                    ))
                 } else if error_str.contains("blockhash not found") {
-                    ArbError::Recoverable(format!("BlockhashNotFound: {} (Kind: {:?})", error_str, rpc_err_kind))
-                } else if error_str.contains("Դ") { 
-                    ArbError::RateLimitExceeded(format!("Specific RPC Error Code (e.g. rate limit): {} (Kind: {:?})", error_str, rpc_err_kind))
-                }
-                else {
+                    ArbError::Recoverable(format!(
+                        "BlockhashNotFound: {} (Kind: {:?})",
+                        error_str, rpc_err_kind
+                    ))
+                } else if error_str.contains("Դ") {
+                    ArbError::RateLimitExceeded(format!(
+                        "Specific RPC Error Code (e.g. rate limit): {} (Kind: {:?})",
+                        error_str, rpc_err_kind
+                    ))
+                } else {
                     ArbError::RpcError(format!("{} (Kind: {:?})", error_str, rpc_err_kind))
                 }
             }
-            solana_client::client_error::ClientErrorKind::TransactionError(solana_transaction_error) => {
+            solana_client::client_error::ClientErrorKind::TransactionError(
+                solana_transaction_error,
+            ) => {
                 if error_str.contains("Transaction simulation failed") {
-                    ArbError::SimulationFailed(format!("{} (Kind: TransactionError({:?}))", error_str, solana_transaction_error))
+                    ArbError::SimulationFailed(format!(
+                        "{} (Kind: TransactionError({:?}))",
+                        error_str, solana_transaction_error
+                    ))
                 } else {
-                    ArbError::TransactionError(format!("{} (Kind: TransactionError({:?}))", error_str, solana_transaction_error))
+                    ArbError::TransactionError(format!(
+                        "{} (Kind: TransactionError({:?}))",
+                        error_str, solana_transaction_error
+                    ))
                 }
             }
-            solana_client::client_error::ClientErrorKind::Reqwest(e) => {
-                 ArbError::RpcError(format!("HTTP Request Error: {} (Kind: Reqwest({}))", error_str, e))
-            }
-            _ => { 
+            solana_client::client_error::ClientErrorKind::Reqwest(e) => ArbError::RpcError(
+                format!("HTTP Request Error: {} (Kind: Reqwest({}))", error_str, e),
+            ),
+            _ => {
                 if error_str.contains("rate limit") || error_str.contains("429") {
                     ArbError::RateLimitExceeded(format!("{} (Kind: {:?})", error_str, error.kind()))
                 } else if error_str.contains("timeout") || error_str.contains("timed out") {
                     ArbError::TimeoutError(format!("{} (Kind: {:?})", error_str, error.kind()))
                 } else if error_str.contains("insufficient") || error_str.contains("liquidity") {
-                    ArbError::InsufficientLiquidity(format!("{} (Kind: {:?})", error_str, error.kind()))
-                } else if error_str.contains("simulation") { 
+                    ArbError::InsufficientLiquidity(format!(
+                        "{} (Kind: {:?})",
+                        error_str,
+                        error.kind()
+                    ))
+                } else if error_str.contains("simulation") {
                     ArbError::SimulationFailed(format!("{} (Kind: {:?})", error_str, error.kind()))
                 } else if error_str.contains("congestion") || error_str.contains("busy") {
                     ArbError::NetworkCongestion(format!("{} (Kind: {:?})", error_str, error.kind()))
                 } else {
-                    ArbError::SolanaRpcError(format!("{} (Kind: {:?})", error_str, error.kind())) 
+                    ArbError::SolanaRpcError(format!("{} (Kind: {:?})", error_str, error.kind()))
                 }
             }
         }
     }
 }
 
-// The errors you reported for `s_val` (lines 123-128 of your error list)
-// occur in this function in YOUR LOCAL FILE. The version of this function in 
-// the files previously provided to me does NOT produce these errors with `s_val` 
-// as it scopes string processing correctly within the `if/else if` block for slippage.
-// You must compare your local version of this function with the one below
-// and identify in YOUR LOCAL FILE where `s_val` is being declared or used 
-// across different scopes in a way that causes it to be unbound in some patterns 
-// or possibly uninitialized.
 impl From<anyhow::Error> for ArbError {
     fn from(error: anyhow::Error) -> Self {
         let error_str = error.to_string();
         if error_str.contains("timeout") || error_str.contains("timed out") {
             ArbError::TimeoutError(error_str)
         } else if error_str.contains("slippage") {
-            let expected_str = error_str.split("expected ").nth(1).and_then(|val| val.split('%').next());
-            let actual_str = error_str.split("actual ").nth(1).and_then(|val| val.split('%').next());
+            let expected_str = error_str
+                .split("expected ")
+                .nth(1)
+                .and_then(|val| val.split('%').next());
+            let actual_str = error_str
+                .split("actual ")
+                .nth(1)
+                .and_then(|val| val.split('%').next());
 
             if let (Some(exp_s_val), Some(act_s_val)) = (expected_str, actual_str) {
-                if let (Ok(expected), Ok(actual)) = (exp_s_val.parse::<f64>(), act_s_val.parse::<f64>()) {
+                if let (Ok(expected), Ok(actual)) =
+                    (exp_s_val.parse::<f64>(), act_s_val.parse::<f64>())
+                {
                     return ArbError::SlippageTooHigh { expected, actual };
                 }
             }
-            ArbError::ExecutionError(format!("Slippage error (details not fully parsed): {}", error_str))
+            ArbError::ExecutionError(format!(
+                "Slippage error (details not fully parsed): {}",
+                error_str
+            ))
         } else {
             ArbError::Unknown(error_str)
         }
@@ -124,9 +150,23 @@ impl ArbError {
             | ArbError::TimeoutError(_)
             | ArbError::NetworkCongestion(_)
             | ArbError::Recoverable(_)
-            | ArbError::WebSocketError(_)
-            | ArbError::SolanaRpcError(s_val) if s_val.contains("blockhash not found") || s_val.contains("slot unavailable") || s_val.contains("connection closed") || s_val.contains("node is behind") => true,
-            ArbError::RpcError(s_val) if s_val.contains("blockhash not found") || s_val.contains("slot unavailable") || s_val.contains("connection closed") || s_val.contains("node is behind") => true,
+            | ArbError::WebSocketError(_) => true,
+            ArbError::SolanaRpcError(s_val)
+                if s_val.contains("blockhash not found")
+                    || s_val.contains("slot unavailable")
+                    || s_val.contains("connection closed")
+                    || s_val.contains("node is behind") =>
+            {
+                true
+            }
+            ArbError::RpcError(s_val)
+                if s_val.contains("blockhash not found")
+                    || s_val.contains("slot unavailable")
+                    || s_val.contains("connection closed")
+                    || s_val.contains("node is behind") =>
+            {
+                true
+            }
             _ => false,
         }
     }
@@ -137,13 +177,22 @@ impl ArbError {
 
     pub fn categorize(self) -> Self {
         match &self {
-            ArbError::RpcError(msg) | ArbError::SolanaRpcError(msg) | ArbError::DexError(msg) | ArbError::ExecutionError(msg) => {
-                if msg.contains("timeout") || msg.contains("rate limit") || msg.contains("congestion") {
+            ArbError::RpcError(msg)
+            | ArbError::SolanaRpcError(msg)
+            | ArbError::DexError(msg)
+            | ArbError::ExecutionError(msg) => {
+                if msg.contains("timeout")
+                    || msg.contains("rate limit")
+                    || msg.contains("congestion")
+                {
                     ArbError::Recoverable(msg.clone())
-                } else if msg.contains("insufficient") || msg.contains("rejected") || msg.contains("invalid") {
+                } else if msg.contains("insufficient")
+                    || msg.contains("rejected")
+                    || msg.contains("invalid")
+                {
                     ArbError::NonRecoverable(msg.clone())
                 } else {
-                    self 
+                    self
                 }
             }
             _ => self,
@@ -165,32 +214,74 @@ pub struct CircuitBreaker {
 }
 
 impl CircuitBreaker {
-    pub fn new( name: &str, error_threshold: u64, success_threshold: u64, error_window: Duration, reset_timeout: Duration) -> Self {
+    pub fn new(
+        name: &str,
+        error_threshold: u64,
+        success_threshold: u64,
+        error_window: Duration,
+        reset_timeout: Duration,
+    ) -> Self {
         Self {
-            is_open: AtomicBool::new(false), opened_at: std::sync::Mutex::new(None), reset_timeout,
-            error_count: AtomicU64::new(0), success_count: AtomicU64::new(0),
-            error_threshold, success_threshold, error_window,
-            last_error: std::sync::Mutex::new(None), name: name.to_string(),
+            is_open: AtomicBool::new(false),
+            opened_at: std::sync::Mutex::new(None),
+            reset_timeout,
+            error_count: AtomicU64::new(0),
+            success_count: AtomicU64::new(0),
+            error_threshold,
+            success_threshold,
+            error_window,
+            last_error: std::sync::Mutex::new(None),
+            name: name.to_string(),
         }
     }
-    pub fn is_open(&self) -> bool { self.is_open.load(Ordering::Relaxed) }
-    pub fn record_success(&self) { /* ... */ }
-    pub fn record_failure(&self) -> Result<(), ArbError> { Ok(())} 
+    pub fn is_open(&self) -> bool {
+        self.is_open.load(Ordering::Relaxed)
+    }
+    pub fn record_success(&self) { /* ... */
+    }
+    pub fn record_failure(&self) -> Result<(), ArbError> {
+        Ok(())
+    }
     pub async fn execute<F, Fut, T, E>(&self, f: F) -> Result<T, ArbError>
-    where F: Fn() -> Fut, Fut: std::future::Future<Output = Result<T, E>>, E: Into<ArbError>,
-    { f().await.map_err(Into::into) } 
-    pub fn reset(&self) { /* ... */ }
+    where
+        F: Fn() -> Fut,
+        Fut: std::future::Future<Output = Result<T, E>>,
+        E: Into<ArbError>,
+    {
+        f().await.map_err(Into::into)
+    }
+    pub fn reset(&self) { /* ... */
+    }
 }
 
 pub struct RetryPolicy {
-    max_attempts: u32, base_delay_ms: u64, max_delay_ms: u64, jitter_factor: f64,
+    max_attempts: u32,
+    base_delay_ms: u64,
+    max_delay_ms: u64,
+    jitter_factor: f64,
 }
 impl RetryPolicy {
-    pub fn new(max_attempts: u32, base_delay_ms: u64, max_delay_ms: u64, jitter_factor: f64) -> Self {
-        Self { max_attempts, base_delay_ms, max_delay_ms, jitter_factor: jitter_factor.clamp(0.0, 1.0) }
+    pub fn new(
+        max_attempts: u32,
+        base_delay_ms: u64,
+        max_delay_ms: u64,
+        jitter_factor: f64,
+    ) -> Self {
+        Self {
+            max_attempts,
+            base_delay_ms,
+            max_delay_ms,
+            jitter_factor: jitter_factor.clamp(0.0, 1.0),
+        }
     }
-    pub fn delay_for_attempt(&self, _attempt: u32) -> Duration { Duration::from_millis(0)}
+    pub fn delay_for_attempt(&self, _attempt: u32) -> Duration {
+        Duration::from_millis(0)
+    }
     pub async fn execute<F, Fut, T>(&self, f: F) -> Result<T, ArbError>
-    where F: Fn() -> Fut, Fut: std::future::Future<Output = Result<T, ArbError>>,
-    { f().await } 
+    where
+        F: Fn() -> Fut,
+        Fut: std::future::Future<Output = Result<T, ArbError>>,
+    {
+        f().await
+    }
 }

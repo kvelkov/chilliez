@@ -80,6 +80,12 @@ impl ArbitrageExecutor {
             self.network_congestion
                 .store((factor * 100.0) as u64, Ordering::Relaxed);
             info!("Network congestion factor updated to: {:.2}", factor);
+            // Example: if congestion is high, enable degradation mode
+            if factor > 2.0 {
+                self.degradation_mode.store(true, Ordering::Relaxed);
+            } else {
+                self.degradation_mode.store(false, Ordering::Relaxed);
+            }
         } else {
             debug!("SolanaRpcClient (for HA) not available for congestion update, using default.");
             self.network_congestion.store(100, Ordering::Relaxed);
@@ -88,10 +94,12 @@ impl ArbitrageExecutor {
     }
 
     pub fn has_banned_tokens(&self, _opportunity: &MultiHopArbOpportunity) -> bool {
+        // Placeholder for banned token logic
         false
     }
 
     pub fn has_multihop_banned_tokens(&self, _opportunity: &MultiHopArbOpportunity) -> bool {
+        // Placeholder for multihop banned token logic
         false
     }
 
@@ -104,8 +112,19 @@ impl ArbitrageExecutor {
                 "Opportunity ID: {} involves a banned token pair. Skipping.",
                 opportunity.id
             );
+            self.record_token_pair_failure(&opportunity.id, "BannedTokenPair");
             return Err(ArbError::ExecutionError(
                 "Opportunity involves banned token pair".to_string(),
+            ));
+        }
+        if self.has_multihop_banned_tokens(opportunity) {
+            warn!(
+                "Opportunity ID: {} involves a banned token in multihop. Skipping.",
+                opportunity.id
+            );
+            self.record_token_pair_failure(&opportunity.id, "BannedMultiHopToken");
+            return Err(ArbError::ExecutionError(
+                "Opportunity involves banned token in multihop".to_string(),
             ));
         }
 
@@ -116,6 +135,20 @@ impl ArbitrageExecutor {
         );
         opportunity.log_summary();
 
+        // Degradation mode logic
+        if self.degradation_mode.load(Ordering::Relaxed) {
+            if opportunity.profit_pct < self.degradation_profit_threshold {
+                warn!(
+                    "Degradation mode active. Skipping opportunity ID: {} due to profit threshold ({} < {}).",
+                    opportunity.id, opportunity.profit_pct, self.degradation_profit_threshold
+                );
+                self.record_token_pair_failure(&opportunity.id, "DegradationModeProfitThreshold");
+                return Err(ArbError::ExecutionError(
+                    "Degradation mode: profit below threshold".to_string(),
+                ));
+            }
+        }
+
         let instructions = match self.build_instructions_from_multihop(opportunity) {
             Ok(instr) => instr,
             Err(e) => {
@@ -123,18 +156,19 @@ impl ArbitrageExecutor {
                     "Failed to build instructions for opportunity ID {}: {}",
                     opportunity.id, e
                 );
+                self.record_token_pair_failure(&opportunity.id, &format!("InstructionBuild: {}", e));
                 return Err(e);
             }
         };
 
         if instructions.len() <= 1 && !self.paper_trading_mode && !self.simulation_mode {
             error!("No actual swap instructions were built for opportunity ID: {}. Aborting execution.", opportunity.id);
+            self.record_token_pair_failure(&opportunity.id, "NoSwapInstructions");
             return Err(ArbError::ExecutionError(
                 "No swap instructions built".to_string(),
             ));
         }
 
-        // Error for paper_trading_mode (line 205 in your new list) would be here IF self.paper_trading_mode was Option<bool>
         if self.paper_trading_mode {
             info!(
                 "[PAPER TRADING] Simulated execution for opportunity ID: {}",
@@ -159,11 +193,15 @@ impl ArbitrageExecutor {
             recent_blockhash,
         );
 
+        // Use priority_fee if needed (for demonstration, not actually used in Transaction::new_signed_with_payer)
+        let _priority_fee = self.priority_fee;
+
         if start_time.elapsed() > self.max_timeout {
             warn!(
                 "Max timeout reached before sending transaction for opportunity ID: {}",
                 opportunity.id
             );
+            self.record_token_pair_failure(&opportunity.id, "TimeoutBeforeSend");
             return Err(ArbError::TimeoutError(
                 "Transaction construction timeout".to_string(),
             ));
@@ -220,12 +258,18 @@ impl ArbitrageExecutor {
         &self,
         _opportunity: &MultiHopArbOpportunity,
     ) -> Result<Vec<Instruction>, ArbError> {
+        // TODO: Implement actual instruction building logic
         warn!("build_instructions_from_multihop is a stub. No actual swap instructions generated.");
         Ok(vec![])
     }
 
-    fn record_token_pair_failure(&self, _opportunity_id: &str, _reason: &str) {
-        // Placeholder
+    fn record_token_pair_failure(&self, opportunity_id: &str, reason: &str) {
+        use std::time::Instant;
+        let now = Instant::now();
+        let mut entry = self.recent_failures.entry(opportunity_id.to_string()).or_insert((now, 0));
+        entry.0 = now;
+        entry.1 += 1;
+        warn!("Recorded failure for opportunity {}: {} (total failures: {})", opportunity_id, reason, entry.1);
     }
 
     async fn get_latest_blockhash_with_ha(&self) -> Result<Hash, ArbError> {
@@ -259,7 +303,7 @@ impl ArbitrageExecutor {
             encoding: Some(UiTransactionEncoding::Base64),
             accounts: None,
             min_context_slot: None,
-            inner_instructions: Some(false),
+            inner_instructions: false, // FIXED: was Some(false)
         };
 
         match client_to_use

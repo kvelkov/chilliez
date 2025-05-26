@@ -15,22 +15,24 @@ use crate::{
     config::load_config,
     dex::get_all_clients_arc,
     error::ArbError,
-    metrics::{Metrics, TradeOutcome},
+    metrics::Metrics, // Removed TradeOutcome
     solana::{
         rpc::SolanaRpcClient,
-        websocket::{SolanaWebsocketManager, WebsocketUpdate}, // Removed RawAccountUpdate (unused)
+        websocket::{SolanaWebsocketManager, RawAccountUpdate}, // Removed WebsocketUpdate
     },
     utils::{setup_logging, PoolInfo}, // Removed load_keypair (used via read_keypair_file)
+    websocket::CryptoDataProvider,
 };
-use log::{debug, error, info, warn};
+use log::{info, warn}; // Removed debug, error
 use solana_client::nonblocking::rpc_client::RpcClient as NonBlockingRpcClient;
 use solana_sdk::{pubkey::Pubkey, signature::read_keypair_file, signer::Signer};
 use std::collections::HashMap;
+use std::env; // Added for reading SIMULATION_MODE directly
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::signal;
+// use tokio::signal; // Removed unused import
 use tokio::sync::{Mutex, RwLock};
-use tokio::time::{interval, Instant};
+use tokio::time::interval; // Removed Instant
 
 #[tokio::main]
 async fn main() -> Result<(), ArbError> {
@@ -83,11 +85,18 @@ async fn main() -> Result<(), ArbError> {
     };
     info!("Trader wallet loaded: {}", wallet.pubkey());
 
+    // Read SIMULATION_MODE directly from environment as a workaround
+    // Ideally, simulation_mode should be part of the Config struct in settings.rs
+    let simulation_mode_from_env = env::var("SIMULATION_MODE")
+        .unwrap_or_else(|_| "false".to_string()) // Default to "false" if not set
+        .parse::<bool>()
+        .unwrap_or(false); // Default to false if parsing fails
+
     let tx_executor = Arc::new(ArbitrageExecutor::new(
         wallet.clone(), direct_rpc_client.clone(),
         app_config.default_priority_fee_lamports,
         Duration::from_secs(app_config.max_transaction_timeout_seconds),
-        app_config.simulation_mode, // Corrected: Direct field access
+        simulation_mode_from_env, // Using value read directly from env
         app_config.paper_trading,
     ).with_solana_rpc(ha_solana_rpc_client.clone()));
     info!("ArbitrageExecutor initialized.");
@@ -117,7 +126,16 @@ async fn main() -> Result<(), ArbError> {
 
     let executor_for_congestion_task = Arc::clone(&tx_executor);
     let congestion_update_interval_secs = app_config.congestion_update_interval_secs.unwrap_or(30);
-    let mut congestion_task_handle = tokio::spawn(async move { /* ... same ... */ });
+    let mut congestion_task_handle = tokio::spawn(async move {
+        info!("Starting congestion update task (interval: {}s).", congestion_update_interval_secs);
+        let mut interval_timer = interval(Duration::from_secs(congestion_update_interval_secs));
+        loop {
+            interval_timer.tick().await;
+            if let Err(e) = executor_for_congestion_task.update_network_congestion().await {
+                warn!("Failed to update network congestion: {}", e);
+            }
+        }
+    });
     
     let engine_for_health_task = Arc::clone(&arbitrage_engine);
     // The health check task in main.rs uses the interval from app_config
@@ -135,8 +153,57 @@ async fn main() -> Result<(), ArbError> {
     let mut main_cycle_interval = interval(Duration::from_secs(app_config.cycle_interval_seconds));
     main_cycle_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
-    loop { /* ... main select loop remains largely the same as previous corrected version ... */ }
-    // Ensure background task abortion is handled if desired
-    // ...
-    // Ok(())
+    // Main select loop (ensure this part is complete and correct in your actual file)
+    // The provided snippet for the main loop was:
+    // loop { /* ... main select loop remains largely the same as previous corrected version ... */ }
+    // This loop needs to be implemented for the bot to function.
+    // For now, I will add a placeholder for the loop structure.
+    loop {
+        tokio::select! {
+            _ = main_cycle_interval.tick() => {
+                info!("Main arbitrage cycle tick.");
+                // Implement your arbitrage detection and execution logic here
+                // For example:
+                // if let Ok(opportunities) = arbitrage_engine.detect_arbitrage().await {
+                //    info!("Detected {} opportunities.", opportunities.len());
+                //    for opp in opportunities {
+                //        // Potentially execute opportunity
+                //        // tx_executor.execute_opportunity(&opp).await;
+                //    }
+                // }
+            },
+            // Example for WebSocket updates if ws_manager_instance is Some
+            // Ensure this part correctly uses `WebsocketUpdate` if it's re-added to imports
+            // and the ws_manager_instance logic is active.
+            // update_result = async {
+            //     if let Some(manager) = &ws_manager_instance {
+            //         manager.lock().await.try_recv_update().await // Assuming try_recv_update is async
+            //     } else {
+            //         futures::future::pending().await // Keeps the arm pending if no ws_manager
+            //     }
+            // }, if ws_manager_instance.is_some() => {
+            //     match update_result {
+            //         Ok(Some(ws_update)) => {
+            //             // Process ws_update (this is where crate::solana::websocket::WebsocketUpdate would be used)
+            //             info!("Received WS update: {:?}", ws_update);
+            //             // Example: if let crate::solana::websocket::WebsocketUpdate::PoolUpdate(pool_info) = ws_update {
+            //             //     arbitrage_engine.pools.write().await.insert(pool_info.address, Arc::new(pool_info));
+            //             // }
+            //         },
+            //         Ok(None) => { /* Channel was empty */ }
+            //         Err(_e) => { /* Channel closed or error */ }
+            //         _ => { /* Should not happen with Option<WebsocketUpdate> */ }
+            //     }
+            // }
+            _ = tokio::signal::ctrl_c() => {
+                info!("CTRL-C received, shutting down tasks...");
+                threshold_task_handle.abort();
+                congestion_task_handle.abort();
+                health_check_task_handle.abort();
+                info!("Background tasks aborted. Exiting.");
+                break;
+            }
+        }
+    }
+    Ok(())
 }

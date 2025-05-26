@@ -13,6 +13,7 @@ edition = "2021"
 solana-client = "1.18.3"
 solana-sdk = "1.18.3"
 solana-account-decoder = "1.18.3"
+solana-transaction-status = "1.18.3" # Added this line
 spl-token = "4.0.0"
 spl-associated-token-account = "2.3.0"
 spl-token-2022 = "1.0.0" # Keep if Token2022 support is planned/used, else remove.
@@ -35,9 +36,9 @@ clap = { version = "4.5.3", features = ["derive"] } # REVIEW: Candidate for remo
 # Logging & errors - Core: Keep these.
 anyhow = "1.0.75"
 thiserror = "1.0.57"
-log = "0.4.20"
+log = "0.4.20" # Keeping 0.4.20 as used, later versions like 0.4.27 exist.
 env_logger = "0.11.2"
-fern = "0.6" # Added fern for logging
+fern = "0.6" 
 # tracing: Is this actively used for distributed tracing, or is `log` sufficient?
 tracing = "0.1.37" # REVIEW: Candidate for removal if `log` crate is primary and tracing isn't integrated.
 
@@ -51,7 +52,7 @@ url = "2.5.0"
 once_cell = "1.18.0"
 lazy_static = "1.4.0"
 dashmap = "5.4.0"
-chrono = "0.4.26" # Consider "0.4.38" or latest
+chrono = "0.4.38" # Updated to a more recent version (was 0.4.26)
 rand = "0.8.5"
 base64 = "0.22.0"
 # hex: Used for hex encoding/decoding. Verify usage.
@@ -68,12 +69,6 @@ redis = { version = "0.25.0", features = ["aio", "tokio-comp", "connection-manag
 
 # Optional helpers (low-cost)
 # itertools: Provides extra iterator adaptors. Verify usage.
-itertools = "0.12.0" # REVIEW: Candidate for removal if not significantly used. Updated patch version.
+itertools = "0.12.0" # REVIEW: Candidate for removal if not significantly used.
 # uuid: For generating UUIDs. Verify usage.
-uuid = { version = "1.8.0", features = ["v4"] } # REVIEW: Candidate for removal if not used. Updated version.
-fastrand = "2.3.0"
-
-[dev-dependencies] # Keep these for tests.
-pretty_assertions = "1.4.0"
-assert_approx_eq = "1.1.0"
-
+uuid = { version = "1.8.0", features = ["v4"] } # REVIEW: Candidate for removal if not used

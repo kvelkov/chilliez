@@ -372,12 +372,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "assert_approx_eq"
-version = "1.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3c07dab4369547dbe5114677b33fbbf724971019f3818172d59a97a61c774ffd"
-
-[[package]]
 name = "assert_matches"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1205,12 +1199,6 @@ dependencies = [
  "tempfile",
  "zeroize",
 ]
-
-[[package]]
-name = "diff"
-version = "0.1.13"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "56254986775e3233ffa9c4d7d3faaf6d36a2c09d30b20687e9f88bc8bafc16c8"
 
 [[package]]
 name = "digest"
@@ -2710,16 +2698,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "pretty_assertions"
-version = "1.4.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3ae130e2f271fbc2ac3a40fb1d07180839cdbbe443c7a27e1e3c13c5cac0116d"
-dependencies = [
- "diff",
- "yansi",
-]
-
-[[package]]
 name = "proc-macro-crate"
 version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3514,7 +3492,6 @@ name = "solana-arb-bot"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "assert_approx_eq",
  "async-trait",
  "base64 0.22.1",
  "bincode",
@@ -3523,7 +3500,6 @@ dependencies = [
  "dashmap",
  "dotenv",
  "env_logger 0.11.8",
- "fastrand",
  "fern",
  "futures",
  "hex",
@@ -3531,7 +3507,6 @@ dependencies = [
  "lazy_static",
  "log",
  "once_cell",
- "pretty_assertions",
  "rand 0.8.5",
  "rayon",
  "redis",
@@ -3541,6 +3516,7 @@ dependencies = [
  "solana-account-decoder",
  "solana-client",
  "solana-sdk",
+ "solana-transaction-status",
  "spl-associated-token-account",
  "spl-token",
  "spl-token-2022",
@@ -5477,12 +5453,6 @@ dependencies = [
  "thiserror",
  "time",
 ]
-
-[[package]]
-name = "yansi"
-version = "1.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cfe53a6657fd280eaa890a3bc59152892ffa3e30101319d168b781ed6529b049"
 
 [[package]]
 name = "yasna"

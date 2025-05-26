@@ -1,8 +1,7 @@
 // src/arbitrage/engine.rs
 use crate::{
     arbitrage::detector::ArbitrageDetector,
-    // Removed unused: dynamic_threshold::{recommend_min_profit_threshold, VolatilityTracker},
-    opportunity::MultiHopArbOpportunity,
+    arbitrage::opportunity::MultiHopArbOpportunity, // Corrected import path
     config::settings::Config,
     dex::quote::DexClient,
     error::ArbError,
@@ -11,18 +10,15 @@ use crate::{
     utils::PoolInfo,
     websocket::CryptoDataProvider,
 };
-use log::{error, warn}; // Removed debug, info
+use log::{error, warn};
 use solana_sdk::pubkey::Pubkey;
 use std::{
     collections::HashMap,
     ops::Deref,
-    sync::{
-        atomic::{AtomicBool, AtomicU64}, // Removed Ordering
-        Arc,
-    },
+    sync::{atomic::{AtomicBool, AtomicU64}, Arc},
     time::{Duration, Instant},
 };
-use tokio::sync::{Mutex, RwLock, RwLockReadGuard}; // Added RwLockReadGuard for type annotation
+use tokio::sync::{Mutex, RwLock, RwLockReadGuard};
 use tokio::time::timeout;
 
 pub struct ArbitrageEngine {
@@ -99,29 +95,35 @@ impl ArbitrageEngine {
     {
         self.maybe_check_health().await?;
         
-        let lock_acquisition_result = timeout(
-            Duration::from_millis(self.config.pool_read_timeout_ms.unwrap_or(1000)),
-            self.pools.read(),
-        ).await;
+        let opportunities_result = { // Scoping the guards
+            let lock_acquisition_result = timeout( // This is line 109 in the error messages for "related information"
+                Duration::from_millis(self.config.pool_read_timeout_ms.unwrap_or(1000)),
+                self.pools.read(),
+            ).await;
 
-        // Explicitly annotate the type of pools_guard.
-        // The lifetime 'guard_life is inferred by the compiler here.
-        let pools_guard: RwLockReadGuard<'_, HashMap<Pubkey, Arc<PoolInfo>>> = match lock_acquisition_result {
-            Ok(Ok(guard)) => guard,
-            Ok(Err(poison_error)) => {
-                error!("{}: Failed to acquire read lock (poisoned): {}", operation_name, poison_error.to_string());
-                return Err(ArbError::Unknown(format!("Pools lock poisoned: {}", poison_error.to_string())));
-            }
-            Err(_elapsed_error) => { 
-                warn!("{}: Timeout waiting for pools read lock", operation_name);
-                return Err(ArbError::TimeoutError(format!("Timeout for pools read lock in {}", operation_name)));
-            }
+            // Explicitly typed guard
+            let pools_guard: RwLockReadGuard<'_, HashMap<Pubkey, Arc<PoolInfo>>> = match lock_acquisition_result {
+                Ok(Ok(guard)) => guard, // If this arm, pools_guard is RwLockReadGuard
+                Ok(Err(poison_error)) => {
+                    error!("{}: Failed to acquire read lock (poisoned): {}", operation_name, poison_error.to_string());
+                    return Err(ArbError::Unknown(format!("Pools lock poisoned: {}", poison_error.to_string())));
+                }
+                Err(_elapsed_error) => { 
+                    warn!("{}: Timeout waiting for pools read lock", operation_name);
+                    return Err(ArbError::TimeoutError(format!("Timeout for pools read lock in {}", operation_name)));
+                }
+            };
+
+            let mut metrics_guard = self.metrics.lock().await;
+            // Lines 110/111 from error message refer to these arguments in the call below
+            detector_call(
+                Arc::clone(&self.detector),
+                pools_guard.deref(), // This should be &HashMap<...>
+                &mut *metrics_guard  // This should be &mut Metrics
+            ).await
         };
-
-        let mut metrics_guard = self.metrics.lock().await;
-        // Pass pools_guard.deref() which is &HashMap<Pubkey, Arc<PoolInfo>>
-        // and &mut *metrics_guard which is &mut Metrics
-        detector_call(Arc::clone(&self.detector), pools_guard.deref(), &mut *metrics_guard).await
+        
+        opportunities_result
     }
 
     pub async fn discover_direct_opportunities(&self) -> Result<Vec<MultiHopArbOpportunity>, ArbError> {

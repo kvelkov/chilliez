@@ -57,7 +57,6 @@ async fn main() -> Result<(), ArbError> {
 
     info!("Initializing Solana RPC clients...");
     let primary_rpc_endpoint = app_config.rpc_url.clone();
-    let fallback_rpc_endpoints_str = app_config.rpc_url_backup.clone().unwrap_or_default();
 
     let fallback_rpc_endpoints: Vec<String> = app_config.rpc_url_backup
         .as_ref()
@@ -104,20 +103,19 @@ async fn main() -> Result<(), ArbError> {
     let tx_executor: Arc<ArbitrageExecutor> = Arc::new(ArbitrageExecutor::new(
         wallet.clone(), direct_rpc_client.clone(),
         app_config.default_priority_fee_lamports,
-        Duration::from_secs(app_config.max_transaction_timeout_seconds.unwrap_or(60)),
+        Duration::from_secs(app_config.max_transaction_timeout_seconds.expect("max_transaction_timeout_seconds must be set")),
         simulation_mode_from_env, 
         app_config.paper_trading,
     ).with_solana_rpc(ha_solana_rpc_client.clone()));
     info!("ArbitrageExecutor initialized.");
 
-    let ws_fallback_urls: Vec<String> = app_config.rpc_url_backup
-        .as_ref()
-        .map(|s| s.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect())
-        .unwrap_or_else(Vec::new);
     let ws_manager_instance = if !app_config.ws_url.is_empty() {
         let (manager, _raw_update_receiver) = SolanaWebsocketManager::new(
             app_config.ws_url.clone(),
-            ws_fallback_urls,
+            app_config.rpc_url_backup
+                .as_ref()
+                .map(|s| s.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect())
+                .unwrap_or_else(Vec::new),
             app_config.ws_update_channel_size.unwrap_or(1024),
         );
         Some(Arc::new(Mutex::new(manager)))
@@ -175,8 +173,8 @@ async fn main() -> Result<(), ArbError> {
         }
     });
 
-    info!("Starting main arbitrage detection cycle (interval: {:?}s).", app_config.cycle_interval_seconds);
-    let mut main_cycle_interval = interval(Duration::from_secs(app_config.cycle_interval_seconds.unwrap_or(10)));
+    info!("Starting main arbitrage detection cycle (interval: {}s).", app_config.cycle_interval_seconds.expect("cycle_interval_seconds must be set"));
+    let mut main_cycle_interval = interval(Duration::from_secs(app_config.cycle_interval_seconds.expect("cycle_interval_seconds must be set")));
     main_cycle_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
     loop {

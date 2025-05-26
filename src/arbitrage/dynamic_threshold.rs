@@ -1,10 +1,10 @@
 // src/arbitrage/dynamic_threshold.rs
 // ArbitrageDetector is not used here after removing DynamicThresholdUpdater
 // use crate::arbitrage::detector::ArbitrageDetector; 
-// use crate::config::settings::Config; // Keep if used by other items, or remove if not.
+use crate::config::settings::Config; // Keep if used by other items, or remove if not.
 // Metrics is not used here after removing DynamicThresholdUpdater
 // use crate::metrics::Metrics; 
-// use log::{info}; // Removed warn as it\'s unused after removing DynamicThresholdUpdater
+use log::{info}; // Removed warn as it\'s unused after removing DynamicThresholdUpdater
 use std::collections::VecDeque;
 // Arc and Mutex are not used here after removing DynamicThresholdUpdater
 // use std::sync::Arc; 

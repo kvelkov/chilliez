@@ -11,6 +11,7 @@ use tokio::time::sleep;
 
 /// Rate limiter and backoff state shared across DEX clients
 pub struct HttpRateLimiter {
+    #[allow(dead_code)]
     pub max_concurrent: usize,
     pub min_delay: Duration,
     pub max_retries: usize,

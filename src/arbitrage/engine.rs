@@ -1,24 +1,30 @@
 // src/arbitrage/engine.rs
 use crate::{
     arbitrage::detector::ArbitrageDetector,
-    arbitrage::opportunity::MultiHopArbOpportunity, // Corrected import path
+    arbitrage::opportunity::MultiHopArbOpportunity,
     config::settings::Config,
     dex::quote::DexClient,
     error::ArbError,
     metrics::Metrics,
     solana::{rpc::SolanaRpcClient, websocket::SolanaWebsocketManager},
     utils::PoolInfo,
-    websocket::CryptoDataProvider,
+    websocket::CryptoDataProvider, // This was previously removed due to an 'unused' warning in main.rs,
+                                   // but engine.rs itself might use it via self.price_provider. Let's keep if self.price_provider is used.
+                                   // Checking struct: self.price_provider IS Option<Arc<dyn CryptoDataProvider ...>>. So this import is needed here.
 };
 use log::{error, warn};
 use solana_sdk::pubkey::Pubkey;
 use std::{
     collections::HashMap,
     ops::Deref,
-    sync::{atomic::{AtomicBool, AtomicU64}, Arc},
+    sync::{
+        atomic::{AtomicBool, AtomicU64},
+        Arc,
+    }, // Corrected potential trailing comma issue here if any.
     time::{Duration, Instant},
 };
-use tokio::sync::{Mutex, RwLock}; // Removed RwLockReadGuard as 'guard' will be used directly
+// Ensuring imports are clean:
+use tokio::sync::{Mutex, RwLock}; // Line 21 from error. This syntax is correct.
 use tokio::time::timeout;
 
 pub struct ArbitrageEngine {
@@ -79,10 +85,20 @@ impl ArbitrageEngine {
         }
     }
 
-    pub async fn start_services(&self) { /* ... */ }
-    pub async fn get_min_profit_threshold(&self) -> f64 { *self.min_profit_threshold.read().await }
-    pub async fn set_min_profit_threshold(&self, _threshold_pct: f64) { /* ... */ }
-    pub fn should_execute_trade(&self, _calculated_slippage_fraction: f64, _estimated_fee_lamports: u64) -> bool { false }
+    pub async fn start_services(&self) { /* ... */
+    }
+    pub async fn get_min_profit_threshold(&self) -> f64 {
+        *self.min_profit_threshold.read().await
+    }
+    pub async fn set_min_profit_threshold(&self, _threshold_pct: f64) { /* ... */
+    }
+    pub fn should_execute_trade(
+        &self,
+        _calculated_slippage_fraction: f64,
+        _estimated_fee_lamports: u64,
+    ) -> bool {
+        false
+    }
 
     async fn discover_opportunities_internal<F, Fut>(
         &self,
@@ -90,54 +106,111 @@ impl ArbitrageEngine {
         detector_call: F,
     ) -> Result<Vec<MultiHopArbOpportunity>, ArbError>
     where
-        F: FnOnce(Arc<Mutex<ArbitrageDetector>>, &HashMap<Pubkey, Arc<PoolInfo>>, &mut Metrics) -> Fut,
+        F: FnOnce(
+            Arc<Mutex<ArbitrageDetector>>,
+            &HashMap<Pubkey, Arc<PoolInfo>>,
+            &mut Metrics,
+        ) -> Fut,
         Fut: std::future::Future<Output = Result<Vec<MultiHopArbOpportunity>, ArbError>>,
     {
         self.maybe_check_health().await?;
-        
-        let lock_acquisition_result = timeout( // Line 105 in error's related info
+
+        // Line 103 in new error list's related info for type mismatch
+        let lock_acquisition_result = timeout(
             Duration::from_millis(self.config.pool_read_timeout_ms.unwrap_or(1000)),
             self.pools.read(),
-        ).await;
+        )
+        .await;
 
         match lock_acquisition_result {
-            Ok(Ok(guard)) => { // 'guard' is RwLockReadGuard. Error line 106/107 points to params of detector_call.
+            Ok(Ok(guard)) => {
+                // 'guard' is RwLockReadGuard.
+                // Error lines 104 & 107 (new list) are for params of detector_call: guard.deref() and &mut *metrics_guard
                 let mut metrics_guard = self.metrics.lock().await;
                 detector_call(
                     Arc::clone(&self.detector),
-                    guard.deref(), // Use guard directly
-                    &mut *metrics_guard
-                ).await // This call site is where the lifetime errors (130, 136, 144) originate
+                    guard.deref(),
+                    &mut *metrics_guard,
+                )
+                .await
             }
             Ok(Err(poison_error)) => {
-                error!("{}: Failed to acquire read lock (poisoned): {}", operation_name, poison_error.to_string());
-                Err(ArbError::Unknown(format!("Pools lock poisoned: {}", poison_error.to_string())))
+                error!(
+                    "{}: Failed to acquire read lock (poisoned): {}",
+                    operation_name,
+                    poison_error.to_string()
+                );
+                Err(ArbError::Unknown(format!(
+                    "Pools lock poisoned: {}",
+                    poison_error.to_string()
+                )))
             }
-            Err(_elapsed_error) => { 
+            Err(_elapsed_error) => {
                 warn!("{}: Timeout waiting for pools read lock", operation_name);
-                Err(ArbError::TimeoutError(format!("Timeout for pools read lock in {}", operation_name)))
+                Err(ArbError::TimeoutError(format!(
+                    "Timeout for pools read lock in {}",
+                    operation_name
+                )))
             }
         }
     }
 
-    pub async fn discover_direct_opportunities(&self) -> Result<Vec<MultiHopArbOpportunity>, ArbError> {
-        self.discover_opportunities_internal("discover_direct_opportunities", |detector, pools_map, metrics| async move {
-            detector.lock().await.find_all_opportunities(pools_map, metrics).await
-        }).await
+    pub async fn discover_direct_opportunities(
+        &self,
+    ) -> Result<Vec<MultiHopArbOpportunity>, ArbError> {
+        self.discover_opportunities_internal(
+            "discover_direct_opportunities",
+            |detector, pools_map, metrics| async move {
+                // Line 124 for lifetime error
+                detector
+                    .lock()
+                    .await
+                    .find_all_opportunities(pools_map, metrics)
+                    .await
+            },
+        )
+        .await
     }
 
-    pub async fn discover_multihop_opportunities(&self) -> Result<Vec<MultiHopArbOpportunity>, ArbError> {
-        self.discover_opportunities_internal("discover_multihop_opportunities", |detector, pools_map, metrics| async move {
-            detector.lock().await.find_all_multihop_opportunities(pools_map, metrics).await
-        }).await
+    pub async fn discover_multihop_opportunities(
+        &self,
+    ) -> Result<Vec<MultiHopArbOpportunity>, ArbError> {
+        self.discover_opportunities_internal(
+            "discover_multihop_opportunities",
+            |detector, pools_map, metrics| async move {
+                // Line 130 for lifetime error
+                detector
+                    .lock()
+                    .await
+                    .find_all_multihop_opportunities(pools_map, metrics)
+                    .await
+            },
+        )
+        .await
     }
 
-    pub async fn discover_multihop_opportunities_with_risk(&self) -> Result<Vec<MultiHopArbOpportunity>, ArbError> {
+    pub async fn discover_multihop_opportunities_with_risk(
+        &self,
+    ) -> Result<Vec<MultiHopArbOpportunity>, ArbError> {
         let max_slippage = self.max_slippage;
         let tx_fee_lamports = self.tx_fee_lamports;
-        self.discover_opportunities_internal("discover_multihop_opportunities_with_risk", move |detector, pools_map, metrics| async move {
-            detector.lock().await.find_all_multihop_opportunities_with_risk(pools_map, metrics, max_slippage, tx_fee_lamports).await
-        }).await
+        self.discover_opportunities_internal(
+            "discover_multihop_opportunities_with_risk",
+            move |detector, pools_map, metrics| async move {
+                // Line 138 for lifetime error
+                detector
+                    .lock()
+                    .await
+                    .find_all_multihop_opportunities_with_risk(
+                        pools_map,
+                        metrics,
+                        max_slippage,
+                        tx_fee_lamports,
+                    )
+                    .await
+            },
+        )
+        .await
     }
 
     async fn with_pool_guard_async<Fut, T>(
@@ -151,52 +224,94 @@ impl ArbitrageEngine {
     {
         match timeout(
             Duration::from_millis(self.config.pool_read_timeout_ms.unwrap_or(1000)),
-            async { Ok::<_, ArbError>(Arc::clone(&self.pools)) } 
-        ).await {
-            Ok(Ok(pools_arc)) => closure(pools_arc).await, 
-            Ok(Err(e)) => { 
-                error!("{}: Error from closure within with_pool_guard_async: {}", operation_name, e);
-                Err(e) 
+            async { Ok::<_, ArbError>(Arc::clone(&self.pools)) },
+        )
+        .await
+        {
+            Ok(Ok(pools_arc)) => closure(pools_arc).await,
+            Ok(Err(e)) => {
+                error!(
+                    "{}: Error from closure within with_pool_guard_async: {}",
+                    operation_name, e
+                );
+                Err(e)
             }
-            Err(_timeout_error) => { 
-                 if critical {
-                    error!("{}: Timeout in pool guard handling. This is critical.", operation_name);
-                    Err(ArbError::TimeoutError(format!("Critical timeout for pool guard in {}", operation_name)))
+            Err(_timeout_error) => {
+                if critical {
+                    error!(
+                        "{}: Timeout in pool guard handling. This is critical.",
+                        operation_name
+                    );
+                    Err(ArbError::TimeoutError(format!(
+                        "Critical timeout for pool guard in {}",
+                        operation_name
+                    )))
                 } else {
                     warn!("{}: Timeout in pool guard handling.", operation_name);
-                    Err(ArbError::TimeoutError(format!("Timeout for pool guard in {}", operation_name)))
+                    Err(ArbError::TimeoutError(format!(
+                        "Timeout for pool guard in {}",
+                        operation_name
+                    )))
                 }
             }
         }
     }
-    
-    pub async fn resolve_pools_for_opportunity(&self, opportunity: &MultiHopArbOpportunity) -> Result<Vec<Arc<PoolInfo>>, ArbError> {
-        self.with_pool_guard_async("resolve_pools_for_opportunity", false, |pools_arc| async move {
-            let pools_guard = pools_arc.read().await;
-            let mut resolved_pools = Vec::new();
-            for hop_pool_address in &opportunity.pool_path {
-                match pools_guard.get(hop_pool_address) {
-                    Some(pool_info) => resolved_pools.push(Arc::clone(pool_info)),
-                    None => {
-                        let hop_details = opportunity.hops.iter().find(|h| &h.pool == hop_pool_address);
-                        let (input_token, output_token) = hop_details.map_or( ("N/A".to_string(), "N/A".to_string()), |h| (h.input_token.clone(), h.output_token.clone()));
-                        warn!("Pool {} for hop {}->{} not found in local cache.", hop_pool_address, input_token, output_token);
-                        return Err(ArbError::PoolNotFound(hop_pool_address.to_string()));
+
+    pub async fn resolve_pools_for_opportunity(
+        &self,
+        opportunity: &MultiHopArbOpportunity,
+    ) -> Result<Vec<Arc<PoolInfo>>, ArbError> {
+        self.with_pool_guard_async(
+            "resolve_pools_for_opportunity",
+            false,
+            |pools_arc| async move {
+                let pools_guard = pools_arc.read().await;
+                let mut resolved_pools = Vec::new();
+                for hop_pool_address in &opportunity.pool_path {
+                    match pools_guard.get(hop_pool_address) {
+                        Some(pool_info) => resolved_pools.push(Arc::clone(pool_info)),
+                        None => {
+                            let hop_details = opportunity
+                                .hops
+                                .iter()
+                                .find(|h| &h.pool == hop_pool_address);
+                            let (input_token, output_token) = hop_details
+                                .map_or(("N/A".to_string(), "N/A".to_string()), |h| {
+                                    (h.input_token.clone(), h.output_token.clone())
+                                });
+                            warn!(
+                                "Pool {} for hop {}->{} not found in local cache.",
+                                hop_pool_address, input_token, output_token
+                            );
+                            return Err(ArbError::PoolNotFound(hop_pool_address.to_string()));
+                        }
                     }
                 }
-            }
-            Ok(resolved_pools)
-        }).await
+                Ok(resolved_pools)
+            },
+        )
+        .await
     }
-    
-    pub async fn maybe_check_health(&self) -> Result<(), ArbError> { Ok(()) }
-    pub async fn run_health_checks(&self) { /* ... */ }
-    pub async fn update_pools(&self, _new_pools_data: HashMap<Pubkey, Arc<PoolInfo>>) -> Result<(), ArbError> { Ok(()) }
-    
+
+    pub async fn maybe_check_health(&self) -> Result<(), ArbError> {
+        Ok(())
+    }
+    pub async fn run_health_checks(&self) { /* ... */
+    }
+    pub async fn update_pools(
+        &self,
+        _new_pools_data: HashMap<Pubkey, Arc<PoolInfo>>,
+    ) -> Result<(), ArbError> {
+        Ok(())
+    }
+
     pub async fn detect_arbitrage(&self) -> Result<Vec<MultiHopArbOpportunity>, ArbError> {
         self.discover_multihop_opportunities().await
     }
 
-    pub async fn run_dynamic_threshold_updates(&self) { /* ... */ }
-    pub async fn get_current_status(&self) -> String { String::new() }
+    pub async fn run_dynamic_threshold_updates(&self) { /* ... */
+    }
+    pub async fn get_current_status(&self) -> String {
+        String::new()
+    }
 }

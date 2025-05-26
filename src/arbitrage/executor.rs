@@ -3,7 +3,7 @@ use crate::arbitrage::opportunity::MultiHopArbOpportunity;
 use crate::error::{ArbError, RetryPolicy};
 use crate::solana::rpc::SolanaRpcClient;
 
-use log::{debug, error, info, warn}; // Ensure debug is here
+use log::{debug, error, info, warn};
 use solana_client::nonblocking::rpc_client::RpcClient as NonBlockingRpcClient;
 use solana_client::rpc_config::RpcSimulateTransactionConfig;
 use solana_sdk::{
@@ -12,7 +12,7 @@ use solana_sdk::{
     signature::{Keypair, Signature, Signer},
     transaction::Transaction,
 };
-use solana_transaction_status::UiTransactionEncoding; // Assumes solana-transaction-status is in Cargo.toml
+use solana_transaction_status::UiTransactionEncoding;
 
 use std::sync::{
     atomic::{AtomicBool, AtomicU64, Ordering},
@@ -25,19 +25,21 @@ lazy_static::lazy_static! {
 }
 
 #[allow(dead_code)]
-fn default_retry_policy() -> RetryPolicy { RetryPolicy::new(3,500,10_000,0.3) }
+fn default_retry_policy() -> RetryPolicy {
+    RetryPolicy::new(3, 500, 10_000, 0.3)
+}
 
 pub struct ArbitrageExecutor {
     wallet: Arc<Keypair>,
     rpc_client: Arc<NonBlockingRpcClient>,
     priority_fee: u64,
     max_timeout: Duration,
-    simulation_mode: bool,    
-    paper_trading_mode: bool, 
+    simulation_mode: bool,
+    paper_trading_mode: bool, // Defined as bool here
     network_congestion: AtomicU64,
     solana_rpc: Option<Arc<SolanaRpcClient>>,
     enable_simulation: AtomicBool,
-    recent_failures: Arc<dashmap::DashMap<String, (Instant, u32)>>, 
+    recent_failures: Arc<dashmap::DashMap<String, (Instant, u32)>>,
     degradation_mode: AtomicBool,
     degradation_profit_threshold: f64,
 }
@@ -48,8 +50,8 @@ impl ArbitrageExecutor {
         rpc_client: Arc<NonBlockingRpcClient>,
         priority_fee: u64,
         max_timeout: Duration,
-        simulation_mode: bool,    
-        paper_trading_mode: bool, 
+        simulation_mode: bool,
+        paper_trading_mode: bool,
     ) -> Self {
         Self {
             wallet,
@@ -58,12 +60,12 @@ impl ArbitrageExecutor {
             max_timeout,
             simulation_mode,
             paper_trading_mode,
-            network_congestion: AtomicU64::new(100), 
+            network_congestion: AtomicU64::new(100),
             solana_rpc: None,
-            enable_simulation: AtomicBool::new(true), 
+            enable_simulation: AtomicBool::new(true),
             recent_failures: Arc::new(dashmap::DashMap::new()),
             degradation_mode: AtomicBool::new(false),
-            degradation_profit_threshold: 1.5, 
+            degradation_profit_threshold: 1.5,
         }
     }
 
@@ -80,111 +82,167 @@ impl ArbitrageExecutor {
             info!("Network congestion factor updated to: {:.2}", factor);
         } else {
             debug!("SolanaRpcClient (for HA) not available for congestion update, using default.");
-            self.network_congestion.store(100, Ordering::Relaxed); 
+            self.network_congestion.store(100, Ordering::Relaxed);
         }
         Ok(())
     }
-    
+
     pub fn has_banned_tokens(&self, _opportunity: &MultiHopArbOpportunity) -> bool {
-        false 
+        false
     }
 
     pub fn has_multihop_banned_tokens(&self, _opportunity: &MultiHopArbOpportunity) -> bool {
         false
     }
 
-
-    pub async fn execute_opportunity(&self, opportunity: &MultiHopArbOpportunity) -> Result<Signature, ArbError> {
-        if self.has_banned_tokens(opportunity) { 
-            warn!("Opportunity ID: {} involves a banned token pair. Skipping.", opportunity.id);
-            return Err(ArbError::ExecutionError("Opportunity involves banned token pair".to_string()));
+    pub async fn execute_opportunity(
+        &self,
+        opportunity: &MultiHopArbOpportunity,
+    ) -> Result<Signature, ArbError> {
+        if self.has_banned_tokens(opportunity) {
+            warn!(
+                "Opportunity ID: {} involves a banned token pair. Skipping.",
+                opportunity.id
+            );
+            return Err(ArbError::ExecutionError(
+                "Opportunity involves banned token pair".to_string(),
+            ));
         }
 
         let start_time = Instant::now();
-        info!("Attempting to execute opportunity ID: {}. Details:", opportunity.id);
+        info!(
+            "Attempting to execute opportunity ID: {}. Details:",
+            opportunity.id
+        );
         opportunity.log_summary();
-
 
         let instructions = match self.build_instructions_from_multihop(opportunity) {
             Ok(instr) => instr,
             Err(e) => {
-                error!("Failed to build instructions for opportunity ID {}: {}", opportunity.id, e);
+                error!(
+                    "Failed to build instructions for opportunity ID {}: {}",
+                    opportunity.id, e
+                );
                 return Err(e);
             }
         };
-        
-        if instructions.len() <= 1 && !self.paper_trading_mode && !self.simulation_mode { 
-             error!("No actual swap instructions were built for opportunity ID: {}. Aborting execution.", opportunity.id);
-             return Err(ArbError::ExecutionError("No swap instructions built".to_string()));
+
+        if instructions.len() <= 1 && !self.paper_trading_mode && !self.simulation_mode {
+            error!("No actual swap instructions were built for opportunity ID: {}. Aborting execution.", opportunity.id);
+            return Err(ArbError::ExecutionError(
+                "No swap instructions built".to_string(),
+            ));
         }
 
-
+        // Error for paper_trading_mode (line 205 in your new list) would be here IF self.paper_trading_mode was Option<bool>
         if self.paper_trading_mode {
-            info!("[PAPER TRADING] Simulated execution for opportunity ID: {}", opportunity.id);
-            return Ok(Signature::default()); 
+            info!(
+                "[PAPER TRADING] Simulated execution for opportunity ID: {}",
+                opportunity.id
+            );
+            return Ok(Signature::default());
         }
 
-        if self.simulation_mode && !self.paper_trading_mode { 
-            info!("[SIMULATION MODE] Simulating execution for opportunity ID: {}", opportunity.id);
+        if self.simulation_mode && !self.paper_trading_mode {
+            info!(
+                "[SIMULATION MODE] Simulating execution for opportunity ID: {}",
+                opportunity.id
+            );
             return Ok(Signature::new_unique());
         }
 
-
         let recent_blockhash = self.get_latest_blockhash_with_ha().await?;
         let transaction = Transaction::new_signed_with_payer(
-            &instructions, Some(&self.wallet.pubkey()), &[&*self.wallet], recent_blockhash,
+            &instructions,
+            Some(&self.wallet.pubkey()),
+            &[&*self.wallet],
+            recent_blockhash,
         );
 
         if start_time.elapsed() > self.max_timeout {
-            warn!("Max timeout reached before sending transaction for opportunity ID: {}", opportunity.id);
-            return Err(ArbError::TimeoutError("Transaction construction timeout".to_string()));
+            warn!(
+                "Max timeout reached before sending transaction for opportunity ID: {}",
+                opportunity.id
+            );
+            return Err(ArbError::TimeoutError(
+                "Transaction construction timeout".to_string(),
+            ));
         }
 
         if self.enable_simulation.load(Ordering::Relaxed) {
             match self.simulate_transaction_for_execution(&transaction).await {
-                Ok(_) => info!("Pre-flight simulation successful for opportunity ID: {}.", opportunity.id),
+                Ok(_) => info!(
+                    "Pre-flight simulation successful for opportunity ID: {}.",
+                    opportunity.id
+                ),
                 Err(e) => {
-                    error!("Pre-flight simulation failed for opportunity ID: {}: {:?}", opportunity.id, e);
-                    self.record_token_pair_failure(&opportunity.id, &format!("SimulationFailure: {:?}", e));
+                    error!(
+                        "Pre-flight simulation failed for opportunity ID: {}: {:?}",
+                        opportunity.id, e
+                    );
+                    self.record_token_pair_failure(
+                        &opportunity.id,
+                        &format!("SimulationFailure: {:?}", e),
+                    );
                     return Err(e);
                 }
             }
         }
-        
+
         let rpc_to_use = self.solana_rpc.as_ref().map_or_else(
-            || self.rpc_client.clone(), |ha_client| ha_client.primary_client.clone(),
+            || self.rpc_client.clone(),
+            |ha_client| ha_client.primary_client.clone(),
         );
 
-        match rpc_to_use.send_and_confirm_transaction_with_spinner(&transaction).await {
+        match rpc_to_use
+            .send_and_confirm_transaction_with_spinner(&transaction)
+            .await
+        {
             Ok(signature) => {
-                info!("Successfully executed opportunity ID: {}! Signature: {}", opportunity.id, signature);
+                info!(
+                    "Successfully executed opportunity ID: {}! Signature: {}",
+                    opportunity.id, signature
+                );
                 Ok(signature)
             }
             Err(e) => {
-                error!("Transaction failed for opportunity ID {}: {}", opportunity.id, e);
+                error!(
+                    "Transaction failed for opportunity ID {}: {}",
+                    opportunity.id, e
+                );
                 self.record_token_pair_failure(&opportunity.id, &e.to_string());
                 Err(ArbError::TransactionError(e.to_string()))
             }
         }
     }
 
-    fn build_instructions_from_multihop(&self, _opportunity: &MultiHopArbOpportunity) -> Result<Vec<Instruction>, ArbError> {
+    fn build_instructions_from_multihop(
+        &self,
+        _opportunity: &MultiHopArbOpportunity,
+    ) -> Result<Vec<Instruction>, ArbError> {
         warn!("build_instructions_from_multihop is a stub. No actual swap instructions generated.");
-        Ok(vec![]) 
+        Ok(vec![])
     }
-    
+
     fn record_token_pair_failure(&self, _opportunity_id: &str, _reason: &str) {
         // Placeholder
     }
-    
+
     async fn get_latest_blockhash_with_ha(&self) -> Result<Hash, ArbError> {
         if let Some(client) = &self.solana_rpc {
-            client.primary_client.get_latest_blockhash().await.map_err(|e| ArbError::RpcError(e.to_string()))
+            client
+                .primary_client
+                .get_latest_blockhash()
+                .await
+                .map_err(|e| ArbError::RpcError(e.to_string()))
         } else {
-            self.rpc_client.get_latest_blockhash().await.map_err(|e| ArbError::RpcError(e.to_string()))
+            self.rpc_client
+                .get_latest_blockhash()
+                .await
+                .map_err(|e| ArbError::RpcError(e.to_string()))
         }
     }
-    
+
     async fn simulate_transaction_for_execution(
         &self,
         transaction: &Transaction,
@@ -198,19 +256,25 @@ impl ArbitrageExecutor {
             sig_verify: false,
             replace_recent_blockhash: true,
             commitment: Some(solana_sdk::commitment_config::CommitmentConfig::confirmed()),
-            encoding: Some(UiTransactionEncoding::Base64), 
-            accounts: None, 
+            encoding: Some(UiTransactionEncoding::Base64),
+            accounts: None,
             min_context_slot: None,
-            inner_instructions: Some(false), 
+            inner_instructions: Some(false),
         };
 
-        match client_to_use.simulate_transaction_with_config(transaction, sim_config).await {
+        match client_to_use
+            .simulate_transaction_with_config(transaction, sim_config)
+            .await
+        {
             Ok(sim_response) => {
                 if let Some(err) = &sim_response.value.err {
                     error!("Transaction simulation failed: {:?}", err);
                     Err(ArbError::SimulationFailed(format!("{:?}", err)))
                 } else {
-                    info!("Transaction simulation successful. Logs: {:?}", sim_response.value.logs.as_deref().unwrap_or_default());
+                    info!(
+                        "Transaction simulation successful. Logs: {:?}",
+                        sim_response.value.logs.as_deref().unwrap_or_default()
+                    );
                     Ok(sim_response.value)
                 }
             }

@@ -2,75 +2,32 @@
 
 use crate::dex::lifinity::{LifinityClient, LifinityPoolParser, LIFINITY_PROGRAM_ID};
 use crate::dex::meteora::MeteoraClient;
-use crate::dex::orca::{OrcaClient, OrcaPoolParser, ORCA_SWAP_PROGRAM_ID_V2}; // Changed to V2
-use crate::dex::phoenix::{PhoenixClient, PHOENIX_PROGRAM_ID};
+use crate::dex::orca::{OrcaClient, OrcaPoolParser, ORCA_SWAP_PROGRAM_ID_V2}; 
+use crate::dex::phoenix::{PhoenixClient}; // Removed unused _PHOENIX_PROGRAM_ID import
 use crate::dex::pool::get_pool_parser_fn_for_program;
 use crate::dex::quote::DexClient;
-use crate::dex::raydium::{RaydiumClient, RaydiumPoolParser, RAYDIUM_LIQUIDITY_PROGRAM_V4}; // Changed to V4
-use crate::dex::whirlpool_parser::{WhirlpoolPoolParser, ORCA_WHIRLPOOL_PROGRAM_ID}; // Changed to whirlpool_parser
-use crate::dex::whirlpool::WhirlpoolClient; // Kept for WhirlpoolClient
-use crate::utils::{DexType, PoolInfo, PoolToken, PoolParser as UtilsPoolParser}; // Added PoolParser
+use crate::dex::raydium::{RaydiumClient, RaydiumPoolParser, RAYDIUM_LIQUIDITY_PROGRAM_V4}; 
+use crate::dex::whirlpool_parser::{WhirlpoolPoolParser, ORCA_WHIRLPOOL_PROGRAM_ID}; 
+use crate::dex::whirlpool::WhirlpoolClient; 
+use crate::utils::{DexType, PoolInfo, PoolToken, PoolParser as UtilsPoolParser}; 
 use serde_json;
 use solana_sdk::pubkey::Pubkey;
 use std::str::FromStr;
 
-/// Call all parser registry and static parser methods for all DEXes
-pub fn exercise_parser_registry() {
-    // Use all program IDs
-    let orca_id = match Pubkey::from_str(ORCA_SWAP_PROGRAM_ID_V2) { // Changed to V2
-        Ok(id) => id,
-        Err(e) => {
-            eprintln!(
-                "Invalid ORCA_SWAP_PROGRAM_ID_V2 \'{}\': {}", // Changed to V2
-                ORCA_SWAP_PROGRAM_ID_V2, e // Changed to V2
-            );
-            return;
-        }
-    };
-    let raydium_id = match Pubkey::from_str(RAYDIUM_LIQUIDITY_PROGRAM_V4) { // Changed to V4
-        Ok(id) => id,
-        Err(e) => {
-            eprintln!(
-                "Invalid RAYDIUM_LIQUIDITY_PROGRAM_V4 \'{}\': {}", // Changed to V4
-                RAYDIUM_LIQUIDITY_PROGRAM_V4, e // Changed to V4
-            );
-            return;
-        }
-    };
-    let whirlpool_id = match Pubkey::from_str(ORCA_WHIRLPOOL_PROGRAM_ID) {
-        Ok(id) => id,
-        Err(e) => {
-            eprintln!(
-                "Invalid ORCA_WHIRLPOOL_PROGRAM_ID '{}': {}",
-                ORCA_WHIRLPOOL_PROGRAM_ID, e
-            );
-            return;
-        }
-    };
-    let lifinity_id = match Pubkey::from_str(LIFINITY_PROGRAM_ID) {
-        Ok(id) => id,
-        Err(e) => {
-            eprintln!(
-                "Invalid LIFINITY_PROGRAM_ID '{}': {}",
-                LIFINITY_PROGRAM_ID, e
-            );
-            return;
-        }
-    };
-    let phoenix_id = match Pubkey::from_str(PHOENIX_PROGRAM_ID) {
-        Ok(id) => id,
-        Err(e) => {
-            eprintln!("Invalid PHOENIX_PROGRAM_ID '{}': {}", PHOENIX_PROGRAM_ID, e);
-            return;
-        }
-    };
-    let ids = vec![orca_id, raydium_id, whirlpool_id, lifinity_id, phoenix_id];
+// Prefixed as unused by direct calls in lib, should be called by a test runner or main test fn.
+pub fn _exercise_parser_registry() {
+    let orca_id = Pubkey::from_str(ORCA_SWAP_PROGRAM_ID_V2).unwrap();
+    let raydium_id = Pubkey::from_str(RAYDIUM_LIQUIDITY_PROGRAM_V4).unwrap();
+    let whirlpool_id = Pubkey::from_str(ORCA_WHIRLPOOL_PROGRAM_ID).unwrap();
+    let lifinity_id = Pubkey::from_str(LIFINITY_PROGRAM_ID).unwrap();
+    // PHOENIX_PROGRAM_ID is const _PHOENIX_PROGRAM_ID, not used for pool parsing typically
+    // let phoenix_id = Pubkey::from_str(_PHOENIX_PROGRAM_ID).unwrap(); 
+    let ids = vec![orca_id, raydium_id, whirlpool_id, lifinity_id]; // Removed phoenix_id
     for id in ids {
         let _ = get_pool_parser_fn_for_program(&id);
     }
-    // Call static parser methods
     let dummy = Pubkey::new_unique();
-    let dummy_data = vec![0u8; 400];
+    let dummy_data = vec![0u8; 700]; // Increased size to pass Whirlpool initial check
     let _ = OrcaPoolParser::parse_pool_data(dummy, &dummy_data);
     let _ = RaydiumPoolParser::parse_pool_data(dummy, &dummy_data);
     let _ = WhirlpoolPoolParser::parse_pool_data(dummy, &dummy_data);
@@ -81,18 +38,16 @@ pub fn exercise_parser_registry() {
     let _ = LifinityPoolParser::get_program_id();
 }
 
-/// Call all DEX client trait methods and api_key accessors
-pub async fn exercise_dex_clients() {
+// Prefixed
+pub async fn _exercise_dex_clients() {
     use crate::dex::http_utils_shared::log_timed_request;
-    use std::sync::Arc; // Import Arc
-    use crate::cache::Cache; // Import Cache
-    use crate::config::settings::Config; // Import Config for cache initialization
+    use std::sync::Arc; 
+    use crate::cache::Cache; 
+    use crate::config::settings::Config; 
 
-    let app_config = Arc::new(Config::from_env()); // Create a dummy config
+    let app_config = Arc::new(Config::from_env()); 
     let cache = Arc::new(Cache::new(&app_config.redis_url, app_config.redis_default_ttl_secs).await.unwrap());
 
-
-    // Create clients within timed request to demonstrate log_timed_request usage
     let orca = log_timed_request("Initialize Orca Client", async { OrcaClient::new(cache.clone(), None) }).await;
     let raydium =
         log_timed_request("Initialize Raydium Client", async { RaydiumClient::new(cache.clone(), None) }).await;
@@ -108,29 +63,30 @@ pub async fn exercise_dex_clients() {
         log_timed_request("Initialize Meteora Client", async { MeteoraClient::new(cache.clone(), None) }).await;
     let phoenix =
         log_timed_request("Initialize Phoenix Client", async { PhoenixClient::new(cache.clone(), None) }).await;
-    // Use api_key fields
-    let _ = orca.get_api_key();
-    let _ = raydium.get_api_key();
-    let _ = whirlpool.get_api_key();
-    let _ = lifinity.get_api_key();
-    let _ = meteora.get_api_key();
-    let _ = phoenix.get_api_key();
-    // Call trait methods
+    
+    let _ = orca._get_api_key(); // Use prefixed
+    let _ = raydium.get_api_key(); // Fixed: use get_api_key, not _get_api_key
+    let _ = whirlpool.get_api_key(); // Fixed: use get_api_key, not _get_api_key
+    let _ = lifinity.get_api_key(); // Assuming this one might be used or was missed for prefixing
+    let _ = meteora.get_api_key(); // Assuming this one might be used
+    let _ = phoenix._get_api_key(); // Use prefixed
+    
     let _ = orca.get_supported_pairs();
     let _ = raydium.get_supported_pairs();
     let _ = whirlpool.get_supported_pairs();
     let _ = lifinity.get_supported_pairs();
     let _ = meteora.get_supported_pairs();
     let _ = phoenix.get_supported_pairs();
+    
     let _ = orca.get_name();
     let _ = raydium.get_name();
     let _ = whirlpool.get_name();
     let _ = lifinity.get_name();
     let _ = meteora.get_name();
     let _ = phoenix.get_name();
-    // Call async quote (dummy values)
-    let usdc = "EPjFWdd5AufqSSqeM2q8VsJb9h6p9FZ6F1u1kQ1QwZ5Q";
-    let sol = "So11111111111111111111111111111111111111112";
+    
+    let usdc = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"; // USDC mint
+    let sol = "So11111111111111111111111111111111111111112"; // SOL mint
     let _ = orca.get_best_swap_quote(usdc, sol, 1_000_000).await;
     let _ = raydium.get_best_swap_quote(usdc, sol, 1_000_000).await;
     let _ = whirlpool.get_best_swap_quote(usdc, sol, 1_000_000).await;
@@ -139,8 +95,8 @@ pub async fn exercise_dex_clients() {
     let _ = phoenix.get_best_swap_quote(usdc, sol, 1_000_000).await;
 }
 
-/// Serialize and deserialize a dummy PoolInfo to exercise serde imports
-pub fn exercise_serde() {
+// Prefixed
+pub fn _exercise_serde() {
     let pool = PoolInfo {
         address: Pubkey::new_unique(),
         name: "TestPool".to_string(),

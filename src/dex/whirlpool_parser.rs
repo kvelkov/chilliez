@@ -1,193 +1,73 @@
-use crate::arbitrage::headers_with_api_key;
-use crate::dex::http_utils::HttpRateLimiter;
-use crate::dex::quote::{DexClient, Quote};
-use crate::utils::{DexType, PoolInfo, PoolParser, PoolToken};
-use anyhow::{anyhow, Result};
-use async_trait::async_trait;
-use log::{error, warn};
-use once_cell::sync::Lazy;
-use reqwest::Client;
-use serde::Deserialize;
-use solana_sdk::pubkey::Pubkey;
-use std::env;
-use std::str::FromStr;
-use std::time::Duration;
-use std::time::Instant; // For measuring request latency
+use crate::dex::http_utils::HttpRateLimiter; // This import is now unused if WhirlpoolClient is removed
+use crate::dex::quote::{DexClient, Quote};   // This import is now unused if WhirlpoolClient is removed
+use crate::utils::{DexType, PoolInfo, PoolParser, PoolToken}; // PoolParser is used by trait impl
+use anyhow::{anyhow, Result}; // Result is used by trait impl
+use async_trait::async_trait; // This import is now unused if WhirlpoolClient is removed
+use log::{error, warn}; // error, warn used in PoolParser impl
+use once_cell::sync::Lazy; // This import is now unused if WhirlpoolClient is removed
+use reqwest::Client; // This import is now unused if WhirlpoolClient is removed
+use serde::Deserialize; // This import is now unused if WhirlpoolClient is removed
+use solana_sdk::pubkey::Pubkey; // Pubkey used in PoolParser impl
+use std::env; // This import is now unused if WhirlpoolClient is removed
+use std::str::FromStr; // FromStr used by get_program_id
+use std::time::Duration; // This import is now unused if WhirlpoolClient is removed
+use std::time::Instant; // This import is now unused if WhirlpoolClient is removed
 
-static WHIRLPOOL_RATE_LIMITER: Lazy<HttpRateLimiter> = Lazy::new(|| {
-    HttpRateLimiter::new(
-        4,
-        Duration::from_millis(200),
-        3,
-        Duration::from_millis(250),
-        vec!["https://api.orca.so/whirlpools/quote".to_string()],
-    )
-});
-
-#[derive(Deserialize, Debug)]
-struct WhirlpoolApiResponse {
-    #[serde(rename = "inputMint")]
-    input_mint: String,
-    #[serde(rename = "outputMint")]
-    output_mint: String,
-    #[serde(rename = "inAmount")]
-    in_amount: String, // Using string to handle various number formats
-    #[serde(rename = "outAmount")]
-    out_amount: String, // Using string to handle various number formats
-                        // ... other fields specific to Whirlpool API
-}
-
-pub struct WhirlpoolClient {
-    api_key: String,
-    http_client: Client,
-}
-
-impl WhirlpoolClient {
-    pub fn new() -> Self {
-        let api_key = env::var("WHIRLPOOL_API_KEY").unwrap_or_else(|_| {
-            warn!("WHIRLPOOL_API_KEY not set. This might affect API functionality.");
-            String::new()
-        });
-        Self {
-            api_key,
-            http_client: Client::new(),
-        }
-    }
-
-    pub fn get_api_key(&self) -> &str {
-        &self.api_key
-    }
-}
-
-#[async_trait]
-impl DexClient for WhirlpoolClient {
-    async fn get_best_swap_quote(
-        &self,
-        input_token: &str,
-        output_token: &str,
-        amount: u64,
-    ) -> anyhow::Result<Quote> {
-        // Use the rate limiter's get_with_backoff to wrap the HTTP request
-        let url = format!(
-            "https://api.orca.so/whirlpools/quote?inputMint={}&outputMint={}&amount={}",
-            input_token, output_token, amount
-        );
-        let request_start_time = Instant::now();
-        let response = WHIRLPOOL_RATE_LIMITER
-            .get_with_backoff(&self.http_client, &url, |u| {
-                self.http_client
-                    .get(u)
-                    .headers(headers_with_api_key("WHIRLPOOL_API_KEY"))
-            })
-            .await?;
-        let request_duration_ms = request_start_time.elapsed().as_millis() as u64;
-        let status = response.status();
-        if status.is_success() {
-            let response_text = response.text().await.unwrap_or_default();
-            match serde_json::from_str::<WhirlpoolApiResponse>(&response_text) {
-                Ok(api_response) => {
-                    let input_amount_u64 = api_response.in_amount.parse::<u64>().map_err(|e| {
-                        anyhow!(
-                            "Failed to parse Whirlpool in_amount '{}': {}",
-                            api_response.in_amount,
-                            e
-                        )
-                    })?;
-                    let output_amount_u64 =
-                        api_response.out_amount.parse::<u64>().map_err(|e| {
-                            anyhow!(
-                                "Failed to parse Whirlpool out_amount '{}': {}",
-                                api_response.out_amount,
-                                e
-                            )
-                        })?;
-                    Ok(Quote {
-                        input_token: api_response.input_mint,
-                        output_token: api_response.output_mint,
-                        input_amount: input_amount_u64,
-                        output_amount: output_amount_u64,
-                        dex: self.get_name().to_string(),
-                        route: vec![],
-                        latency_ms: Some(request_duration_ms),
-                        execution_score: None,
-                        route_path: None,
-                        slippage_estimate: None,
-                    })
-                }
-                Err(e) => {
-                    error!(
-                        "Failed to deserialize Whirlpool quote from URL {}: {:?}. Response body: {}",
-                        url, e, response_text
-                    );
-                    Err(anyhow!(
-                        "Failed to deserialize Whirlpool quote from {}. Error: {}. Body: {}",
-                        url,
-                        e,
-                        response_text
-                    ))
-                }
-            }
-        } else {
-            let error_text = response
-                .text()
-                .await
-                .unwrap_or_else(|_| "Failed to read error response body".to_string());
-            error!(
-                "Failed to fetch Whirlpool quote from URL {}: Status {}. Body: {}",
-                url, status, error_text
-            );
-            Err(anyhow!(
-                "Failed to fetch Whirlpool quote from {}: {}. Body: {}",
-                url,
-                status,
-                error_text
-            ))
-        }
-    }
-
-    fn get_supported_pairs(&self) -> Vec<(String, String)> {
-        vec![]
-    }
-
-    fn get_name(&self) -> &str {
-        "Whirlpool"
-    }
-}
+// The WhirlpoolClient struct and its implementation were here.
+// They are removed because they are redundant with src/dex/whirlpool.rs::WhirlpoolClient
+// and were flagged as unused.
 
 // Define WhirlpoolPoolParser
 pub struct WhirlpoolPoolParser;
 pub const ORCA_WHIRLPOOL_PROGRAM_ID: &str = "whirLbmvGdJ8kT34DbDZpeMZQRAu8da5nq7WaRDRtyQ";
 
+// This is the primary implementation used by the POOL_PARSER_REGISTRY
 impl PoolParser for WhirlpoolPoolParser {
     fn parse_pool_data(address: Pubkey, data: &[u8]) -> Result<PoolInfo> {
-        if data.len() < 340 {
+        // This parsing logic is a STUB and needs to be correctly implemented
+        // based on the actual on-chain layout of Whirlpool accounts.
+        // The current stub uses hardcoded values or new_unique() for mints.
+        // For Whirlpools, reserves are not directly in the main pool account state;
+        // they are in separate token vault accounts. A full parser would need
+        // to be aware of this, or the system would need to fetch vault balances separately.
+
+        if data.len() < 340 { // Arbitrary check, actual Whirlpool size is larger (~640 bytes + discriminator)
             error!(
-                "Pool parsing failed for {} - Insufficient data length: {}",
+                "Pool parsing failed for {} - Insufficient data length: {}. Whirlpool accounts are typically larger.",
                 address,
                 data.len()
             );
-            return Err(anyhow!("Data too short for Whirlpool pool: {}", address));
+            return Err(anyhow!("Data too short for Whirlpool pool: {}. Expected ~648 bytes.", address));
         }
+        
+        warn!("Using STUB WhirlpoolPoolParser for address {}. Implement actual parsing logic for WhirlpoolState and vault lookups.", address);
 
+        // Placeholder PoolInfo based on stub parsing
         Ok(PoolInfo {
             address,
             name: format!(
-                "WhirlpoolPool/{}",
+                "WhirlpoolStub/{}", // Name indicates it's a stub
                 address.to_string().chars().take(6).collect::<String>()
             ),
+            // Token mints, symbols, decimals, and reserves in a real scenario would be derived 
+            // from the parsed WhirlpoolState (which contains token_mint_a, token_mint_b)
+            // and then further RPC calls to get token vault balances for reserves
+            // and token metadata (symbol, decimals) for the mints.
             token_a: PoolToken {
-                mint: Pubkey::new_unique(),
-                symbol: "TKA".to_string(),
-                decimals: 6,
-                reserve: 1_000_000,
+                mint: Pubkey::new_unique(), // Placeholder - should be from parsed data
+                symbol: "TKA_WP_STUB".to_string(), // Placeholder
+                decimals: 6, // Placeholder
+                reserve: 0, // Placeholder - reserves are in vaults
             },
             token_b: PoolToken {
-                mint: Pubkey::new_unique(),
-                symbol: "TKB".to_string(),
-                decimals: 6,
-                reserve: 1_000_000,
+                mint: Pubkey::new_unique(), // Placeholder
+                symbol: "TKB_WP_STUB".to_string(), // Placeholder
+                decimals: 6, // Placeholder
+                reserve: 0, // Placeholder
             },
-            fee_numerator: 30,
+            // Fee for Whirlpools is complex (tick-based, fee_rate in WhirlpoolState)
+            // The fee_numerator/denominator here is a simplification for AMM-style PoolInfo.
+            fee_numerator: 30, // Example: 0.30% - placeholder
             fee_denominator: 10000,
             last_update_timestamp: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -206,11 +86,7 @@ impl PoolParser for WhirlpoolPoolParser {
     }
 }
 
-impl WhirlpoolPoolParser {
-    pub fn parse_pool_data(address: Pubkey, data: &[u8]) -> anyhow::Result<PoolInfo> {
-        <Self as PoolParser>::parse_pool_data(address, data)
-    }
-    pub fn get_program_id() -> Pubkey {
-        <Self as PoolParser>::get_program_id()
-    }
-}
+// The inherent `impl WhirlpoolPoolParser { ... }` block containing
+// pub fn parse_pool_data(...) and pub fn get_program_id(...) was here.
+// It was removed because these functions were redundant, merely calling the trait methods,
+// and were flagged as unused. The PoolParser trait implementation above is what's registered and used.

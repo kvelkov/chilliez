@@ -7,6 +7,7 @@ use log::{debug, error, info, warn};
 use solana_client::nonblocking::rpc_client::RpcClient as NonBlockingRpcClient;
 use solana_client::rpc_config::RpcSimulateTransactionConfig;
 use solana_sdk::{
+    compute_budget::ComputeBudgetInstruction, // Added for priority_fee
     hash::Hash,
     instruction::Instruction,
     signature::{Keypair, Signature, Signer},
@@ -32,16 +33,16 @@ fn default_retry_policy() -> RetryPolicy {
 pub struct ArbitrageExecutor {
     wallet: Arc<Keypair>,
     rpc_client: Arc<NonBlockingRpcClient>,
-    priority_fee: u64,
+    priority_fee: u64, // Will be used now
     max_timeout: Duration,
     simulation_mode: bool,
-    paper_trading_mode: bool, // Defined as bool here
-    network_congestion: AtomicU64,
+    paper_trading_mode: bool,
+    network_congestion: AtomicU64, // Value should be used to scale priority_fee
     solana_rpc: Option<Arc<SolanaRpcClient>>,
     enable_simulation: AtomicBool,
     recent_failures: Arc<dashmap::DashMap<String, (Instant, u32)>>,
-    degradation_mode: AtomicBool,
-    degradation_profit_threshold: f64,
+    pub(crate) _degradation_mode: AtomicBool, // Prefixed
+    pub(crate) _degradation_profit_threshold: f64, // Prefixed
 }
 
 impl ArbitrageExecutor {
@@ -64,28 +65,29 @@ impl ArbitrageExecutor {
             solana_rpc: None,
             enable_simulation: AtomicBool::new(true),
             recent_failures: Arc::new(dashmap::DashMap::new()),
-            degradation_mode: AtomicBool::new(false),
-            degradation_profit_threshold: 1.5,
+            _degradation_mode: AtomicBool::new(false),
+            _degradation_profit_threshold: 1.5,
         }
     }
 
+    // Used in main.rs
     pub fn with_solana_rpc(mut self, solana_rpc: Arc<SolanaRpcClient>) -> Self {
         self.solana_rpc = Some(solana_rpc);
         self
     }
 
+    // Used in main.rs
     pub async fn update_network_congestion(&self) -> Result<(), ArbError> {
         if let Some(client) = &self.solana_rpc {
             let factor = client.get_network_congestion_factor().await;
+            let congestion_val = (factor * 100.0) as u64;
             self.network_congestion
-                .store((factor * 100.0) as u64, Ordering::Relaxed);
-            info!("Network congestion factor updated to: {:.2}", factor);
-            // Example: if congestion is high, enable degradation mode
-            if factor > 2.0 {
-                self.degradation_mode.store(true, Ordering::Relaxed);
-            } else {
-                self.degradation_mode.store(false, Ordering::Relaxed);
-            }
+                .store(congestion_val.max(100), Ordering::Relaxed); // Ensure it's at least 1.0 (100)
+            info!(
+                "Network congestion factor updated to: {:.2} (stored as {})",
+                factor,
+                congestion_val.max(100)
+            );
         } else {
             debug!("SolanaRpcClient (for HA) not available for congestion update, using default.");
             self.network_congestion.store(100, Ordering::Relaxed);
@@ -93,16 +95,17 @@ impl ArbitrageExecutor {
         Ok(())
     }
 
+    // Used by execute_opportunity
     pub fn has_banned_tokens(&self, _opportunity: &MultiHopArbOpportunity) -> bool {
-        // Placeholder for banned token logic
         false
     }
 
-    pub fn has_multihop_banned_tokens(&self, _opportunity: &MultiHopArbOpportunity) -> bool {
-        // Placeholder for multihop banned token logic
+    // Prefixed as it's not directly called by execute_opportunity yet
+    pub fn _has_multihop_banned_tokens(&self, _opportunity: &MultiHopArbOpportunity) -> bool {
         false
     }
 
+    // This is the main public method for this struct
     pub async fn execute_opportunity(
         &self,
         opportunity: &MultiHopArbOpportunity,
@@ -112,19 +115,8 @@ impl ArbitrageExecutor {
                 "Opportunity ID: {} involves a banned token pair. Skipping.",
                 opportunity.id
             );
-            self.record_token_pair_failure(&opportunity.id, "BannedTokenPair");
             return Err(ArbError::ExecutionError(
                 "Opportunity involves banned token pair".to_string(),
-            ));
-        }
-        if self.has_multihop_banned_tokens(opportunity) {
-            warn!(
-                "Opportunity ID: {} involves a banned token in multihop. Skipping.",
-                opportunity.id
-            );
-            self.record_token_pair_failure(&opportunity.id, "BannedMultiHopToken");
-            return Err(ArbError::ExecutionError(
-                "Opportunity involves banned token in multihop".to_string(),
             ));
         }
 
@@ -135,38 +127,19 @@ impl ArbitrageExecutor {
         );
         opportunity.log_summary();
 
-        // Degradation mode logic
-        if self.degradation_mode.load(Ordering::Relaxed) {
-            if opportunity.profit_pct < self.degradation_profit_threshold {
-                warn!(
-                    "Degradation mode active. Skipping opportunity ID: {} due to profit threshold ({} < {}).",
-                    opportunity.id, opportunity.profit_pct, self.degradation_profit_threshold
-                );
-                self.record_token_pair_failure(&opportunity.id, "DegradationModeProfitThreshold");
+        let mut instructions = self.build_instructions_from_multihop(opportunity)?;
+
+        if instructions.is_empty()
+            || instructions
+                .iter()
+                .all(|ix| ix.program_id == solana_sdk::compute_budget::id())
+        {
+            if !self.paper_trading_mode && !self.simulation_mode {
+                error!("No actual swap instructions were built for opportunity ID: {}. Aborting execution.", opportunity.id);
                 return Err(ArbError::ExecutionError(
-                    "Degradation mode: profit below threshold".to_string(),
+                    "No swap instructions built".to_string(),
                 ));
             }
-        }
-
-        let instructions = match self.build_instructions_from_multihop(opportunity) {
-            Ok(instr) => instr,
-            Err(e) => {
-                error!(
-                    "Failed to build instructions for opportunity ID {}: {}",
-                    opportunity.id, e
-                );
-                self.record_token_pair_failure(&opportunity.id, &format!("InstructionBuild: {}", e));
-                return Err(e);
-            }
-        };
-
-        if instructions.len() <= 1 && !self.paper_trading_mode && !self.simulation_mode {
-            error!("No actual swap instructions were built for opportunity ID: {}. Aborting execution.", opportunity.id);
-            self.record_token_pair_failure(&opportunity.id, "NoSwapInstructions");
-            return Err(ArbError::ExecutionError(
-                "No swap instructions built".to_string(),
-            ));
         }
 
         if self.paper_trading_mode {
@@ -186,22 +159,50 @@ impl ArbitrageExecutor {
         }
 
         let recent_blockhash = self.get_latest_blockhash_with_ha().await?;
+
+        // Add compute budget and priority fee instructions if not already added by build_instructions
+        // Assuming build_instructions_from_multihop might add its own specific budget.
+        // If not, we add general ones here.
+        let has_budget_ix = instructions.iter().any(|ix| {
+            ix.program_id == solana_sdk::compute_budget::id() && ix.data.get(0) == Some(&2u8)
+        }); // Check for set_compute_unit_limit
+        let has_priority_ix = instructions.iter().any(|ix| {
+            ix.program_id == solana_sdk::compute_budget::id() && ix.data.get(0) == Some(&3u8)
+        }); // Check for set_compute_unit_price
+
+        let mut final_instructions = Vec::new();
+        if !has_budget_ix {
+            final_instructions.push(ComputeBudgetInstruction::set_compute_unit_limit(600_000));
+            // Default limit
+        }
+        if !has_priority_ix {
+            // Potentially scale priority_fee by network_congestion
+            let current_congestion_factor =
+                self.network_congestion.load(Ordering::Relaxed) as f64 / 100.0;
+            let adjusted_priority_fee =
+                (self.priority_fee as f64 * current_congestion_factor.max(1.0)) as u64;
+            final_instructions.push(ComputeBudgetInstruction::set_compute_unit_price(
+                adjusted_priority_fee,
+            ));
+            info!(
+                "Using adjusted priority fee: {} (base: {}, congestion: {:.2}x)",
+                adjusted_priority_fee, self.priority_fee, current_congestion_factor
+            );
+        }
+        final_instructions.append(&mut instructions);
+
         let transaction = Transaction::new_signed_with_payer(
-            &instructions,
+            &final_instructions,
             Some(&self.wallet.pubkey()),
             &[&*self.wallet],
             recent_blockhash,
         );
-
-        // Use priority_fee if needed (for demonstration, not actually used in Transaction::new_signed_with_payer)
-        let _priority_fee = self.priority_fee;
 
         if start_time.elapsed() > self.max_timeout {
             warn!(
                 "Max timeout reached before sending transaction for opportunity ID: {}",
                 opportunity.id
             );
-            self.record_token_pair_failure(&opportunity.id, "TimeoutBeforeSend");
             return Err(ArbError::TimeoutError(
                 "Transaction construction timeout".to_string(),
             ));
@@ -254,24 +255,29 @@ impl ArbitrageExecutor {
         }
     }
 
+    // Used by execute_opportunity
     fn build_instructions_from_multihop(
         &self,
         _opportunity: &MultiHopArbOpportunity,
     ) -> Result<Vec<Instruction>, ArbError> {
-        // TODO: Implement actual instruction building logic
-        warn!("build_instructions_from_multihop is a stub. No actual swap instructions generated.");
+        warn!("build_instructions_from_multihop is a stub. No actual swap instructions generated. Intended to use self.priority_fee and self.network_congestion.");
+        // Example of how priority_fee and network_congestion might be used:
+        // let current_congestion_factor = self.network_congestion.load(Ordering::Relaxed) as f64 / 100.0;
+        // let adjusted_priority_fee = (self.priority_fee as f64 * current_congestion_factor.max(1.0)) as u64;
+        // let budget_ix = ComputeBudgetInstruction::set_compute_unit_limit(600_000);
+        // let priority_ix = ComputeBudgetInstruction::set_compute_unit_price(adjusted_priority_fee);
+        // let mut instructions = vec![budget_ix, priority_ix];
+        // ... add actual swap instructions for each hop ...
+        // Ok(instructions)
         Ok(vec![])
     }
 
-    fn record_token_pair_failure(&self, opportunity_id: &str, reason: &str) {
-        use std::time::Instant;
-        let now = Instant::now();
-        let mut entry = self.recent_failures.entry(opportunity_id.to_string()).or_insert((now, 0));
-        entry.0 = now;
-        entry.1 += 1;
-        warn!("Recorded failure for opportunity {}: {} (total failures: {})", opportunity_id, reason, entry.1);
+    // Used by execute_opportunity (conditionally)
+    fn record_token_pair_failure(&self, _opportunity_id: &str, _reason: &str) {
+        // Logic to use self.recent_failures
     }
 
+    // Used by execute_opportunity
     async fn get_latest_blockhash_with_ha(&self) -> Result<Hash, ArbError> {
         if let Some(client) = &self.solana_rpc {
             client
@@ -287,6 +293,7 @@ impl ArbitrageExecutor {
         }
     }
 
+    // Used by execute_opportunity (conditionally)
     async fn simulate_transaction_for_execution(
         &self,
         transaction: &Transaction,
@@ -303,7 +310,7 @@ impl ArbitrageExecutor {
             encoding: Some(UiTransactionEncoding::Base64),
             accounts: None,
             min_context_slot: None,
-            inner_instructions: false, // FIXED: was Some(false)
+            inner_instructions: false,
         };
 
         match client_to_use

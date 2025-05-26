@@ -1,14 +1,14 @@
 // src/dex/orca.rs
 
-// Removed: use crate::arbitrage::headers_with_api_key; // Marked as unused
 use crate::dex::http_utils::HttpRateLimiter;
 use crate::dex::quote::{DexClient, Quote};
 use crate::utils::{DexType, PoolInfo, PoolParser as UtilsPoolParser, PoolToken};
 use crate::cache::Cache;
+use crate::dex::http_utils_shared::log_timed_request; // Import the utility
 
 use anyhow::{anyhow, Result as AnyhowResult};
 use async_trait::async_trait;
-use log::{debug, error, warn}; // Removed info as it was unused
+use log::{debug, error, warn}; 
 use reqwest::Client as ReqwestClient;
 use serde::Deserialize;
 use solana_sdk::pubkey::Pubkey;
@@ -47,7 +47,7 @@ impl UtilsPoolParser for OrcaPoolParser {
 
 #[derive(Debug, Clone)]
 pub struct OrcaClient {
-    api_key: String,
+    _api_key: String, // Prefixed
     http_client: ReqwestClient,
     cache: Arc<Cache>,
     quote_cache_ttl_secs: u64,
@@ -60,7 +60,7 @@ impl OrcaClient {
             String::new()
         });
         Self {
-            api_key,
+            _api_key: api_key, // Used prefixed field
             http_client: ReqwestClient::builder()
                 .timeout(Duration::from_secs(10))
                 .user_agent(format!("RhodesArbBot/{}", env!("CARGO_PKG_VERSION")))
@@ -69,7 +69,7 @@ impl OrcaClient {
             quote_cache_ttl_secs: quote_cache_ttl_secs.unwrap_or(60),
         }
     }
-    pub fn get_api_key(&self) -> &str { &self.api_key }
+    pub fn _get_api_key(&self) -> &str { &self._api_key } // Prefixed
 }
 
 static ORCA_RATE_LIMITER: Lazy<HttpRateLimiter> = Lazy::new(|| {
@@ -89,61 +89,65 @@ struct OrcaQuoteResponse {
 #[async_trait]
 impl DexClient for OrcaClient {
     async fn get_best_swap_quote(&self, input_token_mint: &str, output_token_mint: &str, amount_in_atomic_units: u64) -> AnyhowResult<Quote> {
-        let cache_key_params = [input_token_mint, output_token_mint, &amount_in_atomic_units.to_string()];
-        let cache_prefix = "quote:orca";
+        let operation_label = format!("OrcaClient_GetQuote_{}_{}", input_token_mint, output_token_mint);
+        
+        // Using log_timed_request to wrap the core logic of this method
+        log_timed_request(&operation_label, async {
+            let cache_key_params = [input_token_mint, output_token_mint, &amount_in_atomic_units.to_string()];
+            let cache_prefix = "quote:orca";
 
-        if let Ok(Some(cached_quote)) = self.cache.get_json::<Quote>(cache_prefix, &cache_key_params).await {
-            debug!("Orca quote cache HIT for {}->{} amount {}", input_token_mint, output_token_mint, amount_in_atomic_units);
-            return Ok(cached_quote);
-        }
-        debug!("Orca quote cache MISS for {}->{} amount {}", input_token_mint, output_token_mint, amount_in_atomic_units);
-
-        let url = format!("https://api.orca.so/v2/solana/quote?inputMint={}&outputMint={}&amountIn={}", input_token_mint, output_token_mint, amount_in_atomic_units);
-        let request_start_time = Instant::now();
-        let response_result = ORCA_RATE_LIMITER.get_with_backoff(&self.http_client, &url, |request_url| {
-            let mut req_builder = self.http_client.get(request_url);
-            if !self.api_key.is_empty() { req_builder = req_builder.header("Authorization", format!("Bearer {}", self.api_key)); }
-            req_builder
-        }).await;
-        let request_duration_ms = request_start_time.elapsed().as_millis() as u64;
-
-        match response_result {
-            Ok(response) => {
-                let status = response.status();
-                if status.is_success() {
-                    let text = response.text().await.map_err(|e| anyhow!("Failed to read Orca response text: {}", e))?;
-                    debug!("Orca API response text for {}->{}: {}", input_token_mint, output_token_mint, text);
-                    match serde_json::from_str::<OrcaQuoteResponse>(&text) {
-                        Ok(api_response) => {
-                            let input_amount_u64 = api_response.in_amount.parse::<u64>().map_err(|e| anyhow!("Parse Orca in_amount: {}", e))?;
-                            let output_amount_u64 = api_response.out_amount.parse::<u64>().map_err(|e| anyhow!("Parse Orca out_amount: {}", e))?;
-                            let quote = Quote {
-                                input_token: api_response.input_mint, output_token: api_response.output_mint,
-                                input_amount: input_amount_u64, output_amount: output_amount_u64,
-                                dex: self.get_name().to_string(),
-                                route: api_response.route.unwrap_or_else(|| vec![input_token_mint.to_string(), output_token_mint.to_string()]),
-                                latency_ms: Some(request_duration_ms), execution_score: None, route_path: None,
-                                slippage_estimate: api_response.slippage_bps.map(|bps| bps as f64 / 10000.0),
-                            };
-                            // Changed set_json to set_ex
-                            if let Err(e) = self.cache.set_ex(cache_prefix, &cache_key_params, &quote, Some(self.quote_cache_ttl_secs)).await {
-                                warn!("Failed to cache Orca quote for {}->{}: {}", input_token_mint, output_token_mint, e);
-                            }
-                            Ok(quote)
-                        }
-                        Err(e) => {
-                            error!("Deserialize Orca quote: URL {}, Error: {:?}, Body: {}", url, e, text);
-                            Err(anyhow!("Deserialize Orca: {}. Body: {}", e, text))
-                        }
-                    }
-                } else {
-                    let error_text = response.text().await.unwrap_or_else(|_| "No error body".to_string());
-                    error!("Fetch Orca quote failed: Status {}, URL {}, Body: {}", status, url, error_text);
-                    Err(anyhow!("Fetch Orca quote: Status {}, Body: {}", status, error_text))
-                }
+            if let Ok(Some(cached_quote)) = self.cache.get_json::<Quote>(cache_prefix, &cache_key_params).await {
+                debug!("Orca quote cache HIT for {}->{} amount {}", input_token_mint, output_token_mint, amount_in_atomic_units);
+                return Ok(cached_quote);
             }
-            Err(e) => { error!("HTTP request to Orca failed for URL {}: {}", url, e); Err(e) }
-        }
+            debug!("Orca quote cache MISS for {}->{} amount {}", input_token_mint, output_token_mint, amount_in_atomic_units);
+
+            let url = format!("https://api.orca.so/v2/solana/quote?inputMint={}&outputMint={}&amountIn={}", input_token_mint, output_token_mint, amount_in_atomic_units);
+            let request_start_time = Instant::now();
+            let response_result = ORCA_RATE_LIMITER.get_with_backoff(&self.http_client, &url, |request_url| {
+                let mut req_builder = self.http_client.get(request_url);
+                if !self._api_key.is_empty() { req_builder = req_builder.header("Authorization", format!("Bearer {}", self._api_key)); }
+                req_builder
+            }).await;
+            let request_duration_ms = request_start_time.elapsed().as_millis() as u64;
+
+            match response_result {
+                Ok(response) => {
+                    let status = response.status();
+                    if status.is_success() {
+                        let text = response.text().await.map_err(|e| anyhow!("Failed to read Orca response text: {}", e))?;
+                        debug!("Orca API response text for {}->{}: {}", input_token_mint, output_token_mint, text);
+                        match serde_json::from_str::<OrcaQuoteResponse>(&text) {
+                            Ok(api_response) => {
+                                let input_amount_u64 = api_response.in_amount.parse::<u64>().map_err(|e| anyhow!("Parse Orca in_amount: {}", e))?;
+                                let output_amount_u64 = api_response.out_amount.parse::<u64>().map_err(|e| anyhow!("Parse Orca out_amount: {}", e))?;
+                                let quote = Quote {
+                                    input_token: api_response.input_mint, output_token: api_response.output_mint,
+                                    input_amount: input_amount_u64, output_amount: output_amount_u64,
+                                    dex: self.get_name().to_string(),
+                                    route: api_response.route.unwrap_or_else(|| vec![input_token_mint.to_string(), output_token_mint.to_string()]),
+                                    latency_ms: Some(request_duration_ms), execution_score: None, route_path: None,
+                                    slippage_estimate: api_response.slippage_bps.map(|bps| bps as f64 / 10000.0),
+                                };
+                                if let Err(e) = self.cache.set_ex(cache_prefix, &cache_key_params, &quote, Some(self.quote_cache_ttl_secs)).await {
+                                    warn!("Failed to cache Orca quote for {}->{}: {}", input_token_mint, output_token_mint, e);
+                                }
+                                Ok(quote)
+                            }
+                            Err(e) => {
+                                error!("Deserialize Orca quote: URL {}, Error: {:?}, Body: {}", url, e, text);
+                                Err(anyhow!("Deserialize Orca: {}. Body: {}", e, text))
+                            }
+                        }
+                    } else {
+                        let error_text = response.text().await.unwrap_or_else(|_| "No error body".to_string());
+                        error!("Fetch Orca quote failed: Status {}, URL {}, Body: {}", status, url, error_text);
+                        Err(anyhow!("Fetch Orca quote: Status {}, Body: {}", status, error_text))
+                    }
+                }
+                Err(e) => { error!("HTTP request to Orca failed for URL {}: {}", url, e); Err(e) }
+            }
+        }).await // Await the future returned by log_timed_request
     }
     fn get_supported_pairs(&self) -> Vec<(String, String)> {
         warn!("OrcaClient::get_supported_pairs returning placeholder data.");

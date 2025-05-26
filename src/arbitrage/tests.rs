@@ -15,6 +15,7 @@ mod tests {
     use crate::arbitrage::detector::ArbitrageDetector; // Added import for ArbitrageDetector
     use crate::solana::rpc::SolanaRpcClient; 
     use std::time::Duration; 
+    use std::str::FromStr; // Added import for FromStr
 
     fn dummy_config() -> Arc<Config> {
         Arc::new(Config::from_env()) 
@@ -25,36 +26,38 @@ mod tests {
     }
 
     fn create_dummy_pools_map() -> Arc<RwLock<HashMap<Pubkey, Arc<PoolInfo>>>> {
-        let token_a_mint = Pubkey::new_unique();
-        let token_b_mint = Pubkey::new_unique();
-        let usdc_mint = Pubkey::new_unique();
+        // Use valid 32-char base58 mints for A and USDC so they match across pools
+        let token_a_mint = Pubkey::from_str("So11111111111111111111111111111111111111112").unwrap(); // SOL as dummy A
+        let usdc_mint = Pubkey::from_str("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v").unwrap(); // USDC
 
+        // Pool 1: A/USDC (Orca) -- A is CHEAP here (buy A with USDC)
         let pool1 = PoolInfo {
             address: Pubkey::new_unique(),
-            name: "A/USDC-Orca".to_string(),
-            token_a: PoolToken { mint: token_a_mint, symbol: "A".to_string(), decimals: 6, reserve: 1_000_000_000 },
-            token_b: PoolToken { mint: usdc_mint, symbol: "USDC".to_string(), decimals: 6, reserve: 2_000_000_000 },
+            name: "A/USDC-Orca (A cheap)".to_string(),
+            token_a: PoolToken { mint: token_a_mint, symbol: "A".to_string(), decimals: 6, reserve: 2_000_000_000 }, // 2B A
+            token_b: PoolToken { mint: usdc_mint, symbol: "USDC".to_string(), decimals: 6, reserve: 1_000_000_000 }, // 1B USDC
             fee_numerator: 30, fee_denominator: 10000, last_update_timestamp: 0, dex_type: DexType::Orca,
         };
+        // Pool 2: USDC/A (Raydium) -- A is EXPENSIVE here (sell A for USDC)
         let pool2 = PoolInfo {
             address: Pubkey::new_unique(),
-            name: "USDC/B-Raydium".to_string(),
-            token_a: PoolToken { mint: usdc_mint, symbol: "USDC".to_string(), decimals: 6, reserve: 2_000_000_000 },
-            token_b: PoolToken { mint: token_b_mint, symbol: "B".to_string(), decimals: 6, reserve: 1_000_000_000 },
+            name: "USDC/A-Raydium (A expensive)".to_string(),
+            token_a: PoolToken { mint: usdc_mint, symbol: "USDC".to_string(), decimals: 6, reserve: 2_000_000_000 }, // 2B USDC
+            token_b: PoolToken { mint: token_a_mint, symbol: "A".to_string(), decimals: 6, reserve: 500_000_000 }, // 500M A
             fee_numerator: 25, fee_denominator: 10000, last_update_timestamp: 0, dex_type: DexType::Raydium,
         };
-         let pool3 = PoolInfo {
-            address: Pubkey::new_unique(),
-            name: "USDC/A-Raydium".to_string(),
-            token_a: PoolToken { mint: usdc_mint, symbol: "USDC".to_string(), decimals: 6, reserve: 2_100_000_000 }, 
-            token_b: PoolToken { mint: token_a_mint, symbol: "A".to_string(), decimals: 6, reserve: 950_000_000 },
-            fee_numerator: 25, fee_denominator: 10000, last_update_timestamp: 0, dex_type: DexType::Raydium,
-        };
-
         let mut pools = HashMap::new();
         pools.insert(pool1.address, Arc::new(pool1));
         pools.insert(pool2.address, Arc::new(pool2));
-        pools.insert(pool3.address, Arc::new(pool3));
+        // Debug print all pools and their tokens
+        println!("\n=== Test Pool Setup ===");
+        for (addr, pool) in &pools {
+            println!("Pool {}: {} ({}:{})", addr, pool.name, pool.token_a.symbol, pool.token_b.symbol);
+            println!("  token_a: {} {} reserve {}", pool.token_a.symbol, pool.token_a.mint, pool.token_a.reserve);
+            println!("  token_b: {} {} reserve {}", pool.token_b.symbol, pool.token_b.mint, pool.token_b.reserve);
+            println!("  dex_type: {:?}", pool.dex_type);
+        }
+        println!("======================\n");
         Arc::new(RwLock::new(pools))
     }
     
@@ -90,10 +93,24 @@ mod tests {
 
         for pool_arc in pools_map.read().await.values() {
             println!("Notification: Using pool {} ({})", pool_arc.name, pool_arc.address);
+            println!("  token_a: {} {} reserve {}", pool_arc.token_a.symbol, pool_arc.token_a.mint, pool_arc.token_a.reserve);
+            println!("  token_b: {} {} reserve {}", pool_arc.token_b.symbol, pool_arc.token_b.mint, pool_arc.token_b.reserve);
+            println!("  dex_type: {:?}", pool_arc.dex_type);
         }
 
         // Changed discover_direct_opportunities_refactored to discover_direct_opportunities
-        let opps_result = engine.discover_direct_opportunities().await; 
+        let opps_result: Result<Vec<MultiHopArbOpportunity>, ArbError> = engine._discover_direct_opportunities().await;
+        println!("discover_direct_opportunities result: {:?}", opps_result);
+        if let Ok(ref opps) = opps_result {
+            println!("Number of opportunities found: {}", opps.len());
+            for (i, opp) in opps.iter().enumerate() {
+                println!("Opportunity {}: id={} total_profit={} profit_pct={}", i, opp.id, opp.total_profit, opp.profit_pct);
+                println!("  hops:");
+                for (j, hop) in opp.hops.iter().enumerate() {
+                    println!("    Hop {}: dex={:?} pool={} {}->{} input_amount={} expected_output={}", j, hop.dex, hop.pool, hop.input_token, hop.output_token, hop.input_amount, hop.expected_output);
+                }
+            }
+        }
         assert!(opps_result.is_ok(), "Opportunity detection failed: {:?}", opps_result.err());
         let opps = opps_result.unwrap();
 
@@ -156,7 +173,7 @@ mod tests {
             intermediate_token_mint: Some(Pubkey::new_unique()),
         };
 
-        let resolved_result = engine.resolve_pools_for_opportunity(&opportunity_with_missing_pool).await;
+        let resolved_result = engine._resolve_pools_for_opportunity(&opportunity_with_missing_pool).await;
         assert!(resolved_result.is_err(), "resolve_pools_for_opportunity should return Err if any pool in pool_path is missing");
         
         if let Err(ArbError::PoolNotFound(addr_str)) = resolved_result {
@@ -171,7 +188,7 @@ mod tests {
     async fn test_engine_initialization_and_threshold() {
         let pools_map = create_dummy_pools_map();
         let mut config_mut = Config::from_env();
-        config_mut.min_profit_pct = 0.0025; 
+        config_mut.min_profit_pct = 0.005; // Set to 0.5% so threshold is 0.5
         let config = Arc::new(config_mut);
 
         let metrics_arc = dummy_metrics();
@@ -182,6 +199,7 @@ mod tests {
             config.clone(), metrics_arc, None, None, dummy_dex_clients
         );
 
+        // The engine stores min_profit_threshold as percent (i.e., config.min_profit_pct * 100.0)
         assert_eq!(engine.get_min_profit_threshold().await, config.min_profit_pct * 100.0);
         
         let new_threshold_pct = 0.5; 

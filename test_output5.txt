@@ -1,0 +1,52 @@
+
+running 12 tests
+test arbitrage::calculator_tests::tests::test_is_profitable_equal_to_min ... ok
+test arbitrage::calculator_tests::tests::test_is_profitable_with_slippage ... ok
+test arbitrage::calculator_tests::tests::test_is_profitable_true ... ok
+test arbitrage::calculator_tests::tests::test_is_profitable_false ... Volatility: 0.05700877125495695, Base Threshold (frac): 0.01, Recommended Threshold (frac): 0.038504385627478474
+ok
+test arbitrage::calculator_tests::tests::test_is_profitable_with_tx_cost ... ok
+test arbitrage::fee_manager::tests::test_is_fee_abnormal ... ok
+test arbitrage::dynamic_threshold::tests::test_volatility_and_threshold ... ok
+test arbitrage::fee_manager::tests::test_estimate_pool_swap_integrated ... ok
+test arbitrage::fee_manager::tests::test_fee_spike_detection ... ok
+Pool 11111114DhpssPJgSi1YU7hCMfYt1BJ334YgsffXm: A/USDC-Orca (A:USDC)
+Pool 11111113pNDtm61yGF8j2ycAwLEPsuWQXobye5qDR: A/USDC-Orca (A:USDC)
+  token_a: A So11111111111111111111111111111111111111112
+  token_b: USDC EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v
+Pool 11111114d3RrygbPdAtMuFnDmzsN8T5fYKVQ7FVr7: USDC/A-Raydium (USDC:A)
+  token_a: USDC EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v
+  token_b: A So11111111111111111111111111111111111111112
+  token_a: A So11111111111111111111111111111111111111112
+  token_b: USDC EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v
+Pool 11111115RidqCHAoz6dzmXxGcfWLNzevYqNpaRAUo: USDC/A-Raydium (USDC:A)
+  token_a: USDC EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v
+  token_b: A So11111111111111111111111111111111111111112
+Pool 111111152P2r5yt6odmBLPsFCLBrFisJ3aS7LqLAT: A/USDC-Orca (A:USDC)
+  token_a: A So11111111111111111111111111111111111111112
+  token_b: USDC EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v
+Pool 11111115q4EpJaTXAZWpCg3J2zppWGSZ46KXozzo9: USDC/A-Raydium (USDC:A)
+  token_a: USDC EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v
+  token_b: A So11111111111111111111111111111111111111112
+Correctly identified missing pool: 11111116EPqoQskEM2Pddp8KTL9JdYEBZMGF3aq7V
+Notification: Using pool A/USDC-Orca (111111152P2r5yt6odmBLPsFCLBrFisJ3aS7LqLAT)
+  token_a: A So11111111111111111111111111111111111111112 reserve 1000000000
+  token_b: USDC EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v reserve 2000000000
+  dex_type: Orca
+Notification: Using pool USDC/A-Raydium (11111115q4EpJaTXAZWpCg3J2zppWGSZ46KXozzo9)
+  token_a: USDC EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v reserve 2100000000
+  token_b: A So11111111111111111111111111111111111111112 reserve 950000000
+  dex_type: Raydium
+test arbitrage::tests::tests::test_resolve_pools_for_opportunity_missing_pool ... ok
+discover_direct_opportunities result: Ok([])
+Number of opportunities found: 0
+test arbitrage::tests::tests::test_multihop_opportunity_detection_and_ban_logic ... FAILED
+test arbitrage::tests::tests::test_engine_initialization_and_threshold ... ok
+
+failures:
+
+failures:
+    arbitrage::tests::tests::test_multihop_opportunity_detection_and_ban_logic
+
+test result: FAILED. 11 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+

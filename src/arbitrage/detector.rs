@@ -107,10 +107,11 @@ impl ArbitrageDetector {
         pools: &HashMap<Pubkey, Arc<PoolInfo>>,
         metrics: &mut Metrics,
     ) -> Result<Vec<MultiHopArbOpportunity>, ArbError> {
+        println!("find_all_opportunities called with {} pools", pools.len());
         let mut opportunities = Vec::new();
-
         for (src_id, src_pool_arc) in pools {
             let src_pool = src_pool_arc.as_ref();
+            println!("  Outer loop: src_id {} pool {}", src_id, src_pool.name);
             let tokens_in_src_pool = [
                 (&src_pool.token_a.mint, &src_pool.token_a.symbol, src_pool.token_a.decimals),
                 (&src_pool.token_b.mint, &src_pool.token_b.symbol, src_pool.token_b.decimals),
@@ -124,7 +125,11 @@ impl ArbitrageDetector {
                         (src_pool.token_a.mint, src_pool.token_a.symbol.clone(), src_pool.token_a.decimals)
                     };
 
-                if *input_token_mint_for_cycle == intermediate_token_mint_val { continue; }
+                println!("    Checking input_token_mint_for_cycle {} vs intermediate_token_mint_val {}", input_token_mint_for_cycle, intermediate_token_mint_val);
+                if *input_token_mint_for_cycle == intermediate_token_mint_val { 
+                    println!("    Skipped: input_token_mint_for_cycle == intermediate_token_mint_val");
+                    continue; 
+                }
                 if Self::is_permanently_banned(input_token_symbol_for_cycle, &intermediate_token_symbol_val) || Self::is_temporarily_banned(input_token_symbol_for_cycle, &intermediate_token_symbol_val) {
                     debug!("Skipping banned pair for first hop: {} <-> {}", input_token_symbol_for_cycle, intermediate_token_symbol_val);
                     continue;
@@ -134,22 +139,65 @@ impl ArbitrageDetector {
                     if src_id == tgt_id { continue; }
                     let tgt_pool = tgt_pool_arc.as_ref();
 
+                    // Print all candidate pool pairs and their tokens and mints
+                    println!("Candidate pair: src_pool {} ({}:{}) [{} {}] <-> tgt_pool {} ({}:{}) [{} {}]", 
+                        src_pool.name, src_pool.token_a.symbol, src_pool.token_b.symbol, src_pool.token_a.mint, src_pool.token_b.mint,
+                        tgt_pool.name, tgt_pool.token_a.symbol, tgt_pool.token_b.symbol, tgt_pool.token_a.mint, tgt_pool.token_b.mint);
+                    println!("  input_token_mint_for_cycle: {} (symbol: {})", input_token_mint_for_cycle, input_token_symbol_for_cycle);
+                    println!("  intermediate_token_mint_val: {} (symbol: {})", intermediate_token_mint_val, intermediate_token_symbol_val);
+                    println!("  src_pool token_a: {} token_b: {}", src_pool.token_a.mint, src_pool.token_b.mint);
+                    println!("  tgt_pool token_a: {} token_b: {}", tgt_pool.token_a.mint, tgt_pool.token_b.mint);
+
+                    // Only require: pools are not the same, and both tokens are present in both pools
+                    let src_has = |mint| src_pool.token_a.mint == mint || src_pool.token_b.mint == mint;
+                    let tgt_has = |mint| tgt_pool.token_a.mint == mint || tgt_pool.token_b.mint == mint;
+                    println!("  Checking candidate for 2-hop cycle: src_pool {} ({}:{}) [{} {}] <-> tgt_pool {} ({}:{}) [{} {}]", 
+                        src_pool.name, src_pool.token_a.symbol, src_pool.token_b.symbol, src_pool.token_a.mint, src_pool.token_b.mint,
+                        tgt_pool.name, tgt_pool.token_a.symbol, tgt_pool.token_b.symbol, tgt_pool.token_a.mint, tgt_pool.token_b.mint);
+                    let is_2hop_cycle = src_has(*input_token_mint_for_cycle)
+                        && src_has(intermediate_token_mint_val)
+                        && tgt_has(*input_token_mint_for_cycle)
+                        && tgt_has(intermediate_token_mint_val)
+                        && src_id != tgt_id;
+                    if !is_2hop_cycle {
+                        println!("    Skipped: Not a valid 2-hop cycle (directional) for src {} tgt {}", src_pool.name, tgt_pool.name);
+                        continue;
+                    }
+                    // --- FIX: allow both directions for the second pool ---
                     let tgt_trades_intermediate_to_input = tgt_pool.token_a.mint == intermediate_token_mint_val && tgt_pool.token_b.mint == *input_token_mint_for_cycle;
-                    let tgt_trades_input_to_intermediate_reverse = tgt_pool.token_b.mint == intermediate_token_mint_val && tgt_pool.token_a.mint == *input_token_mint_for_cycle;
-
-                    if !(tgt_trades_intermediate_to_input || tgt_trades_input_to_intermediate_reverse) { continue; }
-
-                    let final_output_token_symbol_val = if tgt_trades_intermediate_to_input { &tgt_pool.token_b.symbol } else { &tgt_pool.token_a.symbol };
+                    let tgt_trades_input_to_intermediate = tgt_pool.token_b.mint == intermediate_token_mint_val && tgt_pool.token_a.mint == *input_token_mint_for_cycle;
+                    println!("    tgt_pool.token_a.mint: {}", tgt_pool.token_a.mint);
+                    println!("    tgt_pool.token_b.mint: {}", tgt_pool.token_b.mint);
+                    println!("    intermediate_token_mint_val: {}", intermediate_token_mint_val);
+                    println!("    input_token_mint_for_cycle: {}", input_token_mint_for_cycle);
+                    println!("    tgt_trades_intermediate_to_input: {}", tgt_trades_intermediate_to_input);
+                    println!("    tgt_trades_input_to_intermediate: {}", tgt_trades_input_to_intermediate);
+                    if !(tgt_trades_intermediate_to_input || tgt_trades_input_to_intermediate) {
+                        println!("  Skipped: No valid direction for 2-hop cycle in tgt_pool");
+                        continue;
+                    }
+                    let tgt_swaps_intermediate_for_input = tgt_trades_intermediate_to_input;
+                    let final_output_token_symbol_val = if tgt_swaps_intermediate_for_input { &tgt_pool.token_b.symbol } else { &tgt_pool.token_a.symbol };
+                    let src_swaps_input_for_intermediate = src_pool.token_a.mint == *input_token_mint_for_cycle;
+                    let max_input_token_amount = TokenAmount::new(1_000_000, input_decimals_for_cycle);
+                    let optimal_in = calculate_optimal_input(src_pool, tgt_pool, src_swaps_input_for_intermediate, max_input_token_amount);
+                    let price_a = if src_swaps_input_for_intermediate {
+                        src_pool.token_b.reserve as f64 / src_pool.token_a.reserve as f64
+                    } else {
+                        src_pool.token_a.reserve as f64 / src_pool.token_b.reserve as f64
+                    };
+                    let price_b = if tgt_swaps_intermediate_for_input {
+                        tgt_pool.token_b.reserve as f64 / tgt_pool.token_a.reserve as f64
+                    } else {
+                        tgt_pool.token_a.reserve as f64 / tgt_pool.token_b.reserve as f64
+                    };
+                    println!("    price_a: {} price_b: {}", price_a, price_b);
+                    println!("    optimal_in: {:?}", optimal_in);
                     if Self::is_permanently_banned(&intermediate_token_symbol_val, final_output_token_symbol_val) || Self::is_temporarily_banned(&intermediate_token_symbol_val, final_output_token_symbol_val) {
                         debug!("Skipping banned pair for second hop: {} <-> {}", intermediate_token_symbol_val, final_output_token_symbol_val);
                         continue;
                     }
-
-                    let src_swaps_input_for_intermediate = src_pool.token_a.mint == *input_token_mint_for_cycle;
-                    let max_input_token_amount = TokenAmount::new(1_000_000, input_decimals_for_cycle);
-                    let optimal_in = calculate_optimal_input(src_pool, tgt_pool, src_swaps_input_for_intermediate, max_input_token_amount);
                     let intermediate_amt_received = calculate_output_amount(src_pool, optimal_in.clone(), src_swaps_input_for_intermediate);
-                    let tgt_swaps_intermediate_for_input = tgt_pool.token_a.mint == intermediate_token_mint_val;
                     let final_output_amt = calculate_output_amount(tgt_pool, intermediate_amt_received.clone(), tgt_swaps_intermediate_for_input);
                     let profit_pct_calc_fractional = calculate_max_profit(src_pool, tgt_pool, src_swaps_input_for_intermediate, optimal_in.clone());
                     let profit_abs_tokens = (final_output_amt.to_float() - optimal_in.to_float()).max(0.0);
@@ -158,6 +206,8 @@ impl ArbitrageDetector {
                     let profit_usd = profit_abs_tokens * input_token_price_usd;
                     let input_amount_usd_val = optimal_in.to_float() * input_token_price_usd;
                     let output_amount_usd_val = final_output_amt.to_float() * input_token_price_usd;
+
+                    println!("  Candidate profit_pct: {} (threshold: {})", profit_pct_calc_fractional * 100.0, self.min_profit_threshold);
 
                     if profit_pct_calc_fractional * 100.0 > self.min_profit_threshold {
                         let opp_id = format!("2hop-{}-{}-{}-{}", input_token_symbol_for_cycle, src_pool.address, tgt_pool.address, chrono::Utc::now().timestamp_millis());

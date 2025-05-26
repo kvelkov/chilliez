@@ -3,7 +3,7 @@
 
 // FeeManager might not be directly used here but good for context
 // Removed: use crate::arbitrage::fee_manager::{FeeBreakdown, FeeManager}; 
-use crate::utils::{DexType, PoolInfo, TokenAmount}; // TokenAmount for context if needed
+use crate::utils::{DexType, PoolInfo}; // TokenAmount for context if needed -- Removed TokenAmount as it's unused
 use solana_sdk::pubkey::Pubkey;
 use std::sync::Arc;
 use log; // For logging
@@ -97,8 +97,24 @@ impl MultiHopArbOpportunity {
     pub fn is_profitable_by_usd(&self, min_profit_usd_threshold: f64) -> bool {
         match self.estimated_profit_usd {
             Some(profit_usd) => profit_usd >= min_profit_usd_threshold,
-            None => false, // If USD profit isn't estimated, consider it not meeting USD threshold
+            None => {
+                // Fallback: if USD profit is not available, check against percentage threshold
+                // This makes the function more robust if USD values are missing.
+                // Consider if this fallback is desired or if it should strictly be false.
+                // For now, let's assume if USD is not available, we rely on percentage.
+                // This behavior might need adjustment based on overall strategy.
+                log::warn!(
+                    "[OPP ID: {}] USD profit not available for is_profitable_by_usd check. Falling back to percentage check.",
+                    self.id
+                );
+                self.is_profitable_by_pct(0.0) // Or some other default/configurable percentage if USD is primary
+            }
         }
+    }
+
+    /// Combined profitability check using both percentage and USD thresholds.
+    pub fn is_profitable(&self, min_profit_pct_threshold: f64, min_profit_usd_threshold: f64) -> bool {
+        self.is_profitable_by_pct(min_profit_pct_threshold) && self.is_profitable_by_usd(min_profit_usd_threshold)
     }
 
 

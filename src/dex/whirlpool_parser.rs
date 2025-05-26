@@ -1,17 +1,8 @@
-use crate::dex::http_utils::HttpRateLimiter; // This import is now unused if WhirlpoolClient is removed
-use crate::dex::quote::{DexClient, Quote};   // This import is now unused if WhirlpoolClient is removed
 use crate::utils::{DexType, PoolInfo, PoolParser, PoolToken}; // PoolParser is used by trait impl
 use anyhow::{anyhow, Result}; // Result is used by trait impl
-use async_trait::async_trait; // This import is now unused if WhirlpoolClient is removed
 use log::{error, warn}; // error, warn used in PoolParser impl
-use once_cell::sync::Lazy; // This import is now unused if WhirlpoolClient is removed
-use reqwest::Client; // This import is now unused if WhirlpoolClient is removed
-use serde::Deserialize; // This import is now unused if WhirlpoolClient is removed
 use solana_sdk::pubkey::Pubkey; // Pubkey used in PoolParser impl
-use std::env; // This import is now unused if WhirlpoolClient is removed
 use std::str::FromStr; // FromStr used by get_program_id
-use std::time::Duration; // This import is now unused if WhirlpoolClient is removed
-use std::time::Instant; // This import is now unused if WhirlpoolClient is removed
 
 // The WhirlpoolClient struct and its implementation were here.
 // They are removed because they are redundant with src/dex/whirlpool.rs::WhirlpoolClient
@@ -85,8 +76,3 @@ impl PoolParser for WhirlpoolPoolParser {
         DexType::Whirlpool
     }
 }
-
-// The inherent `impl WhirlpoolPoolParser { ... }` block containing
-// pub fn parse_pool_data(...) and pub fn get_program_id(...) was here.
-// It was removed because these functions were redundant, merely calling the trait methods,
-// and were flagged as unused. The PoolParser trait implementation above is what's registered and used.

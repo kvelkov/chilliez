@@ -40,7 +40,6 @@ pub struct ArbitrageExecutor {
     network_congestion: AtomicU64, // Value should be used to scale priority_fee
     solana_rpc: Option<Arc<SolanaRpcClient>>,
     enable_simulation: AtomicBool,
-    recent_failures: Arc<dashmap::DashMap<String, (Instant, u32)>>,
     pub(crate) _degradation_mode: AtomicBool, // Prefixed
     pub(crate) _degradation_profit_threshold: f64, // Prefixed
 }
@@ -64,7 +63,6 @@ impl ArbitrageExecutor {
             network_congestion: AtomicU64::new(100),
             solana_rpc: None,
             enable_simulation: AtomicBool::new(true),
-            recent_failures: Arc::new(dashmap::DashMap::new()),
             _degradation_mode: AtomicBool::new(false),
             _degradation_profit_threshold: 1.5,
         }
@@ -219,10 +217,6 @@ impl ArbitrageExecutor {
                         "Pre-flight simulation failed for opportunity ID: {}: {:?}",
                         opportunity.id, e
                     );
-                    self.record_token_pair_failure(
-                        &opportunity.id,
-                        &format!("SimulationFailure: {:?}", e),
-                    );
                     return Err(e);
                 }
             }
@@ -249,7 +243,6 @@ impl ArbitrageExecutor {
                     "Transaction failed for opportunity ID {}: {}",
                     opportunity.id, e
                 );
-                self.record_token_pair_failure(&opportunity.id, &e.to_string());
                 Err(ArbError::TransactionError(e.to_string()))
             }
         }
@@ -273,11 +266,6 @@ impl ArbitrageExecutor {
     }
 
     // Used by execute_opportunity (conditionally)
-    fn record_token_pair_failure(&self, _opportunity_id: &str, _reason: &str) {
-        // Logic to use self.recent_failures
-    }
-
-    // Used by execute_opportunity
     async fn get_latest_blockhash_with_ha(&self) -> Result<Hash, ArbError> {
         if let Some(client) = &self.solana_rpc {
             client

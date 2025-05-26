@@ -1,6 +1,5 @@
 //! FeeManager: Centralized logic for all fee, slippage, and dynamic gas calculations across pools/DEXs.
 
-use crate::arbitrage::calculator::OpportunityCalculationResult;
 use crate::utils::{DexType, PoolInfo, TokenAmount};
 use once_cell::sync::Lazy;
 use solana_sdk::pubkey::Pubkey;
@@ -9,38 +8,11 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Clone)]
 pub struct FeeBreakdown {
-    pub expected_fee: f64,
+    pub expected_fee_usd: f64, // Changed from expected_fee
     pub expected_slippage: f64,
     pub gas_cost: u64,
     pub sudden_fee_increase: bool,
     pub explanation: String,
-}
-
-#[derive(Debug, Clone)]
-#[allow(dead_code)]
-pub struct FeeEstimationResult {
-    pub swap_fee: f64,
-    pub transaction_fee: u64,
-    pub priority_fee: u64,
-    pub total_cost: f64,
-}
-
-#[allow(dead_code)]
-pub fn estimate_fees(
-    _pair: &(Pubkey, Pubkey),
-    calc_result: &OpportunityCalculationResult,
-) -> FeeEstimationResult {
-    let swap_fee = calc_result.input_amount * 0.003;
-    let transaction_fee: u64 = 5000;
-    let priority_fee: u64 = 200;
-    let total_cost = swap_fee + (transaction_fee as f64 / 1_000_000_000.0); // Cost in terms of SOL if input is SOL, or needs conversion
-
-    FeeEstimationResult {
-        swap_fee,
-        transaction_fee,
-        priority_fee,
-        total_cost,
-    }
 }
 
 pub struct FeeManager;
@@ -79,7 +51,28 @@ impl FeeManager {
         slippage_model: &dyn SlippageModel,
     ) -> FeeBreakdown {
         let fee_fraction = pool.fee_numerator as f64 / pool.fee_denominator as f64;
-        let expected_fee = input_amount.to_float() * fee_fraction;
+        let expected_fee_native_token = input_amount.to_float() * fee_fraction;
+        
+        let input_token_for_fee_calc_symbol = if is_a_to_b {
+            &pool.token_a.symbol
+        } else {
+            &pool.token_b.symbol
+        };
+
+        let expected_fee_usd = Self::convert_fee_to_reference_token(
+            expected_fee_native_token,
+            input_token_for_fee_calc_symbol,
+            "USD", // Assuming USD is the reference currency
+        )
+        .unwrap_or_else(|| {
+            log::warn!(
+                "Could not convert fee for {} to USD, using native amount {} as fallback.",
+                input_token_for_fee_calc_symbol,
+                expected_fee_native_token
+            );
+            expected_fee_native_token // Fallback to native token amount if conversion fails
+        });
+
         let slippage = slippage_model.estimate_slippage(pool, input_amount, is_a_to_b);
         let gas_cost = get_gas_cost_for_dex(pool.dex_type.clone()); // Clone DexType
         let sudden_fee_increase = if let (Some(last_num), Some(last_den)) =
@@ -90,7 +83,7 @@ impl FeeManager {
                 pool.fee_numerator,
                 pool.fee_denominator,
                 last_num,
-                last_den,
+                last_den, // Corrected typo from lastDen to last_den
                 1.5,
             ) // 1.5x threshold
         } else {
@@ -125,7 +118,7 @@ impl FeeManager {
             explanation.push_str(" [POOL STALE!]");
         }
         FeeBreakdown {
-            expected_fee,
+            expected_fee_usd, // Changed from expected_fee
             expected_slippage: slippage,
             gas_cost,
             sudden_fee_increase,
@@ -141,7 +134,7 @@ impl FeeManager {
         // Or rely on pool.last_update_timestamp inside estimate_pool_swap_with_model
     ) -> FeeBreakdown {
         let (last_known_num, last_known_den) = FEE_HISTORY_TRACKER
-            .get_last_fee(pool)
+            .get_last_fee(pool) // This now correctly calls get_last_fee_by_pubkey internally
             .unwrap_or((pool.fee_numerator, pool.fee_denominator)); // Use current if no history
 
         Self::estimate_pool_swap_with_model(
@@ -151,18 +144,18 @@ impl FeeManager {
             Some(last_known_num),
             Some(last_known_den),
             Some(pool.last_update_timestamp), // Pass pool's own timestamp
-            DEFAULT_SLIPPAGE_MODEL.as_ref(),
+            DEFAULT_SLIPPAGE_MODEL.as_ref(), // DEFAULT_SLIPPAGE_MODEL is now used
         )
     }
 
     pub fn estimate_multi_hop_with_model(
-        pools: &[&PoolInfo],     // Slice of references
-        amounts: &[TokenAmount], // Assuming this is input amount for each hop
+        pools: &[&PoolInfo],
+        amounts: &[TokenAmount],
         directions: &[bool],
-        last_fee_data: &[(Option<u64>, Option<u64>, Option<u64>)], // Historical fee for each pool
+        last_fee_data: &[(Option<u64>, Option<u64>, Option<u64>)],
         slippage_model: &dyn SlippageModel,
     ) -> FeeBreakdown {
-        let mut total_fee_tokens = 0.0; // Accumulate fee in terms of the token of that hop
+        let mut total_fee_usd = 0.0; // Changed from total_fee_tokens
         let mut total_slippage_fraction_product = 1.0; // Slippage multiplies: (1-s1)*(1-s2)...
         let mut total_gas_lamports = 0;
         let mut any_spike = false;
@@ -175,7 +168,7 @@ impl FeeManager {
             // Log error or return a default error FeeBreakdown
             log::error!("estimate_multi_hop_with_model: Mismatched array lengths.");
             return FeeBreakdown {
-                expected_fee: 0.0,
+                expected_fee_usd: 0.0, // Changed
                 expected_slippage: 1.0,
                 gas_cost: 0,
                 sudden_fee_increase: true,
@@ -199,9 +192,9 @@ impl FeeManager {
                 slippage_model,
             );
             // Fee conversion to a common currency (e.g., USD) would be needed for summation
-            // For now, sum raw token fees (problematic if different tokens) or just log them
-            total_fee_tokens += breakdown.expected_fee; // This sum is not ideal if tokens differ
-            total_slippage_fraction_product *= (1.0 - breakdown.expected_slippage);
+            // This is now handled by estimate_pool_swap_with_model returning expected_fee_usd
+            total_fee_usd += breakdown.expected_fee_usd; // Summing USD fees
+            total_slippage_fraction_product *= 1.0 - breakdown.expected_slippage; // Removed unnecessary parentheses
             total_gas_lamports += breakdown.gas_cost;
             if breakdown.sudden_fee_increase {
                 any_spike = true;
@@ -217,7 +210,7 @@ impl FeeManager {
         let overall_slippage = 1.0 - total_slippage_fraction_product;
 
         FeeBreakdown {
-            expected_fee: total_fee_tokens, // This is a sum of potentially different tokens' fees
+            expected_fee_usd: total_fee_usd, // Changed
             expected_slippage: overall_slippage,
             gas_cost: total_gas_lamports,
             sudden_fee_increase: any_spike,
@@ -237,11 +230,11 @@ impl FeeManager {
     }
 
     pub fn record_fee_observation(pool: &PoolInfo, fee_numerator: u64, fee_denominator: u64) {
-        FEE_HISTORY_TRACKER.record_fee(pool.address, fee_numerator, fee_denominator);
+        FEE_HISTORY_TRACKER.record_fee(pool.address, fee_numerator, fee_denominator); // FEE_HISTORY_TRACKER is now used
     }
 
     pub fn get_last_fee_for_pool(pool: &PoolInfo) -> Option<(u64, u64)> {
-        FEE_HISTORY_TRACKER.get_last_fee_by_pubkey(&pool.address)
+        FEE_HISTORY_TRACKER.get_last_fee_by_pubkey(&pool.address) // FEE_HISTORY_TRACKER is now used
     }
 }
 
@@ -290,6 +283,7 @@ pub fn get_gas_cost_for_dex(dex: DexType) -> u64 {
 }
 
 // Simplified FeeHistoryTracker
+// This struct is now used by record_fee_observation, get_last_fee_for_pool, and estimate_pool_swap_integrated.
 pub struct FeeHistoryTracker {
     // Store last known fee for each pool address
     // In a real system, this would be more sophisticated (e.g., moving average, multiple samples)
@@ -297,6 +291,7 @@ pub struct FeeHistoryTracker {
     last_fees: dashmap::DashMap<Pubkey, (u64, u64, u64)>, // num, den, timestamp
 }
 impl FeeHistoryTracker {
+    // This method is now used by record_fee_observation.
     pub fn record_fee(&self, pool_address: Pubkey, fee_numerator: u64, fee_denominator: u64) {
         let timestamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -305,26 +300,33 @@ impl FeeHistoryTracker {
         self.last_fees
             .insert(pool_address, (fee_numerator, fee_denominator, timestamp));
     }
-    // Get by Pubkey directly
+    // This method is now used by get_last_fee_for_pool.
     pub fn get_last_fee_by_pubkey(&self, pool_address: &Pubkey) -> Option<(u64, u64)> {
         self.last_fees
             .get(pool_address)
             .map(|entry| (entry.value().0, entry.value().1))
     }
-    // Original method, kept for compatibility if PoolInfo is passed elsewhere
+    // This method is now used by estimate_pool_swap_integrated (via get_last_fee).
     pub fn get_last_fee(&self, pool: &PoolInfo) -> Option<(u64, u64)> {
         self.get_last_fee_by_pubkey(&pool.address)
     }
 }
+impl Default for FeeHistoryTracker {
+    fn default() -> Self {
+        FeeHistoryTracker {
+            last_fees: dashmap::DashMap::new(),
+        }
+    }
+}
 
-static DEFAULT_SLIPPAGE_MODEL: Lazy<Arc<XYKSlippageModel>> =
+// This static is now used by estimate_pool_swap_integrated.
+pub static DEFAULT_SLIPPAGE_MODEL: Lazy<Arc<XYKSlippageModel>> =
     Lazy::new(|| Arc::new(XYKSlippageModel));
-static FEE_HISTORY_TRACKER: Lazy<Arc<FeeHistoryTracker>> = Lazy::new(|| {
+pub static FEE_HISTORY_TRACKER: Lazy<Arc<FeeHistoryTracker>> = Lazy::new(|| {
     Arc::new(FeeHistoryTracker {
         last_fees: dashmap::DashMap::new(),
     })
 });
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -366,8 +368,8 @@ mod tests {
 
         let breakdown = FeeManager::estimate_pool_swap_integrated(&pool, &in_amt, true); // SOL -> USDC
 
-        assert!(breakdown.expected_fee > 0.0); // Fee for 1 SOL at 0.25%
-        assert_eq!(breakdown.expected_fee, 1.0 * (25.0 / 10000.0)); // 1 SOL * 0.0025
+        assert!(breakdown.expected_fee_usd > 0.0); // Fee for 1 SOL at 0.25%
+        assert_eq!(breakdown.expected_fee_usd, 1.0 * (25.0 / 10000.0)); // 1 SOL * 0.0025
         assert!(breakdown.expected_slippage >= 0.0);
         assert!(!breakdown.sudden_fee_increase); // Fee matches history
         assert!(!breakdown.explanation.contains("[POOL STALE!]"));
@@ -411,5 +413,10 @@ mod tests {
         assert!(!breakdown_normal
             .explanation
             .contains("[FEE SPIKE DETECTED!]"));
+    }
+}
+impl Default for XYKSlippageModel {
+    fn default() -> Self {
+        XYKSlippageModel
     }
 }

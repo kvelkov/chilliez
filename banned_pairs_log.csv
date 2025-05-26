@@ -1,14 +1,2 @@
-token_a,token_b,ban_type,reason
-FAKE123456789,SCAM987654321,permanent,Known scam token
-FAKE123456789,SCAM987654321,permanent,Known scam token
-FAKE123456789,SCAM987654321,permanent,Known scam token
-FAKE123456789,SCAM987654321,permanent,Known scam token
-FAKE123456789,SCAM987654321,permanent,Known scam token
-FAKE123456789,SCAM987654321,permanent,Known scam token
-FAKE123456789,SCAM987654321,permanent,Known scam token
-FAKE123456789,SCAM987654321,permanent,Known scam token
-FAKE123456789,SCAM987654321,permanent,Known scam token
-FAKE123456789,SCAM987654321,permanent,Known scam token
-FAKE123456789,SCAM987654321,permanent,Known scam token
-FAKE123456789,SCAM987654321,permanent,Known scam token
-A,USDC,permanent,test permanent ban
+TokenA,TokenB,BanType,Details
+A,USDC,permanent,test permanent ban from test_multihop

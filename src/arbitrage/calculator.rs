@@ -1,8 +1,9 @@
+// /Users/kiril/Desktop/chilliez/src/arbitrage/calculator.rs
 // src/arbitrage/calculator.rs
 use crate::arbitrage::fee_manager::{FeeManager, XYKSlippageModel};
 use crate::utils::{PoolInfo, TokenAmount};
 use dashmap::DashMap;
-use once_cell::sync::Lazy;
+use once_cell::sync::Lazy; // Added for DexType in placeholder_get_price_usd
 use solana_sdk::pubkey::Pubkey;
 use log::{debug, warn, info}; // Ensured info is imported
 
@@ -23,13 +24,13 @@ static OPTIMAL_INPUT_CACHE: Lazy<DashMap<(Pubkey, Pubkey, bool, u64), TokenAmoun
 
 static MULTI_HOP_CACHE: Lazy<DashMap<String, (f64, f64, f64)>> = Lazy::new(DashMap::new);
 
-#[allow(dead_code)] 
 pub fn calculate_simple_opportunity_result(
     pool_a: &PoolInfo,
     pool_b: &PoolInfo,
     input_token_mint_for_pool_a: &Pubkey, 
     input_amount_tokens: f64 
 ) -> OpportunityCalculationResult {
+    // Determine which token in pool_a is the input and which is the intermediate output
     let (pool_a_input_reserve, pool_a_output_reserve, pool_a_input_decimals, pool_a_output_decimals, pool_a_fee_num, pool_a_fee_den, pool_a_intermediate_mint) =
         if pool_a.token_a.mint == *input_token_mint_for_pool_a {
             (pool_a.token_a.reserve, pool_a.token_b.reserve, pool_a.token_a.decimals, pool_a.token_b.decimals, pool_a.fee_numerator, pool_a.fee_denominator, pool_a.token_b.mint)
@@ -40,10 +41,12 @@ pub fn calculate_simple_opportunity_result(
             return OpportunityCalculationResult { input_amount: input_amount_tokens, output_amount: 0.0, profit: -input_amount_tokens, profit_percentage: -1.0, price_impact: 1.0 };
         };
 
+    // Convert float input to atomic units for pool_a
     let input_amount_atomic_pool_a = TokenAmount::from_float(input_amount_tokens, pool_a_input_decimals).amount;
 
+    // Calculate output from pool_a
     let fee_a_rate = pool_a_fee_num as f64 / pool_a_fee_den.max(1) as f64;
-    let input_a_after_fee = input_amount_atomic_pool_a as f64 * (1.0 - fee_a_rate);
+    let input_a_after_fee = input_amount_atomic_pool_a as f64 * (1.0 - fee_a_rate); // This is atomic amount after fee
     let output_a_atomic_intermediate = if pool_a_input_reserve > 0 && (pool_a_input_reserve as f64 + input_a_after_fee) > 0.0 {
         (pool_a_output_reserve as f64 * input_a_after_fee) / (pool_a_input_reserve as f64 + input_a_after_fee)
     } else {
@@ -51,11 +54,12 @@ pub fn calculate_simple_opportunity_result(
     };
     let intermediate_token_amount = TokenAmount::new(output_a_atomic_intermediate.floor() as u64, pool_a_output_decimals);
     
+    // Determine which token in pool_b is the input (intermediate from pool_a) and which is the final output (original input token)
     let (pool_b_input_reserve, pool_b_output_reserve, _pool_b_input_decimals, pool_b_output_decimals, pool_b_fee_num, pool_b_fee_den) =
         if pool_b.token_a.mint == pool_a_intermediate_mint && pool_b.token_b.mint == *input_token_mint_for_pool_a {
-            (pool_b.token_a.reserve, pool_b.token_b.reserve, pool_b.token_a.decimals, pool_b.token_b.decimals, pool_b.fee_numerator, pool_b.fee_denominator)
+            (pool_b.token_a.reserve, pool_b.token_b.reserve, pool_b.token_a.decimals, pool_b.token_b.decimals, pool_b.fee_numerator, pool_b.fee_denominator) // pool_b.token_a is input
         } else if pool_b.token_b.mint == pool_a_intermediate_mint && pool_b.token_a.mint == *input_token_mint_for_pool_a {
-            (pool_b.token_b.reserve, pool_b.token_a.reserve, pool_b.token_b.decimals, pool_b.token_a.decimals, pool_b.fee_numerator, pool_b.fee_denominator)
+            (pool_b.token_b.reserve, pool_b.token_a.reserve, pool_b.token_b.decimals, pool_b.token_a.decimals, pool_b.fee_numerator, pool_b.fee_denominator) // pool_b.token_b is input
         } else {
             warn!("Pool_b {} does not complete the cycle for intermediate {} to original input {}", pool_b.name, pool_a_intermediate_mint, input_token_mint_for_pool_a);
             return OpportunityCalculationResult { input_amount: input_amount_tokens, output_amount: 0.0, profit: -input_amount_tokens, profit_percentage: -1.0, price_impact: 1.0 };
@@ -63,7 +67,7 @@ pub fn calculate_simple_opportunity_result(
 
     let fee_b_rate = pool_b_fee_num as f64 / pool_b_fee_den.max(1) as f64;
     let input_b_after_fee = intermediate_token_amount.amount as f64 * (1.0 - fee_b_rate);
-    let final_output_atomic = if pool_b_input_reserve > 0 && (pool_b_input_reserve as f64 + input_b_after_fee) > 0.0 {
+    let final_output_atomic = if pool_b_input_reserve > 0 && (pool_b_input_reserve as f64 + input_b_after_fee) > 0.0 { // input_b_after_fee is atomic
         (pool_b_output_reserve as f64 * input_b_after_fee) / (pool_b_input_reserve as f64 + input_b_after_fee)
     } else {
         0.0
@@ -73,15 +77,29 @@ pub fn calculate_simple_opportunity_result(
     let profit_tokens = final_output_tokens - input_amount_tokens;
     let profit_percentage = if input_amount_tokens > 0.0 { profit_tokens / input_amount_tokens } else { 0.0 };
 
-    let price_impact_a = if (pool_a_input_reserve as f64 + input_a_after_fee) > 1e-9 { input_a_after_fee / (pool_a_input_reserve as f64 + input_a_after_fee) } else { 1.0 };
-    let price_impact_b = if (pool_b_input_reserve as f64 + input_b_after_fee) > 1e-9 { input_b_after_fee / (pool_b_input_reserve as f64 + input_b_after_fee) } else { 1.0 };
-    
+    // Use estimate_price_impact for consistency
+    // For pool_a, input is input_token_mint_for_pool_a
+    let pool_a_input_is_token_a = pool_a.token_a.mint == *input_token_mint_for_pool_a;
+    let price_impact_a = estimate_price_impact(
+        pool_a,
+        pool_a_input_is_token_a,
+        TokenAmount::from_float(input_amount_tokens, pool_a_input_decimals) // Original input to pool_a
+    );
+
+    // For pool_b, input is intermediate_token_amount (output from pool_a)
+    let pool_b_input_is_token_a = pool_b.token_a.mint == pool_a_intermediate_mint;
+    let price_impact_b = estimate_price_impact(
+        pool_b,
+        pool_b_input_is_token_a,
+        intermediate_token_amount // Input to pool_b
+    );
+
     OpportunityCalculationResult {
         input_amount: input_amount_tokens,
         output_amount: final_output_tokens,
         profit: profit_tokens,
         profit_percentage,
-        price_impact: 1.0 - ((1.0 - price_impact_a) * (1.0 - price_impact_b)),
+        price_impact: 1.0 - ((1.0 - price_impact_a.max(0.0).min(1.0)) * (1.0 - price_impact_b.max(0.0).min(1.0))),
     }
 }
 
@@ -206,12 +224,23 @@ pub fn calculate_max_profit_result(
     let profit_val = final_output_tokens - input_amount_float;
     let profit_percentage_val = if input_amount_float > 1e-9 { profit_val / input_amount_float } else { 0.0 };
 
-    let price_impact_a = if (p_a_input_token_info.reserve as f64 + p_a_input_atomic_after_fee) > 1e-9 {
-        p_a_input_atomic_after_fee / (p_a_input_token_info.reserve as f64 + p_a_input_atomic_after_fee)
-    } else { 1.0 };
-    let price_impact_b = if (p_b_input_token_info.reserve as f64 + p_b_input_atomic_after_fee) > 1e-9 {
-        p_b_input_atomic_after_fee / (p_b_input_token_info.reserve as f64 + p_b_input_atomic_after_fee)
-    } else { 1.0 };
+    // Use estimate_price_impact
+    // For pool_a (first hop)
+    let price_impact_a = estimate_price_impact(
+        pool_a,
+        is_a_to_b_first_hop, // True if token_a is input to pool_a, false if token_b is input
+        input_amount.clone()    // Original input_amount for the first hop
+    );
+
+    // For pool_b (second hop)
+    // Determine if token_a of pool_b is the input for the second hop
+    // Input to pool_b is p_a_output_token_info.mint (intermediate_amount)
+    let pool_b_input_is_token_a = pool_b.token_a.mint == p_a_output_token_info.mint;
+    let price_impact_b = estimate_price_impact(
+        pool_b,
+        pool_b_input_is_token_a,
+        intermediate_amount      // Input amount for the second hop
+    );
     
     let result = OpportunityCalculationResult {
         input_amount: input_amount_float,
@@ -280,24 +309,31 @@ pub fn is_profitable_calc( // Renamed from original `is_profitable`
 
 pub fn estimate_price_impact(
     pool: &PoolInfo,
-    input_token_index: usize, 
-    input_amount: TokenAmount,
+    input_token_is_a: bool, // True if pool.token_a is the input, false if pool.token_b is input
+    input_amount: TokenAmount, // Raw input amount (before fees for this specific hop)
 ) -> f64 {
-    let (input_reserve_atomic, _input_decimals) = if input_token_index == 0 {
-        (pool.token_a.reserve, pool.token_a.decimals)
+    let (input_reserve_atomic, input_decimals_check, fee_num, fee_den) = if input_token_is_a {
+        (pool.token_a.reserve, pool.token_a.decimals, pool.fee_numerator, pool.fee_denominator)
     } else {
-        (pool.token_b.reserve, pool.token_b.decimals)
+        (pool.token_b.reserve, pool.token_b.decimals, pool.fee_numerator, pool.fee_denominator)
     };
-    let input_amount_atomic = input_amount.amount;
+
+    if input_amount.decimals != input_decimals_check {
+        // This can happen if TokenAmount was created with default/wrong decimals.
+        // Price impact calculation is sensitive to this.
+        warn!("estimate_price_impact: Decimal mismatch for input token in pool {}. Expected {}, got {}. Impact might be inaccurate.", pool.name, input_decimals_check, input_amount.decimals);
+    }
+
+    let fee_rate = if fee_den == 0 { 0.0 } else { fee_num as f64 / fee_den as f64 };
+    let input_amount_after_fee_atomic_float = input_amount.amount as f64 * (1.0 - fee_rate);
 
     let input_reserve_float = input_reserve_atomic as f64;
-    let input_amount_float = input_amount_atomic as f64;
 
-    if input_reserve_float < 1e-9 && input_amount_float < 1e-9 { return 0.0; } // Avoid NaN with 0/0
-    let denominator = input_reserve_float + input_amount_float;
+    if input_reserve_float < 1e-9 && input_amount_after_fee_atomic_float < 1e-9 { return 0.0; } // Avoid NaN with 0/0
+    let denominator = input_reserve_float + input_amount_after_fee_atomic_float;
     if denominator < 1e-9 { return 1.0; } 
 
-    (input_amount_float / denominator).max(0.0).min(1.0) // Clamp result
+    (input_amount_after_fee_atomic_float / denominator).max(0.0).min(1.0) // Clamp result
 }
 
 pub fn calculate_multihop_profit_and_slippage(
@@ -322,7 +358,7 @@ pub fn calculate_multihop_profit_and_slippage(
         warn!("calculate_multihop_profit_and_slippage called with empty or mismatched inputs. Pools: {}, Directions: {}, Fees: {}", pools.len(), directions.len(), last_fee_data.len());
         // Provide a default value for last_fee_data if it's empty and pools is not, to avoid panic in FeeManager
         let default_last_fee_data_if_needed;
-        let fees_to_use = if last_fee_data.is_empty() && !pools.is_empty() {
+        let _fees_to_use = if last_fee_data.is_empty() && !pools.is_empty() {
             default_last_fee_data_if_needed = vec![(None, None, None); pools.len()];
             &default_last_fee_data_if_needed
         } else if last_fee_data.len() != pools.len() {
@@ -404,12 +440,12 @@ pub fn calculate_multihop_profit_and_slippage(
     let total_profit_float = final_output_float - input_amount_float; 
     let overall_slippage_fraction = 1.0 - total_slippage_fraction_product;
     
-    let total_fee_in_start_token_equivalent_placeholder = fee_breakdown.expected_fee; 
+    let total_fee_in_usd_placeholder = fee_breakdown.expected_fee_usd; 
 
     let result = (
         total_profit_float,
         overall_slippage_fraction.max(0.0).min(1.0),
-        total_fee_in_start_token_equivalent_placeholder,
+        total_fee_in_usd_placeholder, // Changed variable name and using the new field
     );
 
     MULTI_HOP_CACHE.insert(cache_key, result);
@@ -417,9 +453,73 @@ pub fn calculate_multihop_profit_and_slippage(
     result
 }
 
-pub fn calculate_rebate(_pools: &[&PoolInfo], _amounts: &[TokenAmount]) -> f64 {
-    debug!("calculate_rebate called, returning 0.0 (placeholder)");
-    0.0
+/// Placeholder to simulate getting USD price for a token.
+/// In a real system, this would query a price oracle.
+fn placeholder_get_price_usd(token_mint: &Pubkey, token_symbol: &str, sol_price_usd: f64) -> f64 {
+    // Common stablecoins
+    if token_symbol == "USDC" || token_symbol == "USDT" || token_mint.to_string() == "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v" || token_mint.to_string() == "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB" {
+        1.0
+    } else if token_symbol == "SOL" || token_mint.to_string() == "So11111111111111111111111111111111111111112" {
+        sol_price_usd // Use the provided SOL price
+    } else {
+        warn!("placeholder_get_price_usd: No price for token {} ({}). Returning 0.0 for rebate calculation.", token_symbol, token_mint);
+        0.0 // Default for unknown tokens, effectively making their rebate 0 USD
+    }
+}
+
+/// Placeholder for DEX-specific rebate percentages on fees.
+fn get_dex_fee_rebate_percentage(dex_type: &crate::utils::DexType) -> f64 {
+    match dex_type {
+        crate::utils::DexType::Orca => 0.10, // 10% rebate on Orca fees
+        crate::utils::DexType::Raydium => 0.05, // 5% rebate on Raydium fees
+        crate::utils::DexType::Lifinity => 0.08, // 8%
+        crate::utils::DexType::Meteora => 0.07, // 7%
+        crate::utils::DexType::Phoenix => 0.03, // 3%
+        crate::utils::DexType::Whirlpool => 0.12, // 12%
+        crate::utils::DexType::Unknown(_) => 0.0, // No rebate for unknown DEXs
+    }
+}
+
+pub fn calculate_rebate(pools: &[&PoolInfo], amounts: &[TokenAmount], sol_price_usd: f64) -> f64 {
+    let mut total_rebate_usd = 0.0;
+
+    if pools.len() != amounts.len() {
+        warn!("calculate_rebate: pools and amounts slices have different lengths. pools: {}, amounts: {}. Cannot calculate rebate.", pools.len(), amounts.len());
+        return 0.0;
+    }
+
+    for i in 0..pools.len() {
+        let pool = pools[i];
+        let input_amount_for_hop = &amounts[i]; // This is the input to the current hop
+
+        // Determine the input token for this hop to get its symbol for price lookup
+        // This assumes the `amounts` correspond to the primary direction of the hop (e.g. A->B or B->A)
+        // For simplicity, we'll assume amounts[i] has correct decimals for pool's input token.
+        // A more robust way would be to know which token of the pool is the input for this specific hop.
+        // For now, we'll use token_a as a proxy if amounts[i].decimals matches, else token_b. This is a heuristic.
+        let (input_token_mint_for_hop, input_token_symbol_for_hop) = if input_amount_for_hop.decimals == pool.token_a.decimals {
+            (&pool.token_a.mint, &pool.token_a.symbol)
+        } else if input_amount_for_hop.decimals == pool.token_b.decimals {
+            (&pool.token_b.mint, &pool.token_b.symbol)
+        } else {
+            warn!("calculate_rebate: Could not determine input token for hop {} in pool {} based on decimals. Skipping rebate for this hop.", i, pool.name);
+            continue;
+        };
+
+        let fee_paid_in_hop_input_token = input_amount_for_hop.to_float() * (pool.fee_numerator as f64 / pool.fee_denominator.max(1) as f64);
+        let rebate_percentage = get_dex_fee_rebate_percentage(&pool.dex_type);
+        let rebate_in_hop_input_token = fee_paid_in_hop_input_token * rebate_percentage;
+
+        let price_of_hop_input_token_usd = placeholder_get_price_usd(input_token_mint_for_hop, input_token_symbol_for_hop, sol_price_usd);
+        let rebate_for_hop_usd = rebate_in_hop_input_token * price_of_hop_input_token_usd;
+
+        total_rebate_usd += rebate_for_hop_usd;
+        debug!("Rebate for hop {} (Pool: {}, DEX: {:?}): {:.6} {} (USD {:.4})",
+               i, pool.name, pool.dex_type, rebate_in_hop_input_token, input_token_symbol_for_hop, rebate_for_hop_usd);
+    }
+
+    info!("Total calculated rebate: {:.4} USD", total_rebate_usd);
+    total_rebate_usd
 }
 
 pub fn clear_caches_if_needed() {

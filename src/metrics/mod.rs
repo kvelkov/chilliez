@@ -1,5 +1,5 @@
 // src/metrics/mod.rs
-use log::{debug, info}; // Removed error, warn as unused by compiler in this specific file context
+use log::{info}; // Removed error, warn as unused by compiler in this specific file context
 // use std::fs::OpenOptions; // No longer directly used here after log_file changes
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH, Instant};
@@ -81,8 +81,8 @@ impl Metrics {
     }
 
     pub fn log_launch(&mut self) { /* ... same ... */ }
-    pub fn log_pools_fetched(&mut self, count: usize) { /* ... same ... */ }
-    pub fn log_trading_pairs(&mut self, pairs_count: usize) { /* ... same ... */ }
+    pub fn log_pools_fetched(&mut self, _count: usize) { /* ... same ... */ }
+    pub fn log_trading_pairs(&mut self, _pairs_count: usize) { /* ... same ... */ }
     
     pub fn record_opportunity_detected(
         &mut self,
@@ -124,11 +124,11 @@ impl Metrics {
     pub fn get_log_file(&self) -> Option<&Arc<tokio::sync::Mutex<tokio::fs::File>>> { self.log_file.as_ref() }
     pub fn summary(&self) { /* ... same ... */ }
     pub fn increment_main_cycles(&mut self) { /* ... same ... */ }
-    pub fn record_main_cycle_duration(&mut self, duration_ms: u64) { /* ... same ... */ }
-    pub fn log_dynamic_threshold_update(&mut self, new_threshold_fractional: f64) { /* ... same ... */ }
-    pub fn set_system_health(&mut self, healthy: bool) { /* ... same ... */ }
-    pub fn log_pools_updated(&mut self, new_count: usize, updated_count: usize, total_count: usize) { /* ... same ... */ }
-    pub fn log_degradation_mode_change(&mut self, entered_degradation: bool, new_threshold_fractional: Option<f64>) { /* ... same ... */ }
+    pub fn record_main_cycle_duration(&mut self, _duration_ms: u64) { /* ... same ... */ }
+    pub fn log_dynamic_threshold_update(&mut self, _new_threshold_fractional: f64) { /* ... same ... */ }
+    pub fn set_system_health(&mut self, _healthy: bool) { /* ... same ... */ }
+    pub fn log_pools_updated(&mut self, _new_count: usize, _updated_count: usize, _total_count: usize) { /* ... same ... */ }
+    pub fn log_degradation_mode_change(&mut self, _entered_degradation: bool, _new_threshold_fractional: Option<f64>) { /* ... same ... */ }
 }
 
 impl Default for Metrics { fn default() -> Self { Metrics::new(100.0, None) } }

@@ -1,12 +1,15 @@
 // src/arbitrage/dynamic_threshold.rs
-use crate::arbitrage::detector::ArbitrageDetector; // No ArbitrageEngine needed here directly
-use crate::config::settings::Config;
-use crate::metrics::Metrics;
-use log::{info, warn}; // Added warn and info
+// ArbitrageDetector is not used here after removing DynamicThresholdUpdater
+// use crate::arbitrage::detector::ArbitrageDetector; 
+// use crate::config::settings::Config; // Keep if used by other items, or remove if not.
+// Metrics is not used here after removing DynamicThresholdUpdater
+// use crate::metrics::Metrics; 
+// use log::{info}; // Removed warn as it\'s unused after removing DynamicThresholdUpdater
 use std::collections::VecDeque;
-use std::sync::Arc;
-use std::time::Duration;
-use tokio::sync::Mutex; // Using tokio's Mutex
+// Arc and Mutex are not used here after removing DynamicThresholdUpdater
+// use std::sync::Arc; 
+// use std::time::Duration; // Keep if used by other items, or remove if not.
+// use tokio::sync::Mutex; 
 
 pub struct VolatilityTracker {
     window: VecDeque<f64>,
@@ -46,79 +49,6 @@ pub fn recommend_min_profit_threshold(volatility: f64, base_threshold: f64, vola
     let dynamic_adjustment = volatility * factor;
     // Ensure the threshold doesn't become excessively high or negative
     (base_threshold + dynamic_adjustment).max(0.0001) // Minimum 0.01% e.g.
-}
-
-pub struct DynamicThresholdUpdater {
-    // min_profit_threshold: f64, // This state is now primarily managed by ArbitrageEngine/Detector
-    volatility_factor: f64,
-    update_interval: Duration,
-    // Instead of holding detector and metrics directly, this task could communicate updates
-    // or receive necessary components if it were part of a larger actor system.
-    // For simplicity, if this is spawned by ArbitrageEngine, it can update engine's threshold.
-    // However, the original code had it directly.
-    detector: Arc<Mutex<ArbitrageDetector>>,
-    metrics: Arc<Mutex<Metrics>>,
-    config: Arc<Config>, // To access base_threshold and volatility_factor
-    // price_provider: Option<Arc<dyn CryptoDataProvider + Send + Sync>>, // If fetching price directly
-}
-
-impl DynamicThresholdUpdater {
-    pub fn new(
-        config: Arc<Config>,
-        detector: Arc<Mutex<ArbitrageDetector>>,
-        metrics: Arc<Mutex<Metrics>>,
-        // price_provider: Option<Arc<dyn CryptoDataProvider + Send + Sync>>,
-    ) -> Self {
-        // The unwrap_or calls are correct if config fields are Options.
-        // The compiler errors suggest they are not Options in the user's build.
-        // Assuming the provided Config struct where these are Options is the correct one.
-        let volatility_factor_val = config.volatility_threshold_factor.unwrap_or(0.5);
-        let update_interval_secs = config.dynamic_threshold_update_interval_secs.unwrap_or(300);
-
-        Self {
-            volatility_factor: volatility_factor_val,
-            update_interval: Duration::from_secs(update_interval_secs),
-            detector,
-            metrics,
-            config,
-            // price_provider,
-        }
-    }
-
-    // This run method is designed to be spawned as a task by ArbitrageEngine or main.
-    // It would need a way to update the engine's shared min_profit_threshold.
-    // The version in ArbitrageEngine::run_dynamic_threshold_updates is more integrated.
-    // This standalone struct might be for a different architectural approach or testing.
-    #[allow(dead_code)]
-    pub async fn run_standalone_updater(&self) { // Renamed to avoid confusion with engine's method
-        let mut vol_tracker = VolatilityTracker::new(self.config.volatility_tracker_window.unwrap_or(20));
-        loop {
-            tokio::time::sleep(self.update_interval).await;
-            info!("DynamicThresholdUpdater: Updating dynamic profit threshold...");
-
-            // In a standalone updater, fetching price would require its own provider.
-            // For now, using a placeholder.
-            let current_price_of_major_asset = 1.0; // Placeholder
-            vol_tracker.add_price(current_price_of_major_asset);
-            let historical_volatility = vol_tracker.volatility();
-
-            let base_threshold = self.config.min_profit_pct; // This is fractional
-            // This uses the factor from the struct, which was initialized from config or default
-            // let volatility_factor = self.volatility_factor;
-            // The line from original error:
-            let volatility_factor = self.config.volatility_threshold_factor.unwrap_or(0.1); // This is correct if config field is Option.
-
-            let new_threshold_fractional = recommend_min_profit_threshold(historical_volatility, base_threshold, volatility_factor);
-            let new_threshold_pct = new_threshold_fractional * 100.0;
-
-            // Update the detector's threshold directly
-            self.detector.lock().await.set_min_profit_threshold(new_threshold_pct);
-
-            info!("DynamicThresholdUpdater: Recommended new min profit threshold: {:.4}% (Volatility: {:.6})", new_threshold_pct, historical_volatility);
-            
-            self.metrics.lock().await.log_dynamic_threshold_update(new_threshold_fractional);
-        }
-    }
 }
 
 #[cfg(test)]

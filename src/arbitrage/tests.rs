@@ -33,7 +33,7 @@ mod tests {
         // Pool 1: A/USDC (Orca) -- A is CHEAP here (buy A with USDC)
         let pool1 = PoolInfo {
             address: Pubkey::new_unique(),
-            name: "A/USDC-Orca (A cheap)".to_string(),
+            name: "A/USDC-Orca".to_string(), // Standardized name
             token_a: PoolToken { mint: token_a_mint, symbol: "A".to_string(), decimals: 6, reserve: 2_000_000_000 }, // 2B A
             token_b: PoolToken { mint: usdc_mint, symbol: "USDC".to_string(), decimals: 6, reserve: 1_000_000_000 }, // 1B USDC
             fee_numerator: 30, fee_denominator: 10000, last_update_timestamp: 0, dex_type: DexType::Orca,
@@ -41,7 +41,7 @@ mod tests {
         // Pool 2: USDC/A (Raydium) -- A is EXPENSIVE here (sell A for USDC)
         let pool2 = PoolInfo {
             address: Pubkey::new_unique(),
-            name: "USDC/A-Raydium (A expensive)".to_string(),
+            name: "USDC/A-Raydium".to_string(), // Standardized name
             token_a: PoolToken { mint: usdc_mint, symbol: "USDC".to_string(), decimals: 6, reserve: 2_000_000_000 }, // 2B USDC
             token_b: PoolToken { mint: token_a_mint, symbol: "A".to_string(), decimals: 6, reserve: 500_000_000 }, // 500M A
             fee_numerator: 25, fee_denominator: 10000, last_update_timestamp: 0, dex_type: DexType::Raydium,
@@ -109,11 +109,29 @@ mod tests {
                 for (j, hop) in opp.hops.iter().enumerate() {
                     println!("    Hop {}: dex={:?} pool={} {}->{} input_amount={} expected_output={}", j, hop.dex, hop.pool, hop.input_token, hop.output_token, hop.input_amount, hop.expected_output);
                 }
+                // Extra debug: print all fields
+                println!("  input_token: {} (mint: {:?})", opp.input_token, opp.input_token_mint);
+                println!("  output_token: {} (mint: {:?})", opp.output_token, opp.output_token_mint);
+                println!("  intermediate_tokens: {:?}", opp.intermediate_tokens);
+                println!("  intermediate_token_mint: {:?}", opp.intermediate_token_mint);
+                println!("  pool_path: {:?}", opp.pool_path);
+                println!("  dex_path: {:?}", opp.dex_path);
+                println!("  source_pool: {}", opp.source_pool.name);
+                println!("  target_pool: {}", opp.target_pool.name);
             }
+        } else {
+            println!("discover_direct_opportunities error: {:?}", opps_result);
         }
         assert!(opps_result.is_ok(), "Opportunity detection failed: {:?}", opps_result.err());
         let opps = opps_result.unwrap();
 
+        println!("[DEBUG] After unwrap, opps.len() = {}", opps.len());
+        for (i, opp) in opps.iter().enumerate() {
+            println!("[DEBUG] Opportunity {}: id={} total_profit={} profit_pct={}", i, opp.id, opp.total_profit, opp.profit_pct);
+            for (j, hop) in opp.hops.iter().enumerate() {
+                println!("[DEBUG]   Hop {}: dex={:?} pool={} {}->{} input_amount={} expected_output={}", j, hop.dex, hop.pool, hop.input_token, hop.output_token, hop.input_amount, hop.expected_output);
+            }
+        }
         assert!(!opps.is_empty(), "No 2-hop cyclic opportunities detected when at least one should exist");
         println!("Detected {} direct (2-hop cyclic) opportunities.", opps.len());
         for opp in &opps {

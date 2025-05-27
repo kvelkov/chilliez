@@ -15,6 +15,20 @@ pub struct Quote {
     pub slippage_estimate: Option<f64>,
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct QuoteResponse {
+    pub input_token: String,
+    pub output_token: String,
+    pub input_amount: u64,
+    pub output_amount: u64,
+    pub dex: String,
+    pub latency_ms: u64,
+    pub execution_score: f64,
+    pub route_path: Vec<String>,
+    pub slippage_estimate: f64,
+}
+
+
 #[async_trait::async_trait]
 pub trait DexClient: Send + Sync {
     // These methods are fundamental to the trait and used by integration tests.
@@ -61,18 +75,23 @@ pub struct QuoteRequest {
     pub input_token: String,
     pub output_token: String,
     pub amount: u64,
-}
 
-#[derive(Debug, Serialize, Deserialize, Clone)] 
-pub struct QuoteResponse {
-    pub input_token: String,
-    pub output_token: String,
-    pub input_amount: u64,
-    pub output_amount: u64,
-    pub dex: String,
-    pub route: Vec<String>,
-    pub latency_ms: Option<u64>,       
-    pub execution_score: Option<f64>,  
-    pub route_path: Option<Vec<String>>,
-    pub slippage_estimate: Option<f64>,
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 }

@@ -1,5 +1,11 @@
 // src/arbitrage/engine.rs
 
+// src/arbitrage/engine.rs
+// Use this specific import to avoid conflicts
+use crate::error::{ArbError, CircuitBreaker, RetryPolicy};
+// If there's a conflict, you can alias it:
+// use crate::error::{RetryPolicy as ErrorRetryPolicy};
+use crate::utils::PoolParser; // Import the PoolParser trait
 use crate::{
     arbitrage::{
         detector::ArbitrageDetector,
@@ -8,14 +14,15 @@ use crate::{
     },
     config::settings::Config,
     dex::quote::DexClient,
-    error::ArbError,
+    dex::whirlpool_parser::{WhirlpoolPoolParser, ORCA_WHIRLPOOL_PROGRAM_ID}, // For pool discovery example
     metrics::Metrics,
-    solana::{rpc::SolanaRpcClient, websocket::SolanaWebsocketManager},
+    solana::{rpc::SolanaRpcClient, websocket::SolanaWebsocketManager}, // Added PoolParser
     utils::PoolInfo,
     websocket::CryptoDataProvider,
 };
 use log::{error, info, warn}; // Removed unused debug
 use solana_sdk::pubkey::Pubkey;
+use std::str::FromStr;
 use std::{
     collections::HashMap,
     ops::Deref,
@@ -27,7 +34,10 @@ use std::{
 };
 use tokio::sync::{Mutex, RwLock};
 use tokio::time::error::Elapsed as TimeoutError;
-use tokio::time::timeout;
+use tokio::time::timeout; // For Pubkey::from_str
+use crate::WebsocketUpdate;
+use log::debug;
+use tokio::sync::mpsc::error::TryRecvError;
 
 pub struct ArbitrageEngine {
     pools: Arc<RwLock<HashMap<Pubkey, Arc<PoolInfo>>>>,
@@ -45,6 +55,9 @@ pub struct ArbitrageEngine {
     pub(crate) detector: Arc<Mutex<ArbitrageDetector>>,
     pub(crate) _dex_providers: Vec<Arc<dyn DexClient>>, // Prefixed
     pub(crate) dynamic_threshold_updater: Option<Arc<Mutex<DynamicThresholdUpdater>>>,
+    // Error handling components
+    circuit_breaker: Arc<RwLock<CircuitBreaker>>,
+    retry_policy: RetryPolicy,
 }
 
 impl ArbitrageEngine {
@@ -59,7 +72,6 @@ impl ArbitrageEngine {
     ) -> Self {
         // Use new_from_config for ArbitrageDetector initialization
         let internal_detector = Arc::new(Mutex::new(ArbitrageDetector::new_from_config(&config)));
-
         let health_check_interval_secs = config.health_check_interval_secs.unwrap_or(60);
         // Corrected: Ensure max_ws_reconnect_val is u64
         let max_ws_reconnect_val = config.max_ws_reconnect_attempts.map_or(5, |v| v as u64);
@@ -96,20 +108,64 @@ impl ArbitrageEngine {
             detector: internal_detector,
             _dex_providers: dex_api_clients, // Prefixed
             dynamic_threshold_updater,
+            circuit_breaker: Arc::new(RwLock::new(CircuitBreaker::default())),
+            retry_policy: RetryPolicy::default(),
         }
     }
 
-    pub async fn start_services(&self, cache: Option<Arc<crate::cache::Cache>>) {
-        // Make update_pools live with an initial empty update
-        // TODO: Load initial pools from a persistent source or configuration if available.
-        if let Err(e) = self.update_pools(HashMap::new()).await {
-            error!("[ArbitrageEngine] Initial pool update failed: {}", e);
+    async fn load_initial_pools(&self) -> Result<(), ArbError> {
+        info!("Attempting to load initial pools...");
+        if let Some(rpc_client) = &self.rpc_client {
+            // Example: Discovering Orca Whirlpools
+            let whirlpool_program_id =
+                Pubkey::from_str(ORCA_WHIRLPOOL_PROGRAM_ID).map_err(|e| {
+                    ArbError::ConfigError(format!("Invalid Whirlpool Program ID: {}", e))
+                })?;
+
+            match rpc_client
+                .get_program_accounts(&whirlpool_program_id, vec![])
+                .await
+            {
+                Ok(accounts_data) => {
+                    let mut discovered_pools = HashMap::new();
+                    for (pubkey, data) in accounts_data {
+                        match WhirlpoolPoolParser::parse_pool_data(pubkey, &data) {
+                            Ok(pool_info) => {
+                                discovered_pools.insert(pubkey, Arc::new(pool_info));
+                            }
+                            Err(e) => {
+                                warn!("Failed to parse pool data for account {}: {}", pubkey, e);
+                            }
+                        }
+                    }
+                    self.update_pools(discovered_pools).await?;
+                    info!(
+                        "Successfully loaded {} initial Whirlpool pools.",
+                        self.pools.read().await.len()
+                    );
+                }
+                Err(e) => {
+                    error!("Failed to get program accounts for Whirlpools: {}", e);
+                }
+            }
+        } else {
+            warn!("RPC client not available for initial pool loading.");
         }
+        Ok(())
+    }
+
+    pub async fn start_services(&self, cache: Option<Arc<crate::cache::Cache>>) {
+        self.load_initial_pools()
+            .await
+            .unwrap_or_else(|e| error!("Failed to load initial pools: {}", e));
 
         if let Some(manager_arc) = &self.ws_manager {
             let manager = manager_arc.lock().await;
             if let Err(e) = manager.start(cache.clone()).await {
-                error!("[ArbitrageEngine] Failed to start WebSocket manager: {}", e);
+                error!(
+                    "[ArbitrageEngine] Failed to start WebSocket manager: {}",
+                    e
+                );
             } else {
                 info!("[ArbitrageEngine] WebSocket manager started successfully.");
             }
@@ -134,7 +190,6 @@ impl ArbitrageEngine {
         }
 
         // Start other services like price provider if they have a start method
-
         // Make run_full_health_check live by calling it once on startup
         // TODO: Consider moving to a periodic task in the main application loop for continuous health monitoring.
         info!("[ArbitrageEngine] Performing initial full health check...");
@@ -148,6 +203,7 @@ impl ArbitrageEngine {
                 e
             ),
         }
+
         info!("[ArbitrageEngine] All core services started or initialized.");
     }
 
@@ -175,8 +231,7 @@ impl ArbitrageEngine {
         &self,
         operation_name: &str,
         detector_call: F,
-    ) -> Result<Vec<MultiHopArbOpportunity>, ArbError>
-    // Corrected: Use MultiHopArbOpportunity
+    ) -> Result<Vec<MultiHopArbOpportunity>, ArbError> // Corrected: Use MultiHopArbOpportunity
     where
         F: FnOnce(
             Arc<Mutex<ArbitrageDetector>>,
@@ -195,10 +250,14 @@ impl ArbitrageEngine {
             .await
             .map_err(|_elapsed: TimeoutError| {
                 warn!("{}: Timeout waiting for pools read lock", operation_name);
-                ArbError::TimeoutError(format!("Timeout for pools read lock in {}", operation_name))
+                ArbError::TimeoutError(format!(
+                    "Timeout for pools read lock in {}",
+                    operation_name
+                ))
             })?;
             guard_result.deref().clone()
         };
+
         detector_call(
             Arc::clone(&self.detector),
             pools_map_clone,
@@ -237,6 +296,7 @@ impl ArbitrageEngine {
             );
             return Ok(Vec::new());
         }
+
         self.discover_opportunities_internal(
             "discover_fixed_input_opportunities",
             move |detector_arc, pools_map, metrics_arc| async move {
@@ -309,6 +369,7 @@ impl ArbitrageEngine {
                 }
             }
         }
+
         Ok(resolved_pools)
     }
 
@@ -319,6 +380,7 @@ impl ArbitrageEngine {
         }
 
         info!("[ArbitrageEngine] Performing system health check...");
+
         let mut ws_healthy = true;
         if let Some(manager_arc) = &self.ws_manager {
             let manager = manager_arc.lock().await;
@@ -328,17 +390,20 @@ impl ArbitrageEngine {
                 ws_healthy = false;
                 let attempts = self.ws_reconnect_attempts.fetch_add(1, Ordering::Relaxed);
                 if attempts < self.max_ws_reconnect_attempts {
-                    warn!("[ArbitrageEngine] WebSocket disconnected. Attempting reconnect (attempt {}/{})", attempts + 1, self.max_ws_reconnect_attempts);
-                    if let Err(e) = manager.start(None).await { // <-- FIX: pass None for cache
+                    warn!(
+                        "[ArbitrageEngine] WebSocket disconnected. Attempting reconnect (attempt {}/{})",
+                        attempts + 1,
+                        self.max_ws_reconnect_attempts
+                    );
+                    if let Err(e) = manager.start(None).await {
+                        // <-- FIX: pass None for cache
                         error!(
                             "[ArbitrageEngine] WebSocket reconnect attempt failed: {}",
                             e
                         );
                     }
                 } else {
-                    error!(
-                        "[ArbitrageEngine] WebSocket disconnected. Max reconnect attempts reached."
-                    );
+                    error!("[ArbitrageEngine] WebSocket disconnected. Max reconnect attempts reached.");
                 }
             } else {
                 self.ws_reconnect_attempts.store(0, Ordering::Relaxed);
@@ -363,14 +428,16 @@ impl ArbitrageEngine {
 
         let degradation_factor = self.config.degradation_profit_factor.unwrap_or(1.5);
         let current_min_profit = self.get_min_profit_threshold_pct().await;
-
         let should_degrade = !ws_healthy || !rpc_healthy;
         let was_degraded = self
             .degradation_mode
             .swap(should_degrade, Ordering::Relaxed);
 
         if should_degrade && !was_degraded {
-            warn!("[ArbitrageEngine] Entering degradation mode due to system health issues (WS: {}, RPC: {})", ws_healthy, rpc_healthy);
+            warn!(
+                "[ArbitrageEngine] Entering degradation mode due to system health issues (WS: {}, RPC: {})",
+                ws_healthy, rpc_healthy
+            );
             let new_threshold = current_min_profit * degradation_factor;
             self.set_min_profit_threshold_pct(new_threshold).await;
             info!(
@@ -388,6 +455,7 @@ impl ArbitrageEngine {
             );
             self.ws_reconnect_attempts.store(0, Ordering::Relaxed);
         }
+
         *last_check = Instant::now();
         Ok(())
     }
@@ -410,6 +478,7 @@ impl ArbitrageEngine {
                 new_pools_count += 1;
             }
         }
+
         if new_pools_count > 0 || updated_pools_count > 0 {
             info!(
                 "Pools updated: {} new, {} updated. Total pools: {}",
@@ -418,12 +487,14 @@ impl ArbitrageEngine {
                 writable_pools_ref.len()
             );
         }
+
         Ok(())
     }
 
     pub async fn run_health_checks(&self) {
         info!("Health check task running periodical checks...");
         let mut overall_healthy = true;
+
         if let Some(rpc) = &self.rpc_client {
             if !rpc.is_healthy().await {
                 // is_healthy is on SolanaRpcClient
@@ -448,388 +519,3 @@ impl ArbitrageEngine {
                     warn!(
                         "Attempting to reconnect WebSocket (attempt {}/{})",
                         attempts, self.max_ws_reconnect_attempts
-                    );
-                    // Attempt reconnect logic might be here or handled by the manager itself
-                } else {
-                    error!(
-                        "Max WebSocket reconnect attempts ({}) reached. System may be degraded.",
-                        self.max_ws_reconnect_attempts
-                    );
-                }
-            } else {
-                info!("WebSocket manager reported as connected.");
-                self.ws_reconnect_attempts.store(0, Ordering::Relaxed);
-            }
-        } else {
-            info!("WebSocket manager not configured; skipping WebSocket health check.");
-        }
-
-        if let Some(price_provider_arc) = &self.price_provider {
-            // Assuming CryptoDataProvider might have a health check. If not, this is a placeholder.
-            // For now, we'll assume it's healthy if it exists.
-            // match price_provider_arc.check_health().await {
-            //     Ok(_) => info!("Price provider reported as healthy."),
-            //     Err(e) => {
-            //         warn!("Price provider reported as unhealthy: {}", e);
-            //         overall_healthy = false;
-            //     }
-            // }
-            info!("Price provider is configured (health check placeholder).");
-            let _ = price_provider_arc; // Silence unused variable warning
-        } else {
-            warn!("Price provider not configured; skipping price provider health check.");
-        }
-
-        self.metrics.lock().await.set_system_health(overall_healthy);
-        *self.last_health_check.write().await = Instant::now();
-        info!(
-            "Health checks completed. System healthy: {}. Last check updated.",
-            overall_healthy
-        );
-    }
-
-    // Added back dex_providers_health_check
-    pub async fn dex_providers_health_check(&self) {
-        if self._dex_providers.is_empty() {
-            warn!("No DEX providers configured. ArbitrageEngine cannot operate without DEX APIs.");
-            return;
-        }
-        info!(
-            "Performing health check on {} DEX providers...",
-            self._dex_providers.len()
-        );
-        for provider in &self._dex_providers {
-            // Assuming DexClient has a health check method or similar.
-            // For now, just log the provider's name.
-            // In a real scenario, you'd call something like provider.is_healthy().await
-            info!("Checking health of DEX provider: {}", provider.get_name());
-            // Example: if !provider.is_healthy().await { warn!("DEX provider {} is unhealthy!", provider.get_name()); }
-        }
-        info!("DEX providers health check completed.");
-    }
-
-    // Added back run_full_health_check
-    pub async fn run_full_health_check(&self, _cache: Option<Arc<crate::cache::Cache>>) {
-        info!("Running full engine health check (including DEX providers)...");
-
-        // General health checks
-        self.run_health_checks().await;
-
-        // DEX specific checks
-        self.dex_providers_health_check().await;
-
-        // Optionally, re-check WebSocket manager with cache
-        if let Some(manager_arc) = &self.ws_manager {
-            let manager = manager_arc.lock().await;
-            let _ = manager.start(None).await; // Pass None for cache argument
-        }
-
-        info!("Full engine health check completed.");
-    }
-
-    pub async fn run_dynamic_threshold_updates(&self) {
-        info!("Dynamic threshold update service starting within ArbitrageEngine (using internal updater).");
-
-        let updater_arc = match &self.dynamic_threshold_updater {
-            Some(updater) => Arc::clone(updater),
-            None => {
-                warn!("DynamicThresholdUpdater not initialized in ArbitrageEngine. Internal threshold updates will not run.");
-                return;
-            }
-        };
-
-        let update_interval_duration = Duration::from_secs(
-            self.config
-                .dynamic_threshold_update_interval_secs
-                .unwrap_or(300),
-        );
-
-        loop {
-            tokio::time::sleep(update_interval_duration).await;
-
-            let current_price_of_major_asset = match &self.price_provider {
-                Some(provider) => {
-                    let symbol_to_track = self
-                        .config
-                        .health_check_token_symbol
-                        .as_deref()
-                        .unwrap_or("SOL/USDC");
-                    match provider.get_price(symbol_to_track).await {
-                        Some(price) => {
-                            log::debug!(
-                                "DynamicThreshold (Engine Task): Fetched price for {}: {}",
-                                symbol_to_track,
-                                price
-                            );
-                            price
-                        }
-                        None => {
-                            warn!("DynamicThreshold (Engine Task): Could not fetch price for {}. Using fallback 100.0", symbol_to_track);
-                            100.0
-                        }
-                    }
-                }
-                None => {
-                    warn!("DynamicThreshold (Engine Task): Price provider not available. Using fallback 100.0 for volatility calculation.");
-                    100.0
-                }
-            };
-
-            let new_threshold_pct = {
-                let mut updater = updater_arc.lock().await;
-                updater.add_price_observation(current_price_of_major_asset); // Synchronous call
-                updater.get_current_threshold() // Synchronous call
-            };
-
-            self.set_min_profit_threshold_pct(new_threshold_pct).await;
-
-            info!(
-                "DynamicThresholdUpdater (Engine Task): Set new min profit threshold: {:.4}% via internal updater logic.",
-                new_threshold_pct
-            );
-        }
-    }
-
-    // Added new method to make with_pool_guard_async live
-    pub async fn get_cached_pool_count(&self) -> Result<usize, ArbError> {
-        self.with_pool_guard_async("get_cached_pool_count", false, |pools_guard| async move {
-            Ok(pools_guard.len())
-        })
-        .await
-    }
-
-    // Added back with_pool_guard_async
-    pub async fn with_pool_guard_async<'s, Fut, T, F>(
-        &'s self,
-        operation_name: &str,
-        _write_lock: bool, // Parameter kept for signature compatibility, but logic simplified
-        critical_section: F,
-    ) -> Result<T, ArbError>
-    where
-        F: FnOnce(
-            Box<dyn Deref<Target = HashMap<Pubkey, Arc<PoolInfo>>> + Send + Sync + 's>,
-        ) -> Fut,
-        Fut: std::future::Future<Output = Result<T, ArbError>> + Send + 's,
-    {
-        let timeout_duration =
-            Duration::from_millis(self.config.pool_read_timeout_ms.unwrap_or(1000));
-
-        // Simplified to always use a read lock for this example due to boxing complexities with write guards.
-        let guard = timeout(timeout_duration, self.pools.read())
-            .await
-            .map_err(|_elapsed| {
-                // Handle timeout error
-                warn!("{}: Timeout waiting for pools read lock", operation_name);
-                ArbError::TimeoutError(format!("Timeout for pools read lock in {}", operation_name))
-            })?; // This '?' unwraps the Result<RwLockReadGuard, Elapsed> from timeout
-
-        let boxed_guard: Box<
-            dyn Deref<Target = HashMap<Pubkey, Arc<PoolInfo>>> + Send + Sync + 's,
-        > = Box::new(guard);
-
-        critical_section(boxed_guard).await
-    }
-
-    /// Main arbitrage detection entry point for the engine.
-    pub async fn detect_arbitrage(&self) -> Result<Vec<MultiHopArbOpportunity>, ArbError> {
-        info!("Starting arbitrage detection cycle...");
-        let start_time = Instant::now();
-
-        let direct_opportunities = self._discover_direct_opportunities().await.map_err(|e| {
-            error!("Error discovering direct opportunities: {}", e);
-            e
-        })?;
-        info!(
-            "Found {} direct (2-hop) opportunities.",
-            direct_opportunities.len()
-        );
-
-        let multihop_opps = self.discover_multihop_opportunities().await.map_err(|e| {
-            error!("Error discovering multi-hop opportunities: {}", e);
-            e
-        })?;
-        info!(
-            "Found {} multi-hop (3+ hop) opportunities.",
-            multihop_opps.len()
-        );
-
-        let mut all_opportunities = direct_opportunities;
-        all_opportunities.extend(multihop_opps);
-
-        // Add fixed input opportunities if enabled
-        if self.config.enable_fixed_input_arb_detection {
-            if let Some(fixed_amount) = self.config.fixed_input_arb_amount {
-                if fixed_amount > 0.0 {
-                    info!(
-                        "Discovering fixed input opportunities with amount: {}",
-                        fixed_amount
-                    );
-                    let fixed_input_opps = self
-                        .discover_fixed_input_opportunities(fixed_amount)
-                        .await
-                        .map_err(|e| {
-                            error!("Error discovering fixed input opportunities: {}", e);
-                            e
-                        })?;
-                    info!(
-                        "Found {} fixed input (2-hop) opportunities.",
-                        fixed_input_opps.len()
-                    );
-                    all_opportunities.extend(fixed_input_opps);
-                } else {
-                    warn!("Fixed input amount is configured to be non-positive ({}). Skipping fixed input detection.", fixed_amount);
-                }
-            } else {
-                warn!(
-                    "Fixed input detection enabled, but fixed_input_arb_amount not set. Skipping."
-                );
-            }
-        }
-
-        // Call find_two_hop_opportunities to mark it as used if tests are not sufficient
-        // This is deprecated, so its use here is primarily to satisfy the "must use" requirement.
-        // In a production system, this might be guarded by a debug flag or removed if the deprecation is final.
-        let deprecated_two_hop_opps = {
-            // The 'mut' keyword is removed from here
-            let detector_guard = self.detector.lock().await;
-            let mut metrics_guard = self.metrics.lock().await;
-            detector_guard
-                .find_two_hop_opportunities(&self.pools.read().await.clone(), &mut metrics_guard)
-                .await
-                .map_err(|e| {
-                    error!("Error discovering deprecated two_hop_opportunities: {}", e);
-                    e
-                })?
-        };
-        if !deprecated_two_hop_opps.is_empty() {
-            info!(
-                "Found {} opportunities via deprecated find_two_hop_opportunities.",
-                deprecated_two_hop_opps.len()
-            );
-            all_opportunities.extend(deprecated_two_hop_opps);
-        }
-
-        // --- Filter for profitability using MultiHopArbOpportunity methods ---
-        let min_profit_pct = self.get_min_profit_threshold_pct().await;
-        let min_profit_usd = self.detector.lock().await.get_min_profit_threshold_usd(); // Use getter
-
-        let filtered_opportunities: Vec<MultiHopArbOpportunity> = all_opportunities
-            .into_iter()
-            .filter(|opp| opp.is_profitable(min_profit_pct, min_profit_usd))
-            .collect();
-
-        info!(
-            "Filtered to {} profitable opportunities (min_pct: {:.4}%, min_usd: {:.4}).",
-            filtered_opportunities.len(),
-            min_profit_pct,
-            min_profit_usd
-        );
-
-        let mut all_opportunities = filtered_opportunities;
-
-        all_opportunities.sort_by(|a, b| {
-            b.profit_pct
-                .partial_cmp(&a.profit_pct)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
-
-        let duration = start_time.elapsed();
-        info!(
-            "Arbitrage detection cycle completed in {:?}. Total opportunities found: {}",
-            duration,
-            all_opportunities.len()
-        );
-
-        if !all_opportunities.is_empty() {
-            let best_opp = &all_opportunities[0]; // This is safe due to the !is_empty() check
-            info!(
-                "Best opportunity: ID {}, Profit Pct: {:.4}%, Input: {} {}, Output: {} {}",
-                best_opp.id,
-                best_opp.profit_pct,
-                best_opp.input_amount,
-                best_opp.input_token,
-                best_opp.expected_output,
-                best_opp.output_token
-            );
-
-            // Make resolve_pools_for_opportunity live
-            match self.resolve_pools_for_opportunity(best_opp).await {
-                Ok(resolved_pools) => {
-                    info!(
-                        "Successfully resolved {} pools for the best opportunity. First pool: {:?}",
-                        resolved_pools.len(),
-                        resolved_pools.first().map(|p| p.name.clone())
-                    );
-                }
-                Err(e) => {
-                    warn!(
-                        "Could not resolve pools for the best opportunity {}: {}",
-                        best_opp.id, e
-                    );
-                }
-            }
-        }
-        Ok(all_opportunities)
-    }
-
-    pub async fn get_current_status_string(&self) -> String {
-        // Placeholder implementation
-        let mut status = String::new();
-        status.push_str(&format!(
-            "Engine Health: {}\n",
-            if self.degradation_mode.load(Ordering::Relaxed) {
-                "DEGRADED"
-            } else {
-                "OK"
-            }
-        ));
-        status.push_str(&format!(
-            "Pools in cache: {}\n",
-            self.pools.read().await.len()
-        ));
-        if let Some(ws_manager_arc) = &self.ws_manager {
-            let manager = ws_manager_arc.lock().await;
-            status.push_str(&format!(
-                "WebSocket Connected: {}\n",
-                manager.is_connected().await
-            ));
-        }
-        // Add more status information as needed
-        status
-    }
-}
-
-#[cfg(test)]
-mod detector_integration_tests {
-    use super::*;
-    use crate::arbitrage::detector::ArbitrageDetector;
-    // Removed this unused import:
-    // use crate::config::settings::Config;
-    use crate::metrics::Metrics;
-    use solana_sdk::pubkey::Pubkey;
-    use std::collections::HashMap;
-    use std::sync::Arc;
-
-    #[tokio::test]
-    async fn test_exercise_all_detector_functions() {
-        // Exercise ArbitrageDetector::new with all required arguments
-        let mut detector = ArbitrageDetector::new(0.5, 0.05, 150.0, 5000);
-        let mut metrics = Metrics::default();
-        let pools: HashMap<Pubkey, Arc<PoolInfo>> = HashMap::new();
-        // Exercise find_two_hop_opportunities (deprecated, but must be called)
-        let _ = detector
-            .find_two_hop_opportunities(&pools, &mut metrics)
-            .await;
-        // Exercise log_banned_pair
-        ArbitrageDetector::log_banned_pair("A", "B", "permanent", "integration test");
-        // Exercise is_permanently_banned and is_temporarily_banned
-        let _ = ArbitrageDetector::is_permanently_banned("A", "B");
-        let _ = ArbitrageDetector::is_temporarily_banned("A", "B");
-        // Exercise set_min_profit_threshold and get_min_profit_threshold_pct
-        detector.set_min_profit_threshold(0.6);
-        let _ = detector.get_min_profit_threshold_pct();
-        // Exercise new_from_config
-        let config = Config::test_default();
-        let _ = ArbitrageDetector::new_from_config(&config);
-    }
-}

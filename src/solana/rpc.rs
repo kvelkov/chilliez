@@ -1,21 +1,27 @@
-use anyhow::{anyhow, Result};
-use log::{debug, error, info};
-use solana_client::nonblocking::rpc_client::RpcClient;
-use solana_client::rpc_config::{RpcAccountInfoConfig, RpcProgramAccountsConfig};
+use crate::error::ArbError;
+use anyhow::{Context, Result}; // Removed unused `anyhow` direct import, Context is still used.
+use log::{debug, error, info, warn};
+use rand::Rng; // For jitter
+use solana_account_decoder::UiAccountEncoding; // Corrected import path
+use solana_client::nonblocking::rpc_client::RpcClient as NonBlockingRpcClient;
+use solana_client::rpc_config::RpcProgramAccountsConfig;
 use solana_client::rpc_filter::RpcFilterType;
 use solana_sdk::commitment_config::CommitmentConfig;
 use solana_sdk::pubkey::Pubkey;
 use std::sync::Arc;
-use tokio::time::Duration;
-use crate::error::ArbError;
+use std::time::Duration;
+use tokio::time::sleep; // For async sleep
+
+#[allow(dead_code)] // Silencing warning as NonBlockingRpcClient::new_with_commitment handles timeout differently
+const DEFAULT_RPC_TIMEOUT: Duration = Duration::from_secs(30); // Define if not already present
+const DEFAULT_COMMITMENT: CommitmentConfig = CommitmentConfig::confirmed(); // Define if not already present
 
 /// Provides high-availability RPC with retries/fallbacks.
-/// Not yet called by main flow but will be integrated for production HA.
 pub struct SolanaRpcClient {
     /// Primary RPC client - will replace direct RpcClient usage in main/test
-    pub primary_client: Arc<RpcClient>,
+    pub primary_client: Arc<NonBlockingRpcClient>,
     /// Fallback endpoints for high-availability in production
-    pub fallback_clients: Vec<Arc<RpcClient>>,
+    pub fallback_clients: Vec<Arc<NonBlockingRpcClient>>,
     /// Maximum number of retry attempts before falling back
     /// Will be configurable for production HA
     pub max_retries: usize,
@@ -33,23 +39,23 @@ impl SolanaRpcClient {
     /// * `retry_delay` - Base delay between retry attempts
     pub fn new(
         primary_endpoint: &str,
-        fallback_endpoints: Vec<String>,
+        fallback_endpoints: Vec<String>, // Corrected type
         max_retries: usize,
         retry_delay: Duration,
     ) -> Self {
-        let primary_client = Arc::new(RpcClient::new_with_timeout_and_commitment(
+        // NonBlockingRpcClient does not have new_with_commitment_and_timeout.
+        // Using new_with_commitment. Timeout is typically handled by the underlying HTTP client.
+        let primary_client = Arc::new(NonBlockingRpcClient::new_with_commitment(
             primary_endpoint.to_string(),
-            Duration::from_secs(10),
-            CommitmentConfig::confirmed(),
+            DEFAULT_COMMITMENT,
         ));
 
         let fallback_clients = fallback_endpoints
             .iter()
-            .map(|endpoint| {
-                Arc::new(RpcClient::new_with_timeout_and_commitment(
-                    endpoint.clone(),
-                    Duration::from_secs(10),
-                    CommitmentConfig::confirmed(),
+            .map(|url| {
+                Arc::new(NonBlockingRpcClient::new_with_commitment(
+                    url.clone(),
+                    DEFAULT_COMMITMENT,
                 ))
             })
             .collect();
@@ -62,6 +68,97 @@ impl SolanaRpcClient {
         }
     }
 
+    async fn execute_with_retry_and_fallback<F, Fut, T>(
+        &self,
+        operation_name: &str,
+        mut rpc_call_fn: F,
+    ) -> anyhow::Result<T>
+    where
+        F: FnMut(Arc<NonBlockingRpcClient>) -> Fut, // Changed to take owned Arc for closure
+        Fut: std::future::Future<Output = Result<T, solana_client::client_error::ClientError>>
+            + Send,
+        T: Send,
+    {
+        let mut last_error: Option<solana_client::client_error::ClientError> = None;
+
+        // Try primary client with retries
+        debug!(
+            "[RPC HA - {}] Attempting with primary client",
+            operation_name
+        );
+        for attempt in 0..self.max_retries {
+            match rpc_call_fn(Arc::clone(&self.primary_client)).await {
+                // Clone Arc for capture
+                Ok(result) => {
+                    debug!(
+                        "[RPC HA - {}] Primary client succeeded on attempt {}",
+                        operation_name,
+                        attempt + 1
+                    );
+                    return Ok(result);
+                }
+                Err(e) => {
+                    warn!(
+                        "[RPC HA - {}] Primary client attempt {}/{} failed: {}",
+                        operation_name,
+                        attempt + 1,
+                        self.max_retries,
+                        e
+                    );
+                    last_error = Some(e);
+                    if attempt < self.max_retries - 1 {
+                        let mut delay_ms = self.retry_delay.as_millis() as u64;
+                        if self.retry_delay.as_millis() > 0 {
+                            let jitter_val = rand::thread_rng().gen_range(0..(delay_ms / 4).max(1));
+                            delay_ms += jitter_val;
+                        }
+                        sleep(Duration::from_millis(delay_ms)).await;
+                    }
+                }
+            }
+        }
+
+        // Try fallback clients
+        debug!(
+            "[RPC HA - {}] Primary client failed after all retries. Attempting fallback clients.",
+            operation_name
+        );
+        for (i, fallback_client) in self.fallback_clients.iter().enumerate() {
+            debug!(
+                "[RPC HA - {}] Attempting with fallback client #{}",
+                operation_name,
+                i + 1
+            );
+            match rpc_call_fn(Arc::clone(fallback_client)).await {
+                // Clone Arc for capture
+                Ok(result) => {
+                    info!(
+                        "[RPC HA - {}] Fallback client #{} succeeded.",
+                        operation_name,
+                        i + 1
+                    );
+                    return Ok(result);
+                }
+                Err(e) => {
+                    warn!(
+                        "[RPC HA - {}] Fallback client #{} failed: {}",
+                        operation_name,
+                        i + 1,
+                        e
+                    );
+                    last_error = Some(e);
+                }
+            }
+        }
+
+        let final_error_message = format!("[RPC HA - {}] All RPC attempts failed.", operation_name);
+        error!("{}", final_error_message);
+        Err(match last_error {
+            Some(e) => anyhow::Error::from(e).context(final_error_message),
+            None => anyhow::anyhow!(final_error_message),
+        })
+    }
+
     /// Get account data with retries and fallbacks
     ///
     /// Attempts to fetch account data from primary RPC endpoint with retries,
@@ -70,46 +167,15 @@ impl SolanaRpcClient {
     /// # Arguments
     /// * `pubkey` - The account public key to fetch
     pub async fn get_account_data(&self, pubkey: &Pubkey) -> Result<Vec<u8>> {
-        let mut retries = 0;
-        let mut last_error = None;
-
-        // Try with primary client
-        while retries < self.max_retries {
-            match self.primary_client.get_account(pubkey).await {
-                Ok(account) => {
-                    debug!("Fetched account data for {}", pubkey);
-                    return Ok(account.data);
-                }
-                Err(err) => {
-                    error!("RPC error fetching account {}: {}", pubkey, err);
-                    last_error = Some(err);
-                    retries += 1;
-
-                    // Add jitter to avoid thundering herd
-                    let jitter = rand::random::<u64>() % 500;
-                    tokio::time::sleep(self.retry_delay + Duration::from_millis(jitter)).await;
-                }
-            }
-        }
-
-        // Try fallbacks
-        for fallback_client in &self.fallback_clients {
-            match fallback_client.get_account(pubkey).await {
-                Ok(account) => {
-                    info!("Fetched account data via fallback for {}", pubkey);
-                    return Ok(account.data);
-                }
-                Err(err) => {
-                    error!("Fallback RPC error: {}", err);
-                    last_error = Some(err);
-                }
-            }
-        }
-
-        Err(anyhow!(
-            "Failed to get account data after retries. Last error: {:?}",
-            last_error
-        ))
+        // TODO: Integrate calls to this method where raw account data is needed (e.g., TokenMetadataCache, pool data fetching)
+        self.execute_with_retry_and_fallback(
+            "get_account_data",
+            |client: Arc<NonBlockingRpcClient>| async move {
+                client.get_account(pubkey).await.map(|acc| acc.data)
+            },
+        )
+        .await
+        .with_context(|| format!("Failed to get account data for {}", pubkey))
     }
 
     /// Get program accounts with a filter and retry logic
@@ -127,56 +193,34 @@ impl SolanaRpcClient {
     ) -> Result<Vec<(Pubkey, Vec<u8>)>> {
         let config = RpcProgramAccountsConfig {
             filters: Some(filters),
-            account_config: RpcAccountInfoConfig {
-                encoding: Some(solana_account_decoder::UiAccountEncoding::Base64),
+            account_config: solana_client::rpc_config::RpcAccountInfoConfig {
+                // Removed Some() wrapper
+                encoding: Some(UiAccountEncoding::Base64), // Corrected path
                 commitment: Some(CommitmentConfig::confirmed()),
-                ..Default::default()
+                data_slice: None,
+                min_context_slot: None,
             },
-            ..Default::default()
+            with_context: Some(false),
         };
 
-        let mut retries = 0;
-        while retries < self.max_retries {
-            match self
-                .primary_client
-                .get_program_accounts_with_config(program_id, config.clone())
-                .await
-            {
-                Ok(accounts) => {
-                    return Ok(accounts
-                        .into_iter()
-                        .map(|(pubkey, account)| (pubkey, account.data))
-                        .collect());
+        // Clone config here because it's captured by the async move block and FnMut closure.
+        let config_clone = config.clone();
+        // The closure needs to capture a value that can be cloned for each call.
+        // The `async move` block will capture `config_clone` (the outer one).
+        // Inside the `async move` block, we clone it again for the actual RPC call.
+        self.execute_with_retry_and_fallback(
+  "get_program_accounts",
+            move |client: Arc<NonBlockingRpcClient>| {
+                // Clone config_clone here, so each invocation of the async block gets its own copy.
+                let current_config_for_call = config_clone.clone();
+                async move {
+                    client.get_program_accounts_with_config(program_id, current_config_for_call).await
+                        .map(|accounts| accounts.into_iter().map(|(k, v)| (k, v.data)).collect())
                 }
-                Err(err) => {
-                    error!("RPC error fetching program accounts: {}", err);
-                    retries += 1;
-
-                    let jitter = rand::random::<u64>() % 500;
-                    tokio::time::sleep(self.retry_delay + Duration::from_millis(jitter)).await;
-                }
-            }
-        }
-
-        // Try fallbacks
-        for fallback_client in &self.fallback_clients {
-            match fallback_client
-                .get_program_accounts_with_config(program_id, config.clone())
-                .await
-            {
-                Ok(accounts) => {
-                    return Ok(accounts
-                        .into_iter()
-                        .map(|(pubkey, account)| (pubkey, account.data))
-                        .collect());
-                }
-                Err(err) => {
-                    error!("Fallback RPC error fetching program accounts: {}", err);
-                }
-            }
-        }
-
-        Err(anyhow!("Failed to get program accounts after retries"))
+            },
+        )
+        .await
+        .with_context(|| format!("Failed to get program accounts for {}", program_id))
     }
 
     /// Check RPC health
@@ -190,69 +234,57 @@ impl SolanaRpcClient {
     /// Get the current network congestion factor based on recent performance metrics
     /// Returns a value between 1.0 (low congestion) and 5.0 (extreme congestion)
     pub async fn get_network_congestion_factor(&self) -> f64 {
-        match self
-            .primary_client
-            .get_recent_performance_samples(Some(10))
-            .await
-        {
-            Ok(samples) => {
-                if samples.is_empty() {
-                    return 1.0; // Default to low congestion if no samples
+        match self.get_recent_prioritization_fees().await {
+            Ok(fees) => {
+                if fees.is_empty() {
+                    return 1.0; // No fee data, assume normal
                 }
+                let mut sorted_fees = fees;
+                sorted_fees.sort_unstable();
 
-                // Calculate average transaction count and estimate slot processing time
-                let avg_tx_count: f64 = samples
-                    .iter()
-                    .map(|s| s.num_transactions as f64)
-                    .sum::<f64>()
-                    / samples.len() as f64;
+                let p75_index = (sorted_fees.len() as f64 * 0.75).floor() as usize;
+                let p75_fee = sorted_fees
+                    .get(p75_index.min(sorted_fees.len().saturating_sub(1)))
+                    .cloned()
+                    .unwrap_or(0);
 
-                // Calculate estimated slot time based on sample period and number of slots
-                let avg_slot_time: f64 = samples
-                    .iter()
-                    .map(|s| (s.sample_period_secs as f64 * 1_000_000.0) / s.num_slots as f64) // Convert to microseconds
-                    .sum::<f64>()
-                    / samples.len() as f64;
+                const BASELINE_PRIORITY_FEE: u64 = 5000;
 
-                // Higher tx count and longer slot times indicate congestion
-                let tx_factor = (avg_tx_count / 2000.0).min(3.0); // Normalize, capped at 3.0
-                let time_factor = (avg_slot_time / 600.0).min(2.0); // Normalize, capped at 2.0
-
-                // Combine factors with some weighting
-                1.0 + tx_factor + time_factor
+                if p75_fee <= BASELINE_PRIORITY_FEE {
+                    1.0
+                } else if p75_fee <= BASELINE_PRIORITY_FEE * 5 {
+                    1.0 + (p75_fee as f64 / BASELINE_PRIORITY_FEE as f64 - 1.0) * 0.25
+                } else if p75_fee <= BASELINE_PRIORITY_FEE * 10 {
+                    2.0
+                } else {
+                    3.0
+                }
             }
             Err(err) => {
-                error!("Failed to get performance samples: {}", err);
-                1.5 // Default to slightly elevated congestion on error
+                error!(
+                    "Failed to get recent prioritization fees for congestion factor: {}",
+                    err
+                );
+                1.5 // Default to slightly elevated congestion on error if fees can't be fetched
             }
         }
     }
 
     /// Fetches recent prioritization fees for dynamic fee adjustment.
-    pub async fn get_recent_prioritization_fees(
-        &self,
-    ) -> Result<Vec<u64>, ArbError> {
-        let mut last_err = None;
-        for client in std::iter::once(&self.primary_client).chain(self.fallback_clients.iter()) {
-            for _ in 0..=self.max_retries {
-                // The correct method is get_recent_prioritization_fees(&[Pubkey])
-                // Here, we pass an empty slice to get all recent fees.
-                match client.get_recent_prioritization_fees(&[]).await {
-                    Ok(fees) => {
-                        // fees is Vec<RpcPrioritizationFee>, extract the fee values
-                        let lamports: Vec<u64> = fees.into_iter().map(|f| f.prioritization_fee).collect();
-                        return Ok(lamports);
-                    }
-                    Err(e) => {
-                        last_err = Some(e);
-                        tokio::time::sleep(self.retry_delay).await;
-                    }
-                }
-            }
-        }
-        Err(ArbError::RpcError(format!(
-            "Failed to fetch recent prioritization fees: {:?}",
-            last_err
-        )))
+    pub async fn get_recent_prioritization_fees(&self) -> Result<Vec<u64>, ArbError> {
+        self.execute_with_retry_and_fallback(
+            "get_recent_prioritization_fees",
+            |client: Arc<NonBlockingRpcClient>| async move {
+                client.get_recent_prioritization_fees(&[]).await // Pass empty slice for global fees
+            },
+        )
+        .await
+        .map(|fees_response| {
+            fees_response
+                .into_iter()
+                .map(|fee_info| fee_info.prioritization_fee)
+                .collect()
+        })
+        .map_err(|e| ArbError::RpcError(e.to_string()))
     }
 }

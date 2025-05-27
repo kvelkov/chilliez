@@ -1,42 +1,39 @@
 // src/dex/http_utils_shared.rs
 //! Centralized HTTP and logging utilities for DEX API access.
 
-use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE};
-use std::env;
+use reqwest::header::{HeaderMap, HeaderName, HeaderValue, CONTENT_TYPE}; // AUTHORIZATION moved to test module
 // Ensure tracing or log is imported if used. The original file uses `tracing::error, info;`
 // If you've standardized on `log` crate, it should be `log::{error, info};`
 // For consistency with other files, I'll use `log`.
-use log::{error, info, warn};
+use log::{error, info}; // Removed warn
 
 
-/// Returns a HeaderMap with the API key from the given environment variable name, if present.
-pub fn headers_with_api_key(api_key_env_name: &str) -> HeaderMap {
+/// Builds a HeaderMap, including an authorization header if an API key is provided,
+/// and sets the Content-Type to application/json.
+pub fn build_auth_headers(
+    api_key_value: Option<&str>,
+    auth_header_name: HeaderName,
+    auth_prefix: Option<&str>,
+) -> HeaderMap {
     let mut headers = HeaderMap::new();
-    match env::var(api_key_env_name) {
-        Ok(key_string) => match HeaderValue::from_str(&key_string) {
-            Ok(header_val) => {
-                headers.insert(AUTHORIZATION, header_val);
+    if let Some(key_string) = api_key_value {
+        if !key_string.is_empty() {
+            let header_value_str = if let Some(pfx) = auth_prefix {
+                format!("{}{}", pfx, key_string)
+            } else {
+                key_string.to_string()
+            };
+
+            match HeaderValue::from_str(&header_value_str) {
+                Ok(header_val) => {
+                    headers.insert(auth_header_name, header_val);
+                }
+                Err(e) => {
+                    // Log only a part of the key for security
+                    let key_preview = &key_string[..std::cmp::min(5, key_string.len())];
+                    error!("API key (value starting with '{}') failed to parse as HeaderValue: {}. Proceeding without this auth header.", key_preview, e);
+                }
             }
-            Err(e) => {
-                let partial_key_display = if key_string.len() > 5 {
-                    format!("{}...", &key_string[..5])
-                } else {
-                    key_string.to_string()
-                };
-                error!(
-                        "API key for {} (starting with '{}') found but failed to parse as HeaderValue: {}. Proceeding without this header.",
-                        api_key_env_name,
-                        partial_key_display,
-                        e
-                    );
-            }
-        },
-        Err(_) => {
-            // Changed from error! to warn! as missing API key might be optional
-            warn!(
-                "API key environment variable {} not found. Proceeding without this header (if optional).",
-                api_key_env_name
-            );
         }
     }
     headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
@@ -58,11 +55,26 @@ pub async fn log_timed_request<T>(label: &str, f: impl std::future::Future<Outpu
 #[cfg(test)]
 mod tests {
     use super::*;
+    use reqwest::header::AUTHORIZATION; // Import AUTHORIZATION here as it's only used in tests
+    use reqwest::header::HeaderName; // Import HeaderName for test
+
     #[test]
     fn test_headers_with_api_key() {
-        let api_key = "testkey";
-        let headers = headers_with_api_key(api_key);
-        assert_eq!(headers.get(AUTHORIZATION).unwrap(), "testkey");
+        // Test with Authorization header and Bearer prefix
+        let headers1 = build_auth_headers(Some("testkey123"), AUTHORIZATION, Some("Bearer "));
+        assert_eq!(headers1.get(AUTHORIZATION).unwrap(), "Bearer testkey123");
+        assert!(headers1.contains_key(CONTENT_TYPE));
+
+        // Test with a custom header and no prefix
+        let custom_header_name = HeaderName::from_static("x-custom-api-key");
+        let headers2 = build_auth_headers(Some("customvalue"), custom_header_name.clone(), None);
+        assert_eq!(headers2.get(custom_header_name).unwrap(), "customvalue");
+        assert!(headers2.contains_key(CONTENT_TYPE));
+
+        // Test with no API key
+        let headers3 = build_auth_headers(None, AUTHORIZATION, None);
+        assert!(!headers3.contains_key(AUTHORIZATION)); // Auth header should not be present
+        assert!(headers3.contains_key(CONTENT_TYPE));
     }
 }
 

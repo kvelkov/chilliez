@@ -71,6 +71,7 @@ impl LifinityClient {
         req_builder
     }
 
+    #[allow(dead_code)]
     pub fn get_api_key(&self) -> &str {
         &self.api_key
     }
@@ -105,8 +106,8 @@ impl DexClient for LifinityClient {
 
         let request_start_time = Instant::now();
         let response_result = LIFINITY_RATE_LIMITER
-            .get_with_backoff(&self.http_client, &url, |request_url| {
-                self.build_request_with_api_key(request_url)
+            .get_with_backoff(&url, |request_url| { // Removed &self.http_client
+                self.build_request_with_api_key(request_url) // http_client is captured by build_request_with_api_key
             })
             .await;
         let request_duration_ms = request_start_time.elapsed().as_millis() as u64;

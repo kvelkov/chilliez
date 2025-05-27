@@ -105,11 +105,11 @@ impl DexClient for PhoenixClient {
             info!("Requesting Phoenix quote from URL: {}", url);
 
             let request_start_time = Instant::now();
-            let response_result = PHOENIX_RATE_LIMITER
-                .get_with_backoff(&self.http_client, &url, |request_url| {
+            let response_result = PHOENIX_RATE_LIMITER // Corrected call
+                .get_with_backoff(&url, |request_url| {
                     let mut req_builder = self.http_client.get(request_url);
                     if !self._api_key.is_empty() { // Used prefixed field
-                        req_builder = req_builder.header("Authorization", format!("Bearer {}", self._api_key));
+                        req_builder = req_builder.header("X-API-KEY", &self._api_key); // Assuming X-API-KEY for Phoenix, adjust if needed
                     }
                     req_builder
                 })

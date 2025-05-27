@@ -60,12 +60,7 @@ impl MeteoraClient {
             quote_cache_ttl_secs: quote_cache_ttl_secs.unwrap_or(45),
         }
     }
-
-    pub fn get_api_key(&self) -> &str {
-        &self.api_key
-    }
 }
-
 #[async_trait]
 impl DexClient for MeteoraClient {
     async fn get_best_swap_quote(
@@ -95,8 +90,8 @@ impl DexClient for MeteoraClient {
 
         let request_start_time = Instant::now();
         let response_result = METEORA_RATE_LIMITER
-            .get_with_backoff(&self.http_client, &url, |request_url| {
-                let mut req_builder = self.http_client.get(request_url);
+            .get_with_backoff(&url, |request_url| { // Removed &self.http_client
+                let mut req_builder = self.http_client.get(request_url); // http_client is captured here
                 if !self.api_key.is_empty() {
                     req_builder = req_builder.header("X-API-KEY", &self.api_key); // Example header
                 }

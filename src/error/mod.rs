@@ -1,287 +1,379 @@
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use anyhow::Result as AnyhowResult;
+use std::fmt;
 use std::time::{Duration, Instant};
-use thiserror::Error;
+use tokio::time::sleep;
+use log::{error, warn, info, debug};
 
-#[derive(Error, Debug)]
+#[derive(Debug, Clone)]
 pub enum ArbError {
-    #[error("RPC error: {0}")]
-    RpcError(String),
-    #[error("Solana RPC error: {0}")]
-    SolanaRpcError(String),
-    #[error("WebSocket error: {0}")]
+    /// Network/connectivity issues
+    NetworkError(String),
+    
+    /// WebSocket connection/data issues - CRITICAL for real-time data
     WebSocketError(String),
-    #[error("DEX error: {0}")]
+    
+    /// DEX-specific errors (slippage, insufficient liquidity, etc.)
     DexError(String),
-    #[error("Execution error: {0}")]
-    ExecutionError(String),
-    #[error("Configuration error: {0}")]
-    ConfigError(String),
-    #[error("Insufficient liquidity: {0}")]
-    InsufficientLiquidity(String),
-    #[error("Slippage too high: expected {expected:.4}%, actual {actual:.4}%")]
-    SlippageTooHigh { expected: f64, actual: f64 },
-    #[error("Transaction error: {0}")]
-    TransactionError(String),
-    #[error("Timeout error: {0}")]
-    TimeoutError(String),
-    #[error("Circuit breaker triggered: {0}")]
+    
+    /// RPC/Solana network errors
+    RpcError(String),
+    
+    /// Parsing errors for pool data
+    ParseError(String),
+    
+    /// Insufficient balance for trade execution
+    InsufficientBalance(String),
+    
+    /// Circuit breaker has been triggered
     CircuitBreakerTriggered(String),
-    #[error("Transaction simulation failed: {0}")]
-    SimulationFailed(String),
-    #[error("Rate limit exceeded: {0}")]
-    RateLimitExceeded(String),
-    #[error("Network congestion: {0}")]
-    NetworkCongestion(String),
-    #[error("Recoverable error: {0}")]
-    Recoverable(String),
-    #[error("Non-recoverable error: {0}")]
-    NonRecoverable(String),
-    #[error("Pool not found: {0}")]
+    
+    /// Configuration errors
+    ConfigError(String),
+    
+    /// Cache/Redis errors
+    CacheError(String),
+    
+    /// Timeout errors for operations
+    TimeoutError(String),
+    
+    /// Pool not found errors
     PoolNotFound(String),
-    #[error("Unknown error: {0}")]
+    
+    /// Trade execution errors
+    ExecutionError(String),
+    
+    /// Transaction/blockchain errors
+    TransactionError(String),
+    
+    /// Simulation failed errors
+    SimulationFailed(String),
+    
+    /// Unknown/unclassified errors
     Unknown(String),
+    
+    /// Errors that should not be retried
+    NonRecoverable(String),
 }
 
-impl From<solana_client::client_error::ClientError> for ArbError {
-    fn from(error: solana_client::client_error::ClientError) -> Self {
-        let error_str = error.to_string();
-
-        match error.kind() {
-            solana_client::client_error::ClientErrorKind::RpcError(rpc_err_kind) => {
-                if error_str.contains("Node is behind")
-                    || error_str.contains("SlotSkipped")
-                    || error_str.contains("slot was not processed")
-                {
-                    ArbError::NetworkCongestion(format!(
-                        "RPC Node Sync/Slot Issue: {} (Kind: {:?})",
-                        error_str, rpc_err_kind
-                    ))
-                } else if error_str.contains("blockhash not found") {
-                    ArbError::Recoverable(format!(
-                        "BlockhashNotFound: {} (Kind: {:?})",
-                        error_str, rpc_err_kind
-                    ))
-                } else if error_str.contains("Դ") {
-                    ArbError::RateLimitExceeded(format!(
-                        "Specific RPC Error Code (e.g. rate limit): {} (Kind: {:?})",
-                        error_str, rpc_err_kind
-                    ))
-                } else {
-                    ArbError::RpcError(format!("{} (Kind: {:?})", error_str, rpc_err_kind))
-                }
-            }
-            solana_client::client_error::ClientErrorKind::TransactionError(
-                solana_transaction_error,
-            ) => {
-                if error_str.contains("Transaction simulation failed") {
-                    ArbError::SimulationFailed(format!(
-                        "{} (Kind: TransactionError({:?}))",
-                        error_str, solana_transaction_error
-                    ))
-                } else {
-                    ArbError::TransactionError(format!(
-                        "{} (Kind: TransactionError({:?}))",
-                        error_str, solana_transaction_error
-                    ))
-                }
-            }
-            solana_client::client_error::ClientErrorKind::Reqwest(e) => ArbError::RpcError(
-                format!("HTTP Request Error: {} (Kind: Reqwest({}))", error_str, e),
-            ),
-            _ => {
-                if error_str.contains("rate limit") || error_str.contains("429") {
-                    ArbError::RateLimitExceeded(format!("{} (Kind: {:?})", error_str, error.kind()))
-                } else if error_str.contains("timeout") || error_str.contains("timed out") {
-                    ArbError::TimeoutError(format!("{} (Kind: {:?})", error_str, error.kind()))
-                } else if error_str.contains("insufficient") || error_str.contains("liquidity") {
-                    ArbError::InsufficientLiquidity(format!(
-                        "{} (Kind: {:?})",
-                        error_str,
-                        error.kind()
-                    ))
-                } else if error_str.contains("simulation") {
-                    ArbError::SimulationFailed(format!("{} (Kind: {:?})", error_str, error.kind()))
-                } else if error_str.contains("congestion") || error_str.contains("busy") {
-                    ArbError::NetworkCongestion(format!("{} (Kind: {:?})", error_str, error.kind()))
-                } else {
-                    ArbError::SolanaRpcError(format!("{} (Kind: {:?})", error_str, error.kind()))
-                }
-            }
+impl fmt::Display for ArbError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ArbError::NetworkError(msg) => write!(f, "Network Error: {}", msg),
+            ArbError::WebSocketError(msg) => write!(f, "WebSocket Error: {}", msg),
+            ArbError::DexError(msg) => write!(f, "DEX Error: {}", msg),
+            ArbError::RpcError(msg) => write!(f, "RPC Error: {}", msg),
+            ArbError::ParseError(msg) => write!(f, "Parse Error: {}", msg),
+            ArbError::InsufficientBalance(msg) => write!(f, "Insufficient Balance: {}", msg),
+            ArbError::CircuitBreakerTriggered(msg) => write!(f, "Circuit Breaker Triggered: {}", msg),
+            ArbError::ConfigError(msg) => write!(f, "Config Error: {}", msg),
+            ArbError::CacheError(msg) => write!(f, "Cache Error: {}", msg),
+            ArbError::TimeoutError(msg) => write!(f, "Timeout Error: {}", msg),
+            ArbError::PoolNotFound(msg) => write!(f, "Pool Not Found: {}", msg),
+            ArbError::ExecutionError(msg) => write!(f, "Execution Error: {}", msg),
+            ArbError::TransactionError(msg) => write!(f, "Transaction Error: {}", msg),
+            ArbError::SimulationFailed(msg) => write!(f, "Simulation Failed: {}", msg),
+            ArbError::Unknown(msg) => write!(f, "Unknown Error: {}", msg),
+            ArbError::NonRecoverable(msg) => write!(f, "Non-Recoverable Error: {}", msg),
         }
     }
 }
 
-impl From<anyhow::Error> for ArbError {
-    fn from(error: anyhow::Error) -> Self {
-        let error_str = error.to_string();
-        if error_str.contains("timeout") || error_str.contains("timed out") {
-            ArbError::TimeoutError(error_str)
-        } else if error_str.contains("slippage") {
-            let expected_str = error_str
-                .split("expected ")
-                .nth(1)
-                .and_then(|val| val.split('%').next());
-            let actual_str = error_str
-                .split("actual ")
-                .nth(1)
-                .and_then(|val| val.split('%').next());
-
-            if let (Some(exp_s_val), Some(act_s_val)) = (expected_str, actual_str) {
-                if let (Ok(expected), Ok(actual)) =
-                    (exp_s_val.parse::<f64>(), act_s_val.parse::<f64>())
-                {
-                    return ArbError::SlippageTooHigh { expected, actual };
-                }
-            }
-            ArbError::ExecutionError(format!(
-                "Slippage error (details not fully parsed): {}",
-                error_str
-            ))
-        } else {
-            ArbError::Unknown(error_str)
-        }
-    }
-}
+impl std::error::Error for ArbError {}
 
 impl ArbError {
+    /// Determines if an error is recoverable through retry
     pub fn is_recoverable(&self) -> bool {
         match self {
-            ArbError::RateLimitExceeded(_)
-            | ArbError::TimeoutError(_)
-            | ArbError::NetworkCongestion(_)
-            | ArbError::Recoverable(_)
-            | ArbError::WebSocketError(_) => true,
-            ArbError::SolanaRpcError(s_val)
-                if s_val.contains("blockhash not found")
-                    || s_val.contains("slot unavailable")
-                    || s_val.contains("connection closed")
-                    || s_val.contains("node is behind") =>
-            {
-                true
-            }
-            ArbError::RpcError(s_val)
-                if s_val.contains("blockhash not found")
-                    || s_val.contains("slot unavailable")
-                    || s_val.contains("connection closed")
-                    || s_val.contains("node is behind") =>
-            {
-                true
-            }
+            ArbError::NetworkError(_) => true,
+            ArbError::WebSocketError(_) => true,
+            ArbError::DexError(msg) => {
+                // Some DEX errors are recoverable (temporary slippage, rate limits)
+                !msg.contains("insufficient_funds") && !msg.contains("invalid_signature")
+            },
+            ArbError::RpcError(_) => true,
+            ArbError::ParseError(_) => false, // Data format issues aren't recoverable
+            ArbError::InsufficientBalance(_) => false, // Need to wait for balance
+            ArbError::CircuitBreakerTriggered(_) => false, // Manual intervention needed
+            ArbError::ConfigError(_) => false, // Config needs fixing
+            ArbError::CacheError(_) => true, // Redis might recover
+            ArbError::TimeoutError(_) => true, // Timeouts are usually recoverable
+            ArbError::PoolNotFound(_) => false, // Pool doesn't exist
+            ArbError::ExecutionError(msg) => {
+                // Some execution errors are recoverable (slippage, temporary network issues)
+                msg.contains("slippage") || msg.contains("temporary") || msg.contains("retry")
+            },
+            ArbError::TransactionError(msg) => {
+                // Some transaction errors are recoverable (network issues, not signature errors)
+                !msg.contains("signature") && !msg.contains("invalid") && 
+                (msg.contains("network") || msg.contains("timeout") || msg.contains("congestion"))
+            },
+            ArbError::SimulationFailed(_) => true, // Simulations can be retried
+            ArbError::Unknown(_) => true, // Unknown errors might be recoverable
+            ArbError::NonRecoverable(_) => false,
+        }
+    }
+
+    /// Determines if operation should be retried immediately
+    pub fn should_retry(&self) -> bool {
+        self.is_recoverable() && match self {
+            ArbError::NetworkError(_) => true,
+            ArbError::WebSocketError(_) => true,
+            ArbError::RpcError(_) => true,
+            ArbError::CacheError(_) => true,
+            ArbError::TimeoutError(_) => true,
+            ArbError::SimulationFailed(_) => true,
+            ArbError::DexError(msg) => {
+                // Retry on rate limits and temporary issues
+                msg.contains("rate_limit") || msg.contains("temporary") || msg.contains("timeout")
+            },
+            ArbError::ExecutionError(msg) => {
+                // Retry on temporary execution issues
+                msg.contains("slippage") || msg.contains("temporary")
+            },
+            ArbError::TransactionError(msg) => {
+                // Retry on network-related transaction issues
+                msg.contains("network") || msg.contains("timeout") || msg.contains("congestion")
+            },
+            ArbError::Unknown(_) => false, // Don't immediately retry unknown errors
             _ => false,
         }
     }
 
-    pub fn should_retry(&self) -> bool {
-        self.is_recoverable() && !matches!(self, ArbError::CircuitBreakerTriggered(_))
-    }
-
-    pub fn categorize(self) -> Self {
-        match &self {
-            ArbError::RpcError(msg)
-            | ArbError::SolanaRpcError(msg)
-            | ArbError::DexError(msg)
-            | ArbError::ExecutionError(msg) => {
-                if msg.contains("timeout")
-                    || msg.contains("rate limit")
-                    || msg.contains("congestion")
-                {
-                    ArbError::Recoverable(msg.clone())
-                } else if msg.contains("insufficient")
-                    || msg.contains("rejected")
-                    || msg.contains("invalid")
-                {
-                    ArbError::NonRecoverable(msg.clone())
-                } else {
-                    self
-                }
-            }
-            _ => self,
+    /// Categorizes error for metrics and monitoring
+    pub fn categorize(&self) -> ErrorCategory {
+        match self {
+            ArbError::NetworkError(_) | ArbError::RpcError(_) => ErrorCategory::Network,
+            ArbError::WebSocketError(_) => ErrorCategory::DataFeed,
+            ArbError::DexError(_) => ErrorCategory::Trading,
+            ArbError::ParseError(_) => ErrorCategory::Data,
+            ArbError::InsufficientBalance(_) => ErrorCategory::Balance,
+            ArbError::CircuitBreakerTriggered(_) => ErrorCategory::Safety,
+            ArbError::ConfigError(_) => ErrorCategory::Configuration,
+            ArbError::CacheError(_) => ErrorCategory::Infrastructure,
+            ArbError::TimeoutError(_) => ErrorCategory::Network,
+            ArbError::PoolNotFound(_) => ErrorCategory::Data,
+            ArbError::ExecutionError(_) => ErrorCategory::Trading,
+            ArbError::TransactionError(_) => ErrorCategory::Trading,
+            ArbError::SimulationFailed(_) => ErrorCategory::Trading,
+            ArbError::Unknown(_) => ErrorCategory::Critical,
+            ArbError::NonRecoverable(_) => ErrorCategory::Critical,
         }
     }
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum ErrorCategory {
+    Network,
+    DataFeed,
+    Trading,
+    Data,
+    Balance,
+    Safety,
+    Configuration,
+    Infrastructure,
+    Critical,
+}
+
+/// Circuit breaker for protecting against cascading failures
+#[derive(Debug, Clone)]
 pub struct CircuitBreaker {
-    is_open: AtomicBool,
-    opened_at: std::sync::Mutex<Option<Instant>>,
-    reset_timeout: Duration,
-    error_count: AtomicU64,
-    success_count: AtomicU64,
-    error_threshold: u64,
-    success_threshold: u64,
-    error_window: Duration,
-    last_error: std::sync::Mutex<Option<Instant>>,
-    name: String,
+    failure_threshold: u32,
+    recovery_timeout: Duration,
+    failure_count: u32,
+    last_failure_time: Option<Instant>,
+    state: CircuitBreakerState,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum CircuitBreakerState {
+    Closed,  // Normal operation
+    Open,    // Blocking all requests
+    HalfOpen, // Testing if service recovered
 }
 
 impl CircuitBreaker {
-    pub fn new(
-        name: &str,
-        error_threshold: u64,
-        success_threshold: u64,
-        error_window: Duration,
-        reset_timeout: Duration,
-    ) -> Self {
+    pub fn new(failure_threshold: u32, recovery_timeout: Duration) -> Self {
         Self {
-            is_open: AtomicBool::new(false),
-            opened_at: std::sync::Mutex::new(None),
-            reset_timeout,
-            error_count: AtomicU64::new(0),
-            success_count: AtomicU64::new(0),
-            error_threshold,
-            success_threshold,
-            error_window,
-            last_error: std::sync::Mutex::new(None),
-            name: name.to_string(),
+            failure_threshold,
+            recovery_timeout,
+            failure_count: 0,
+            last_failure_time: None,
+            state: CircuitBreakerState::Closed,
         }
     }
+
     pub fn is_open(&self) -> bool {
-        self.is_open.load(Ordering::Relaxed)
+        match self.state {
+            CircuitBreakerState::Open => {
+                if let Some(last_failure) = self.last_failure_time {
+                    // Check if recovery timeout has passed
+                    if last_failure.elapsed() >= self.recovery_timeout {
+                        false // Allow transition to half-open
+                    } else {
+                        true // Still in open state
+                    }
+                } else {
+                    false
+                }
+            },
+            _ => false,
+        }
     }
-    pub fn record_success(&self) { /* ... */
+
+    pub fn record_success(&mut self) {
+        self.failure_count = 0;
+        self.state = CircuitBreakerState::Closed;
+        debug!("Circuit breaker: Success recorded, state reset to Closed");
     }
-    pub fn record_failure(&self) -> Result<(), ArbError> {
-        Ok(())
+
+    pub fn record_failure(&mut self) {
+        self.failure_count += 1;
+        self.last_failure_time = Some(Instant::now());
+        
+        if self.failure_count >= self.failure_threshold {
+            self.state = CircuitBreakerState::Open;
+            warn!("Circuit breaker: OPENED after {} failures", self.failure_count);
+        } else {
+            debug!("Circuit breaker: Failure recorded ({}/{})", self.failure_count, self.failure_threshold);
+        }
     }
-    pub async fn execute<F, Fut, T, E>(&self, f: F) -> Result<T, ArbError>
+
+    pub async fn execute<F, T, E>(&mut self, operation: F) -> Result<T, ArbError>
     where
-        F: Fn() -> Fut,
-        Fut: std::future::Future<Output = Result<T, E>>,
+        F: std::future::Future<Output = Result<T, E>>,
         E: Into<ArbError>,
     {
-        f().await.map_err(Into::into)
+        // Check if circuit breaker is open
+        if self.is_open() {
+            return Err(ArbError::CircuitBreakerTriggered(
+                "Circuit breaker is open, operation blocked".to_string()
+            ));
+        }
+
+        // If half-open, transition to testing state
+        if self.state == CircuitBreakerState::Open {
+            if let Some(last_failure) = self.last_failure_time {
+                if last_failure.elapsed() >= self.recovery_timeout {
+                    self.state = CircuitBreakerState::HalfOpen;
+                    info!("Circuit breaker: Transitioning to HalfOpen for testing");
+                }
+            }
+        }
+
+        // Execute operation
+        match operation.await {
+            Ok(result) => {
+                self.record_success();
+                Ok(result)
+            },
+            Err(e) => {
+                let arb_error = e.into();
+                self.record_failure();
+                Err(arb_error)
+            }
+        }
     }
-    pub fn reset(&self) { /* ... */
+
+    pub fn reset(&mut self) {
+        self.failure_count = 0;
+        self.last_failure_time = None;
+        self.state = CircuitBreakerState::Closed;
+        info!("Circuit breaker: Manually reset to Closed state");
     }
 }
 
+/// Retry policy with exponential backoff
+#[derive(Debug, Clone)]
 pub struct RetryPolicy {
     max_attempts: u32,
-    base_delay_ms: u64,
-    max_delay_ms: u64,
-    jitter_factor: f64,
+    base_delay: Duration,
+    max_delay: Duration,
 }
+
 impl RetryPolicy {
-    pub fn new(
-        max_attempts: u32,
-        base_delay_ms: u64,
-        max_delay_ms: u64,
-        jitter_factor: f64,
-    ) -> Self {
+    pub fn new(max_attempts: u32, base_delay: Duration, max_delay: Duration) -> Self {
         Self {
             max_attempts,
-            base_delay_ms,
-            max_delay_ms,
-            jitter_factor: jitter_factor.clamp(0.0, 1.0),
+            base_delay,
+            max_delay,
         }
     }
-    pub fn delay_for_attempt(&self, _attempt: u32) -> Duration {
-        Duration::from_millis(0)
+
+    /// Calculate delay for a given attempt (exponential backoff)
+    pub fn delay_for_attempt(&self, attempt: u32) -> Duration {
+        if attempt == 0 {
+            return Duration::from_millis(0);
+        }
+        
+        let delay_ms = self.base_delay.as_millis() * (2_u128.pow(attempt - 1));
+        let delay = Duration::from_millis(delay_ms.min(self.max_delay.as_millis()) as u64);
+        
+        debug!("Retry attempt {}: delay = {:?}", attempt, delay);
+        delay
     }
-    pub async fn execute<F, Fut, T>(&self, f: F) -> Result<T, ArbError>
+
+    /// Execute operation with retry logic
+    pub async fn execute<F, T, E, Fut>(&self, mut operation: F) -> Result<T, ArbError>
     where
-        F: Fn() -> Fut,
-        Fut: std::future::Future<Output = Result<T, ArbError>>,
+        F: FnMut() -> Fut,
+        Fut: std::future::Future<Output = Result<T, E>>,
+        E: Into<ArbError>,
     {
-        f().await
+        let mut last_error = None;
+        
+        for attempt in 0..self.max_attempts {
+            if attempt > 0 {
+                let delay = self.delay_for_attempt(attempt);
+                sleep(delay).await;
+            }
+            
+            match operation().await {
+                Ok(result) => {
+                    if attempt > 0 {
+                        info!("Operation succeeded after {} retries", attempt);
+                    }
+                    return Ok(result);
+                },
+                Err(e) => {
+                    let arb_error = e.into();
+                    
+                    if !arb_error.should_retry() {
+                        warn!("Non-retryable error on attempt {}: {}", attempt + 1, arb_error);
+                        return Err(arb_error);
+                    }
+                    
+                    warn!("Attempt {} failed: {} (retrying...)", attempt + 1, arb_error);
+                    last_error = Some(arb_error);
+                }
+            }
+        }
+        
+        error!("All {} retry attempts failed", self.max_attempts);
+        Err(last_error.unwrap_or_else(|| {
+            ArbError::NonRecoverable("Max retries exceeded".to_string())
+        }))
+    }
+}
+
+// Convenience type aliases
+pub type ArbResult<T> = Result<T, ArbError>;
+
+// Default configurations
+impl Default for RetryPolicy {
+    fn default() -> Self {
+        Self::new(
+            3, // max attempts
+            Duration::from_millis(100), // base delay
+            Duration::from_secs(5), // max delay
+        )
+    }
+}
+
+impl Default for CircuitBreaker {
+    fn default() -> Self {
+        Self::new(
+            5, // failure threshold
+            Duration::from_secs(30), // recovery timeout
+        )
     }
 }

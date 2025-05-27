@@ -1,7 +1,8 @@
 use serde::Deserialize;
 use std::{collections::HashMap, env};
-
+use std::path::Path;
 #[derive(Debug, Deserialize, Clone)]
+#[serde(rename_all = "kebab-case")] // Allows TOML keys like rpc-url-secondary
 pub struct Config {
     pub rpc_url: String,
     pub rpc_url_secondary: Option<String>,
@@ -48,6 +49,19 @@ pub struct Config {
 }
 
 impl Config {
+    /// Loads configuration from the specified file path using the `config` crate.
+    /// Expects a TOML file format.
+    pub fn load(config_path: &Path) -> Result<Self, ::config::ConfigError> {
+        let settings = ::config::Config::builder()
+            // Add configuration source from the specified file path
+            .add_source(::config::File::from(config_path))
+            // Example: Optionally, add environment variable overrides
+            // .add_source(::config::Environment::with_prefix("APP").separator("__"))
+            .build()?;
+
+        settings.try_deserialize()
+    }
+
     pub fn from_env() -> Self {
         dotenv::dotenv().ok();
         Config {
@@ -112,6 +126,7 @@ impl Config {
     }
 
     /// Returns a default config for testing purposes.
+    #[cfg(test)] // Add this attribute
     pub fn test_default() -> Self {
         Self {
             min_profit_pct: 0.1,
@@ -164,6 +179,11 @@ impl Config {
         if self.rpc_url.is_empty() {
             log::error!("CRITICAL: RPC_URL environment variable is not set or empty.");
         }
+        if self.rpc_url_secondary.is_some() {
+            log::info!("Secondary RPC URL (RPC_URL_SECONDARY) is configured.");
+        } else {
+            log::info!("Secondary RPC URL (RPC_URL_SECONDARY) is not configured. Only primary RPC will be used.");
+        }
         if self.trader_wallet_keypair_path.as_ref().map_or(true, |s| s.is_empty()) {
             log::error!("CRITICAL: TRADER_WALLET_KEYPAIR_PATH environment variable is not set or empty.");
         }
@@ -175,5 +195,61 @@ impl Config {
                 log::warn!("ENABLE_FIXED_INPUT_ARB_DETECTION is true but FIXED_INPUT_ARB_AMOUNT is not set.");
             }
         }
+        if self.transaction_priority_fee_lamports > 0 {
+            log::info!("Transaction priority fee lamports set to: {}", self.transaction_priority_fee_lamports);
+        } else {
+            log::warn!("TRANSACTION_PRIORITY_FEE_LAMPORTS is set to 0. This might lead to slow transaction processing.");
+        }
+        log::info!("Pool refresh interval set to: {} seconds.", self.pool_refresh_interval_secs);
+        if let Some(level) = &self.log_level {
+            log::info!("Log level configured to: {}", level);
+        }
+        if let Some(factor) = self.volatility_threshold_factor {
+            log::info!("Volatility threshold factor set to: {}", factor);
+        }
+        if let Some(fee) = self.max_tx_fee_lamports_for_acceptance {
+            log::info!("Max transaction fee for acceptance (lamports) set to: {}", fee);
+        }
+        if let Some(score) = self.max_risk_score_for_acceptance {
+            log::info!("Max risk score for acceptance set to: {}", score);
+        }
+        if let Some(hops) = self.max_hops {
+            log::info!("Max hops for arbitrage pathfinding set to: {}", hops);
+        }
+        if let Some(pools) = self.max_pools_per_hop {
+            log::info!("Max pools per hop for arbitrage pathfinding set to: {}", pools);
+        }
+        if let Some(concurrent) = self.max_concurrent_executions {
+            log::info!("Max concurrent executions set to: {}", concurrent);
+        }
+        if let Some(timeout) = self.execution_timeout_secs {
+            log::info!("Execution timeout (seconds) set to: {}", timeout);
+        }
+        if self.simulation_mode {
+            log::info!("Simulation mode is ENABLED.");
+        }
+    }
+}
+
+// Example of how you might load it in your main.rs or setup
+// fn main() -> Result<(), Box<dyn std::error::Error>> {
+//     // Ensure you have the `config` crate in your Cargo.toml
+//     let config = Config::load(Path::new("config.toml"))?;
+//     // Now use config...
+//     Ok(())
+// }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_default_config_is_creatable_and_has_expected_values() {
+        let config = Config::test_default();
+        // Add assertions here to check specific default values.
+        // This not only uses the function but also verifies its behavior.
+        assert_eq!(config.min_profit_pct, 0.1, "Default min_profit_pct should be 0.1");
+        assert_eq!(config.rpc_url, "http://localhost:8899", "Default rpc_url should be http://localhost:8899");
+        assert!(config.simulation_mode == false, "Default simulation_mode should be false");
     }
 }

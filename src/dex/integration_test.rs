@@ -68,7 +68,6 @@ pub async fn _exercise_dex_clients() {
     let _ = raydium.get_api_key(); // Fixed: use get_api_key, not _get_api_key
     let _ = whirlpool.get_api_key(); // Fixed: use get_api_key, not _get_api_key
     let _ = lifinity.get_api_key(); // Assuming this one might be used or was missed for prefixing
-    let _ = meteora.get_api_key(); // Assuming this one might be used
     let _ = phoenix._get_api_key(); // Use prefixed
     
     let _ = orca.get_supported_pairs();
@@ -93,9 +92,7 @@ pub async fn _exercise_dex_clients() {
     let _ = lifinity.get_best_swap_quote(usdc, sol, 1_000_000).await;
     let _ = meteora.get_best_swap_quote(usdc, sol, 1_000_000).await;
     let _ = phoenix.get_best_swap_quote(usdc, sol, 1_000_000).await;
-}
-
-// Prefixed
+}// Prefixed
 pub fn _exercise_serde() {
     let pool = PoolInfo {
         address: Pubkey::new_unique(),

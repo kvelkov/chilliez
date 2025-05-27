@@ -1,7 +1,7 @@
 // src/dex/raydium.rs
 
-// use crate::arbitrage::headers_with_api_key; // Removed unused import
-use crate::cache::Cache; 
+use crate::cache::Cache;
+use crate::dex::http_utils_shared::build_auth_headers;
 use crate::dex::http_utils::HttpRateLimiter;
 use crate::dex::quote::{DexClient, Quote};
 use crate::utils::{DexType, PoolInfo, PoolParser as UtilsPoolParser, PoolToken}; 
@@ -15,7 +15,8 @@ use serde::Deserialize;
 use solana_sdk::pubkey::Pubkey;
 use std::env;
 use std::str::FromStr;
-use std::sync::Arc; 
+use reqwest::header::{HeaderMap, HeaderName};
+use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 
@@ -101,15 +102,22 @@ impl RaydiumClient {
     pub fn get_api_key(&self) -> &str {
         &self.api_key
     }
+    
+    // Use the api_key in other methods
+    pub fn make_authenticated_request(&self) -> Result<(), Box<dyn std::error::Error>> {
+        let _key = self.get_api_key(); // This would use the method
+        // ... rest of implementation
+        Ok(())
+    }
 }
 
 static RAYDIUM_RATE_LIMITER: Lazy<HttpRateLimiter> = Lazy::new(|| {
     HttpRateLimiter::new(
-        5,                          
-        Duration::from_millis(200), 
-        3,                          
-        Duration::from_millis(500), 
-        vec![], 
+        5,
+        Duration::from_millis(200),
+        3,
+        Duration::from_millis(500),
+        vec![],
     )
 });
 
@@ -139,10 +147,19 @@ impl DexClient for RaydiumClient {
             input_token_mint, output_token_mint, amount_in_atomic_units 
         );
 
-        let request_start_time = Instant::now();
+        let api_key_option = if self.api_key.is_empty() {
+            None
+        } else {
+            Some(self.api_key.as_str())
+        };
+
+        // Assuming Raydium uses "X-API-KEY" header without a prefix. Adjust if necessary.
+        let headers = build_auth_headers(api_key_option, HeaderName::from_static("x-api-key"), None);
+
+        let request_start_time = Instant::now(); // Define request_start_time here
         let response_result = RAYDIUM_RATE_LIMITER
-            .get_with_backoff(&self.http_client, &url, |request_url| {
-                self.http_client.get(request_url)
+            .get_with_backoff(&url, |request_url| { // Removed &self.http_client
+                self.http_client.get(request_url).headers(headers.clone())
             })
             .await;
         

@@ -3,7 +3,7 @@
 
 use anyhow::{anyhow, Result};
 use log::warn;
-use reqwest::{Client, RequestBuilder, Response};
+use reqwest::{RequestBuilder, Response}; // Removed unused Client import
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Mutex;
@@ -11,7 +11,6 @@ use tokio::time::sleep;
 
 /// Rate limiter and backoff state shared across DEX clients
 pub struct HttpRateLimiter {
-    pub max_concurrent: usize,
     pub min_delay: Duration,
     pub max_retries: usize,
     pub base_backoff: Duration,
@@ -22,19 +21,18 @@ pub struct HttpRateLimiter {
 
 impl HttpRateLimiter {
     pub fn new(
-        max_concurrent: usize,
+        max_concurrent_param: usize,
         min_delay: Duration,
         max_retries: usize,
         base_backoff: Duration,
         fallback_urls: Vec<String>,
     ) -> Self {
         Self {
-            max_concurrent,
             min_delay,
             max_retries,
             base_backoff,
             fallback_urls,
-            semaphore: Arc::new(tokio::sync::Semaphore::new(max_concurrent)),
+            semaphore: Arc::new(tokio::sync::Semaphore::new(max_concurrent_param)),
             last_request: Arc::new(Mutex::new(std::time::Instant::now())),
         }
     }
@@ -42,14 +40,13 @@ impl HttpRateLimiter {
     /// Perform an HTTP GET with rate limiting, exponential backoff, and fallback URLs.
     pub async fn get_with_backoff(
         &self,
-        _client: &Client, // Prefixed with underscore to indicate intentional unused parameter
-        url: &str,
+        initial_url: &str, // Renamed from url to initial_url for clarity with loop variable
         build_req: impl Fn(&str) -> RequestBuilder,
     ) -> Result<Response> {
-        let urls = vec![url.to_string()];
-        let urls_with_fallbacks = [urls, self.fallback_urls.clone()].concat();
+        let mut urls_to_try = vec![initial_url.to_string()];
+        urls_to_try.extend(self.fallback_urls.clone());
 
-        for url in urls_with_fallbacks {
+        for current_url_str in urls_to_try { // Iterate over owned Strings
             let mut attempt = 0;
             loop {
                 let _permit = self.semaphore.acquire().await.unwrap();
@@ -62,17 +59,17 @@ impl HttpRateLimiter {
                     }
                     *last = std::time::Instant::now();
                 }
-                let req = build_req(&url);
+                let req = build_req(&current_url_str); // Use the loop variable
                 match req.send().await {
                     Ok(resp) if resp.status().is_success() => return Ok(resp),
                     Ok(resp) => {
-                        warn!("HTTP error {} from {}", resp.status(), url);
+                        warn!("HTTP error {} from {}", resp.status(), current_url_str);
                         if attempt >= self.max_retries {
                             break;
                         }
                     }
                     Err(e) => {
-                        warn!("HTTP request error to {}: {}", url, e);
+                        warn!("HTTP request error to {}: {}", current_url_str, e);
                         if attempt >= self.max_retries {
                             break;
                         }

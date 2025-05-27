@@ -5,8 +5,7 @@ pub mod settings;
 pub use settings::Config;
 
 use std::sync::Arc;
-use std::fs::File;
-use std::io::Read;
+use std::path::Path;
 
 /// Loads and returns the application configuration.
 /// This function will call `dotenv::dotenv()` to load environment variables from a .env file,
@@ -24,10 +23,8 @@ pub fn load_app_config() -> settings::Config {
 /// Loads the application configuration from a file.
 /// Returns an Arc-wrapped Config for shared use.
 pub fn load_app_config_from_file(path: &str) -> Arc<Config> {
-    let mut file = File::open(path).expect("Failed to open config file");
-    let mut contents = String::new();
-    file.read_to_string(&mut contents).expect("Failed to read config file");
-    let config: Config = toml::from_str(&contents).expect("Failed to parse config file");
+    let config = settings::Config::load(Path::new(path))
+        .expect("Failed to load config from file");
     Arc::new(config)
 }
 

@@ -9,6 +9,7 @@ mod solana;
 pub mod utils;
 pub mod websocket;
 
+use crate::error::ArbResult;
 use crate::{
     arbitrage::{
         calculator,
@@ -34,11 +35,11 @@ use std::collections::HashMap;
 use std::env;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::{broadcast, Mutex, RwLock}; // Added broadcast
 use tokio::time::interval;
 
 #[tokio::main]
-async fn main() -> Result<(), ArbError> {
+async fn main() -> ArbResult<()> {
     setup_logging().expect("Failed to initialize logging");
     info!("Solana Arbitrage Bot starting...");
 
@@ -218,10 +219,25 @@ async fn main() -> Result<(), ArbError> {
     let mut main_cycle_interval = interval(Duration::from_secs(app_config.cycle_interval_seconds.expect("cycle_interval_seconds must be set")));
     main_cycle_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
-    // Interval for checking WebsocketUpdate
-    let mut ws_update_check_interval = interval(Duration::from_millis(500));
+    // Setup shutdown signal for the new WebSocket processing task
+    let (shutdown_tx_ws_processor, shutdown_rx_ws_processor) = broadcast::channel(1);
+    let mut ws_processor_task_handle = None;
 
-
+    if let Some(ws_manager_arc_for_loop) = ws_manager_opt.clone() {
+        let engine_for_ws_loop = Arc::clone(&arbitrage_engine);
+        info!("[Main] Spawning ArbitrageEngine's WebSocket update processing loop.");
+        ws_processor_task_handle = Some(tokio::spawn(async move {
+            // We need to lock the manager to pass a mutable reference.
+            // The loop inside process_websocket_updates_loop will handle repeated calls to try_recv_update.
+            let mut manager_guard = ws_manager_arc_for_loop.lock().await;
+            engine_for_ws_loop
+                .process_websocket_updates_loop(&mut manager_guard, shutdown_rx_ws_processor)
+                .await;
+        }));
+    } else {
+        warn!("[Main] WebSocket manager not configured, ArbitrageEngine's WebSocket update processing loop will not be started.");
+    }
+    
     loop {
         tokio::select! {
             _ = main_cycle_interval.tick() => {
@@ -272,27 +288,7 @@ async fn main() -> Result<(), ArbError> {
                 }
                 metrics.lock().await.record_main_cycle_duration(cycle_start_time.elapsed().as_millis() as u64);
             },
-            _ = ws_update_check_interval.tick(), if ws_manager_opt.is_some() => {
-                if let Some(ws_manager_arc_for_updates) = ws_manager_opt.as_ref().map(Arc::clone) {
-                    let mut manager_guard = ws_manager_arc_for_updates.lock().await;
-                    match manager_guard.try_recv_update().await {
-                        Ok(Some(WebsocketUpdate::PoolUpdate(pool_info))) => {
-                            info!("[WebsocketUpdateLogger] Pool Update: Name={}, Address={}", pool_info.name, pool_info.address);
-                            // Potentially update a shared pool map or trigger re-evaluation
-                            if let Err(e) = arbitrage_engine.update_pools(HashMap::from([(pool_info.address, Arc::new(pool_info))])).await {
-                                error!("[WebsocketUpdateLogger] Failed to update engine pools from WS: {}", e);
-                            }
-                        }
-                        Ok(Some(WebsocketUpdate::GenericUpdate(message))) => {
-                            info!("[WebsocketUpdateLogger] Generic Update: {}", message);
-                        }
-                        Ok(None) => { /* No update available */ }
-                        Err(e) => {
-                            warn!("[WebsocketUpdateLogger] Error trying to receive websocket update: {:?}", e);
-                        }
-                    }
-                }
-            },
+            // The WebSocket update checking logic has been moved to the dedicated arbitrage_engine.process_websocket_updates_loop task
             _ = tokio::signal::ctrl_c() => {
                 info!("CTRL-C received, shutting down tasks...");
                 threshold_task_handle.abort();
@@ -300,6 +296,11 @@ async fn main() -> Result<(), ArbError> {
                 health_check_task_handle.abort();
 
                 if let Some(manager_arc) = &ws_manager_opt {
+                    // Send shutdown signal to the WebSocket processing loop
+                    if shutdown_tx_ws_processor.send(()).is_err() {
+                        error!("[Main] Failed to send shutdown signal to WebSocket processor task.");
+                    }
+
                     let dummy_pubkey_to_unsub = solana_sdk::system_program::id();
                     info!("[Main] Unsubscribing from dummy account {} before shutdown.", dummy_pubkey_to_unsub);
                     if let Err(e) = manager_arc.lock().await.unsubscribe(&dummy_pubkey_to_unsub).await {
@@ -310,6 +311,13 @@ async fn main() -> Result<(), ArbError> {
                     info!("[Main] WebSocket manager stop called.");
                 }
 
+                // Await the WebSocket processor task if it was started
+                if let Some(handle) = ws_processor_task_handle.take() {
+                    info!("[Main] Awaiting WebSocket processor task to complete...");
+                    if let Err(e) = handle.await {
+                        error!("[Main] WebSocket processor task panicked or encountered an error: {:?}", e);
+                    }
+                }
                 info!("Background tasks aborted. Exiting.");
                 break;
             }
@@ -318,4 +326,3 @@ async fn main() -> Result<(), ArbError> {
     metrics.lock().await.summary();
     Ok(())
 }
-

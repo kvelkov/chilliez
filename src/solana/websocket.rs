@@ -10,6 +10,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{broadcast, mpsc, RwLock, Mutex};
+use crate::dex::pool::get_pool_parser_fn_for_program; // Added for pool parsing
+use std::str::FromStr; // Added for Pubkey::from_str
 use crate::cache::Cache;
 use crate::utils::PoolInfo;
 
@@ -405,47 +407,77 @@ impl SolanaWebsocketManager {
                             .duration_since(std::time::UNIX_EPOCH)
                             .unwrap_or_default()
                             .as_secs();
-                        if let Ok(pool_info) = bincode::deserialize::<PoolInfo>(&decoded_data) {
-                            if let Some(ref cache_instance) = cache {
-                                if let Err(e) = cache_instance
-                                    .update_pool_cache(&pubkey.to_string(), &pool_info, None)
-                                    .await
-                                {
-                                    warn!(
-                                        "[WebSocket] Failed to update pool cache for {}: {}",
-                                        pubkey, e
-                                    );
+
+                        // Get owner program ID to find the correct parser
+                        let owner_program_id_str = &response.value.owner;
+                        match Pubkey::from_str(owner_program_id_str) {
+                            Ok(owner_pubkey) => {
+                                if let Some(parser_fn) = get_pool_parser_fn_for_program(&owner_pubkey) {
+                                    match parser_fn(pubkey, &decoded_data) {
+                                        Ok(pool_info) => {
+                                            debug!("[WebSocket] Successfully parsed pool data for {} using parser for program {}", pubkey, owner_pubkey);
+                                            if let Some(ref cache_instance) = cache {
+                                                if let Err(e) = cache_instance
+                                                    .update_pool_cache(&pubkey.to_string(), &pool_info, None)
+                                                    .await
+                                                {
+                                                    warn!(
+                                                        "[WebSocket] Failed to update pool cache for {}: {}",
+                                                        pubkey, e
+                                                    );
+                                                }
+                                            }
+                                            if let Some(ref sender_channel) = ws_update_sender {
+                                                if sender_channel
+                                                    .send(WebsocketUpdate::PoolUpdate(pool_info))
+                                                    .await
+                                                    .is_err()
+                                                {
+                                                    warn!(
+                                                        "[WebSocket] Failed to send PoolUpdate for {} to internal channel.",
+                                                        pubkey
+                                                    );
+                                                }
+                                            }
+                                        }
+                                        Err(e) => {
+                                            debug!("[WebSocket] Parser for program {} failed for account {}: {}. Data len: {}. Treating as generic.", owner_pubkey, pubkey, e, decoded_data.len());
+                                            // Potentially send a more specific error or just a generic update
+                                            if let Some(ref sender_channel) = ws_update_sender {
+                                                if sender_channel.send(WebsocketUpdate::GenericUpdate(format!(
+                                                    "Parser error for pubkey {} (owner {}): {}, data length {}",
+                                                    pubkey, owner_pubkey, e, decoded_data.len()
+                                                ))).await.is_err() {
+                                                    warn!("[WebSocket] Failed to send GenericUpdate (parser error) for {} to internal channel.", pubkey);
+                                                }
+                                            }
+                                        }
+                                    }
+                                } else {
+                                    debug!("[WebSocket] No parser registered for program ID: {}. Account update for {} (len: {}) treated as generic.", owner_pubkey, pubkey, decoded_data.len());
+                                    if let Some(ref sender_channel) = ws_update_sender {
+                                        if sender_channel.send(WebsocketUpdate::GenericUpdate(format!(
+                                            "No parser for owner {}, pubkey {} at {}, data length {}",
+                                            owner_pubkey, pubkey, timestamp, decoded_data.len()
+                                        ))).await.is_err() {
+                                            warn!("[WebSocket] Failed to send GenericUpdate (no parser) for {} to internal channel.", pubkey);
+                                        }
+                                    }
                                 }
                             }
-                            if let Some(ref sender_channel) = ws_update_sender {
-                                if sender_channel
-                                    .send(WebsocketUpdate::PoolUpdate(pool_info))
-                                    .await
-                                    .is_err()
-                                {
-                                    warn!(
-                                        "[WebSocket] Failed to send PoolUpdate for {} to internal channel.",
-                                        pubkey
-                                    );
-                                }
-                            }
-                        } else {
-                            if let Some(ref sender_channel) = ws_update_sender {
-                                if sender_channel
-                                    .send(WebsocketUpdate::GenericUpdate(format!(
-                                        "Non-pool binary update for pubkey {} at {}, data length {}",
-                                        pubkey, timestamp, decoded_data.len()
-                                    )))
-                                    .await
-                                    .is_err()
-                                {
-                                    warn!(
-                                        "[WebSocket] Failed to send GenericUpdate for {} to internal channel.",
-                                        pubkey
-                                    );
+                            Err(e) => {
+                                error!("[WebSocket] Failed to parse owner string '{}' as Pubkey for account {}: {}", owner_program_id_str, pubkey, e);
+                                if let Some(ref sender_channel) = ws_update_sender {
+                                     if sender_channel.send(WebsocketUpdate::GenericUpdate(format!(
+                                        "Invalid owner pubkey string for account {}, owner string: '{}', data length {}",
+                                        pubkey, owner_program_id_str, decoded_data.len()
+                                    ))).await.is_err() {
+                                        warn!("[WebSocket] Failed to send GenericUpdate (invalid owner) for {} to internal channel.", pubkey);
+                                    }
                                 }
                             }
                         }
+
                         let update = RawAccountUpdate::Account {
                             pubkey,
                             data: decoded_data,

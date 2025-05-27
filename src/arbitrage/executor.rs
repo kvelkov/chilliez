@@ -1,10 +1,13 @@
-// /Users/kiril/Desktop/chilliez/src/arbitrage/executor.rs
-// src/arbitrage/executor.rs
-use crate::arbitrage::opportunity::MultiHopArbOpportunity;
-use crate::error::{ArbError, CircuitBreaker, RetryPolicy}; // Import CircuitBreaker and RetryPolicy from error module
-use crate::solana::rpc::SolanaRpcClient;
+//! ArbitrageExecutor is responsible for executing on-chain orders for validated arbitrage opportunities.
+//!
+//! It converts the opportunity into a transaction, submits it (or simulates it) on-chain,
+//! and reports the result via an optional event channel. It uses a circuit breaker and retry
+//! policy for robust, resilient behavior, and communicates with external dependencies such as
+//! the Solana RPC client and a high-availability (HA) RPC client when available.
 
-use futures::FutureExt;
+use crate::arbitrage::opportunity::MultiHopArbOpportunity;
+use crate::error::{ArbError, CircuitBreaker, RetryPolicy};
+use crate::solana::rpc::SolanaRpcClient;
 use log::{debug, error, info, warn};
 use solana_client::nonblocking::rpc_client::RpcClient as NonBlockingRpcClient;
 use solana_client::rpc_config::RpcSimulateTransactionConfig;
@@ -16,13 +19,14 @@ use solana_sdk::{
     transaction::Transaction,
 };
 use solana_transaction_status::UiTransactionEncoding;
-
-use std::sync::{
-    atomic::{AtomicBool, AtomicU64, Ordering},
-    Arc,
+use std::{
+    sync::{
+        atomic::{AtomicBool, AtomicU64, Ordering},
+        Arc,
+    },
+    time::{Duration, Instant},
 };
 use tokio::sync::RwLock;
-use std::time::{Duration, Instant};
 
 #[derive(Clone)]
 pub struct ArbitrageExecutor {
@@ -32,18 +36,29 @@ pub struct ArbitrageExecutor {
     max_timeout: Duration,
     simulation_mode: bool,
     paper_trading_mode: bool,
-    // Wrap Atomics in Arc for Clone
     network_congestion: Arc<AtomicU64>,
     solana_rpc: Option<Arc<SolanaRpcClient>>,
     enable_simulation: Arc<AtomicBool>,
-    _degradation_mode: Arc<AtomicBool>, // Prefixed
-    _degradation_profit_threshold: f64, // Prefixed (f64 is Clone)
-    // Added fields for error handling
+    _degradation_mode: Arc<AtomicBool>,
+    _degradation_profit_threshold: f64,
     circuit_breaker: Arc<RwLock<CircuitBreaker>>,
     retry_policy: RetryPolicy,
+    event_sender: Option<tokio::sync::mpsc::Sender<ExecutorEvent>>,
+}
+
+/// ExecutorEvent is sent to notify observers (through the pipeline or separate logging)
+// about the result of executing an opportunity.
+pub enum ExecutorEvent {
+    OpportunityExecuted {
+        opportunity_id: String,
+        signature: Option<Signature>,
+        timestamp: Instant,
+        result: Result<(), ArbError>,
+    },
 }
 
 impl ArbitrageExecutor {
+    /// Constructs a new executor with all required parameters.
     pub fn new(
         wallet: Arc<Keypair>,
         rpc_client: Arc<NonBlockingRpcClient>,
@@ -53,6 +68,7 @@ impl ArbitrageExecutor {
         paper_trading_mode: bool,
         circuit_breaker: Arc<RwLock<CircuitBreaker>>,
         retry_policy: RetryPolicy,
+        event_sender: Option<tokio::sync::mpsc::Sender<ExecutorEvent>>,
     ) -> Self {
         Self {
             wallet,
@@ -61,111 +77,126 @@ impl ArbitrageExecutor {
             max_timeout,
             simulation_mode,
             paper_trading_mode,
-            network_congestion: Arc::new(AtomicU64::new(100)), // Wrap in Arc
+            network_congestion: Arc::new(AtomicU64::new(100)),
             solana_rpc: None,
-            enable_simulation: Arc::new(AtomicBool::new(true)), // Wrap in Arc
-            _degradation_mode: Arc::new(AtomicBool::new(false)), // Wrap in Arc
+            enable_simulation: Arc::new(AtomicBool::new(true)),
+            _degradation_mode: Arc::new(AtomicBool::new(false)),
             _degradation_profit_threshold: 1.5,
             circuit_breaker,
             retry_policy,
+            event_sender,
         }
     }
 
+    /// Attaches a high-availability Solana RPC client for redundancy.
     pub fn with_solana_rpc(mut self, solana_rpc: Arc<SolanaRpcClient>) -> Self {
         self.solana_rpc = Some(solana_rpc);
         self
     }
 
+    /// Updates the network congestion factor based on data from the Solana RPC client.
     pub async fn update_network_congestion(&self) -> Result<(), ArbError> {
         if let Some(client) = &self.solana_rpc {
             let factor = client.get_network_congestion_factor().await;
-            let congestion_val = (factor * 100.0) as u64;
+            let congestion_value = (factor * 100.0) as u64;
             self.network_congestion
-                .store(congestion_val.max(100), Ordering::Relaxed);
+                .store(congestion_value.max(100), Ordering::Relaxed);
             info!(
-                "Network congestion factor updated to: {:.2} (stored as {})",
+                "Network congestion updated: factor {:.2} (stored as {})",
                 factor,
-                congestion_val.max(100)
+                congestion_value.max(100)
             );
         } else {
-            debug!("SolanaRpcClient (for HA) not available for congestion update, using default.");
+            debug!("SolanaRpcClient not available; using default congestion value (100).");
             self.network_congestion.store(100, Ordering::Relaxed);
         }
         Ok(())
     }
 
-    pub fn has_banned_tokens(&self, _opportunity: &MultiHopArbOpportunity) -> bool {
+    /// Checks whether any token pairs in the opportunity are banned.
+    pub fn has_banned_tokens(&self, opportunity: &MultiHopArbOpportunity) -> bool {
+        use crate::arbitrage::detector::ArbitrageDetector;
+        for hop in &opportunity.hops {
+            if ArbitrageDetector::is_permanently_banned(&hop.input_token, &hop.output_token)
+                || ArbitrageDetector::is_temporarily_banned(&hop.input_token, &hop.output_token)
+            {
+                return true;
+            }
+        }
         false
     }
 
-    pub fn _has_multihop_banned_tokens(&self, _opportunity: &MultiHopArbOpportunity) -> bool {
-        false
-    }
-
-    pub async fn execute_opportunity(
+    /// Executes a single attempt at processing an arbitrage opportunity.
+    /// Builds the transaction, adds compute budget instructions if necessary, and sends or simulates the transaction.
+    async fn execute_single_opportunity_attempt(
         &self,
         opportunity: &MultiHopArbOpportunity,
     ) -> Result<Signature, ArbError> {
-        if self.has_banned_tokens(opportunity) {
-            warn!(
-                "Opportunity ID: {} involves a banned token pair. Skipping.",
-                opportunity.id
-            );
-            return Err(ArbError::ExecutionError(
-                "Opportunity involves banned token pair".to_string(),
-            ));
-        }
-
-        let cb_guard = self.circuit_breaker.read().await;
-        if cb_guard.is_open() {
-            warn!(
-                "Circuit breaker is open. Skipping execution for opportunity ID: {}",
-                opportunity.id
-            );
-            return Err(ArbError::CircuitBreakerOpen);
-        }
-        drop(cb_guard); // Release read lock
-
         let start_time = Instant::now();
-        info!(
-            "Attempting to execute opportunity ID: {}. Details:",
-            opportunity.id
-        );
+        info!("Executing opportunity: {}.", opportunity.id);
         opportunity.log_summary();
 
         let mut instructions = self.build_instructions_from_multihop(opportunity)?;
-
         if instructions.is_empty()
-            || instructions
-                .iter()
-                .all(|ix| ix.program_id == solana_sdk::compute_budget::id())
+            || instructions.iter().all(|ix| ix.program_id == solana_sdk::compute_budget::id())
         {
             if !self.paper_trading_mode && !self.simulation_mode {
-                error!("No actual swap instructions were built for opportunity ID: {}. Aborting execution.", opportunity.id);
-                return Err(ArbError::ExecutionError(
-                    "No swap instructions built".to_string(),
-                ));
+                let err = ArbError::ExecutionError("No swap instructions built".to_string());
+                error!("[Execution Error] Opportunity {} – no swap instructions.", opportunity.id);
+                if let Some(sender) = &self.event_sender {
+                    let _ = sender
+                        .send(ExecutorEvent::OpportunityExecuted {
+                            opportunity_id: opportunity.id.clone(),
+                            signature: None,
+                            timestamp: Instant::now(),
+                            result: Err(err.clone()),
+                        })
+                        .await;
+                }
+                return Err(err);
             }
         }
 
         if self.paper_trading_mode {
             info!(
-                "[PAPER TRADING] Simulated execution for opportunity ID: {}",
+                "[PAPER TRADING] Simulated execution for opportunity: {}",
                 opportunity.id
             );
+            if let Some(sender) = &self.event_sender {
+                let _ = sender
+                    .send(ExecutorEvent::OpportunityExecuted {
+                        opportunity_id: opportunity.id.clone(),
+                        signature: Some(Signature::default()),
+                        timestamp: Instant::now(),
+                        result: Ok(()),
+                    })
+                    .await;
+            }
             return Ok(Signature::default());
         }
 
         if self.simulation_mode && !self.paper_trading_mode {
             info!(
-                "[SIMULATION MODE] Simulating execution for opportunity ID: {}",
+                "[SIMULATION MODE] Simulating execution for opportunity: {}",
                 opportunity.id
             );
-            return Ok(Signature::new_unique());
+            let sig = Signature::new_unique();
+            if let Some(sender) = &self.event_sender {
+                let _ = sender
+                    .send(ExecutorEvent::OpportunityExecuted {
+                        opportunity_id: opportunity.id.clone(),
+                        signature: Some(sig.clone()),
+                        timestamp: Instant::now(),
+                        result: Ok(()),
+                    })
+                    .await;
+            }
+            return Ok(sig);
         }
 
         let recent_blockhash = self.get_latest_blockhash_with_ha().await?;
 
+        // Insert compute budget instructions if not already added.
         let has_budget_ix = instructions.iter().any(|ix| {
             ix.program_id == solana_sdk::compute_budget::id() && ix.data.get(0) == Some(&2u8)
         });
@@ -178,16 +209,15 @@ impl ArbitrageExecutor {
             final_instructions.push(ComputeBudgetInstruction::set_compute_unit_limit(600_000));
         }
         if !has_priority_ix {
-            let current_congestion_factor =
+            let congestion_factor =
                 self.network_congestion.load(Ordering::Relaxed) as f64 / 100.0;
-            let adjusted_priority_fee =
-                (self.priority_fee as f64 * current_congestion_factor.max(1.0)) as u64;
+            let adjusted_priority = (self.priority_fee as f64 * congestion_factor.max(1.0)) as u64;
             final_instructions.push(ComputeBudgetInstruction::set_compute_unit_price(
-                adjusted_priority_fee,
+                adjusted_priority,
             ));
             info!(
-                "Using adjusted priority fee: {} (base: {}, congestion: {:.2}x)",
-                adjusted_priority_fee, self.priority_fee, current_congestion_factor
+                "Adjusted priority fee: {} (base: {}, congestion: {:.2}x)",
+                adjusted_priority, self.priority_fee, congestion_factor
             );
         }
         final_instructions.append(&mut instructions);
@@ -200,28 +230,47 @@ impl ArbitrageExecutor {
         );
 
         if start_time.elapsed() > self.max_timeout {
+            let err = ArbError::TimeoutError("Transaction construction timeout".to_string());
             warn!(
-                "Max timeout reached before sending transaction for opportunity ID: {}",
+                "Timeout reached before sending transaction for opportunity: {}",
                 opportunity.id
             );
-            return Err(ArbError::TimeoutError(
-                "Transaction construction timeout".to_string(),
-            ));
+            if let Some(sender) = &self.event_sender {
+                let _ = sender
+                    .send(ExecutorEvent::OpportunityExecuted {
+                        opportunity_id: opportunity.id.clone(),
+                        signature: None,
+                        timestamp: Instant::now(),
+                        result: Err(err.clone()),
+                    })
+                    .await;
+            }
+            error!("Timeout during transaction construction for opportunity: {}", opportunity.id);
+            return Err(err);
         }
 
+        // Pre-flight simulation if enabled.
         if self.enable_simulation.load(Ordering::Relaxed) {
             match self.simulate_transaction_for_execution(&transaction).await {
                 Ok(_) => info!(
-                    "Pre-flight simulation successful for opportunity ID: {}.",
+                    "Simulation successful for opportunity: {}.",
                     opportunity.id
                 ),
                 Err(e) => {
                     error!(
-                        "Pre-flight simulation failed for opportunity ID: {}: {:?}",
+                        "Simulation failed for opportunity: {}: {:?}",
                         opportunity.id, e
                     );
-                    // Potentially update circuit breaker on simulation failure
-                    self.circuit_breaker.write().await.record_failure();
+                    if let Some(sender) = &self.event_sender {
+                        let _ = sender
+                            .send(ExecutorEvent::OpportunityExecuted {
+                                opportunity_id: opportunity.id.clone(),
+                                signature: None,
+                                timestamp: Instant::now(),
+                                result: Err(e.clone()),
+                            })
+                            .await;
+                    }
                     return Err(e);
                 }
             }
@@ -238,99 +287,118 @@ impl ArbitrageExecutor {
         {
             Ok(signature) => {
                 info!(
-                    "Successfully executed opportunity ID: {}! Signature: {}",
+                    "Executed opportunity {} successfully. Signature: {}",
                     opportunity.id, signature
                 );
-                self.circuit_breaker.write().await.record_success();
+                if let Some(sender) = &self.event_sender {
+                    let _ = sender
+                        .send(ExecutorEvent::OpportunityExecuted {
+                            opportunity_id: opportunity.id.clone(),
+                            signature: Some(signature.clone()),
+                            timestamp: Instant::now(),
+                            result: Ok(()),
+                        })
+                        .await;
+                }
                 Ok(signature)
             }
             Err(e) => {
+                let err = ArbError::TransactionError(e.to_string());
                 error!(
-                    "Transaction failed for opportunity ID {}: {}",
+                    "Transaction failed for opportunity {}: {}",
                     opportunity.id, e
                 );
-                self.circuit_breaker.write().await.record_failure();
-                Err(ArbError::TransactionError(e.to_string()))
+                if let Some(sender) = &self.event_sender {
+                    let _ = sender
+                        .send(ExecutorEvent::OpportunityExecuted {
+                            opportunity_id: opportunity.id.clone(),
+                            signature: None,
+                            timestamp: Instant::now(),
+                            result: Err(err.clone()),
+                        })
+                        .await;
+                }
+                error!("Execution failed for opportunity {}: {}", opportunity.id, err);
+                Err(err)
             }
         }
     }
 
-    #[allow(dead_code)]
+    /// Public method to execute an opportunity.
+    /// It first checks for banned tokens, then wraps the execution in a circuit breaker.
+    pub async fn execute_opportunity(
+        &self,
+        opportunity: &MultiHopArbOpportunity,
+    ) -> Result<Signature, ArbError> {
+        if self.has_banned_tokens(opportunity) {
+            let err = ArbError::ExecutionError("Opportunity involves banned token pair".to_string());
+            warn!("Skipping opportunity {} due to banned tokens.", opportunity.id);
+            if let Some(sender) = &self.event_sender {
+                let _ = sender
+                    .send(ExecutorEvent::OpportunityExecuted {
+                        opportunity_id: opportunity.id.clone(),
+                        signature: None,
+                        timestamp: Instant::now(),
+                        result: Err(err.clone()),
+                    })
+                    .await;
+            }
+            return Err(err);
+        }
+
+        // Use the circuit breaker to guard the execution attempt.
+        let self_clone = self.clone();
+        let opp_clone = opportunity.clone();
+        self.circuit_breaker.write().await.execute(async move {
+            self_clone
+                .execute_single_opportunity_attempt(&opp_clone)
+                .await
+        }).await
+    }
+
+    /// Executes an opportunity with retries. It checks whether the opportunity remains valid before each attempt.
     pub async fn execute_opportunity_with_retries<'env, FVS>(
         &'env self,
         opportunity: &MultiHopArbOpportunity,
-        is_opportunity_still_valid: FVS,
+        mut is_opportunity_still_valid: FVS,
     ) -> Result<Signature, ArbError>
     where
-        FVS: FnMut() -> std::pin::Pin<Box<dyn std::future::Future<Output = bool> + Send + 'env>> + Send + 'env,
+        FVS: FnMut() -> std::pin::Pin<Box<dyn std::future::Future<Output = bool> + Send + 'env>>
+            + Send
+            + 'env,
     {
-        let retry_policy_ref = &self.retry_policy;
-        let executor_clone = self.clone(); // This now works due to Arc<Atomic...>
-        let exec_opp_arc = Arc::new(opportunity.clone());
+        let self_clone = self.clone();
+        let opp_arc = Arc::new(opportunity.clone());
+        let fvs_mutex = Arc::new(tokio::sync::Mutex::new(is_opportunity_still_valid));
 
-        // Box the is_opportunity_still_valid closure to store it in Arc<Mutex<...>>
-        // The lifetime 'env ensures that the boxed future can borrow from the environment
-        // captured by is_opportunity_still_valid.
-        let boxed_is_valid: Arc<tokio::sync::Mutex<Box<dyn FnMut() -> std::pin::Pin<Box<dyn std::future::Future<Output = bool> + Send + 'env>> + Send + 'env>>> =
-            Arc::new(tokio::sync::Mutex::new(Box::new(is_opportunity_still_valid)));
-
-        let execute_once = {
-            let exec_opp = Arc::clone(&exec_opp_arc);
-            // executor_clone is moved into this outer closure
-            // The future returned by the inner async block will borrow from executor_clone
-            move || {
-                let exec_opp_inner = Arc::clone(&exec_opp);
-                let executor_for_async = executor_clone.clone(); // Clone Arc for the async block
-                async move {
-                    match executor_for_async.execute_opportunity(&exec_opp_inner).await {
-                        Ok(_sig) => Ok(()),
-                        Err(e) => Err(format!("{:?}", e)),
-                    }
+        let operation = || {
+            let executor_clone = self_clone.clone();
+            let opp_clone = opp_arc.clone();
+            let fvs_mutex_clone = Arc::clone(&fvs_mutex);
+            async move {
+                let mut validity_checker = fvs_mutex_clone.lock().await;
+                if !(*validity_checker)().await {
+                    warn!("Opportunity {} no longer valid before retry.", opp_clone.id);
+                    return Err(ArbError::ExecutionError("Opportunity no longer valid".to_string()));
                 }
-                .boxed() // Box the future
+                executor_clone.execute_opportunity(&opp_clone).await
             }
         };
 
-        let is_valid_closure_for_retry = {
-            let boxed_is_valid_clone = Arc::clone(&boxed_is_valid);
-            move || {
-                let inner_boxed_is_valid = Arc::clone(&boxed_is_valid_clone);
-                async move {
-                    let mut guard = inner_boxed_is_valid.lock().await;
-                    (guard)().await // Invoke the boxed FnMut
-                }
-                .boxed() // Box the future
-            }
-        };
-
-        execute_order_with_retries(
-            retry_policy_ref,
-            execute_once,
-            is_valid_closure_for_retry,
-        )
-        .await
-        .map(|_| Signature::default()) // If Ok, return a default/dummy signature
-        .map_err(|e| ArbError::ExecutionError(e))
+        self.retry_policy.execute(operation).await
     }
 
-    #[allow(dead_code)]
-    pub async fn try_execute_arbitrage_with_retry<'env, FVS>(
-        &'env self,
-        opportunity: &MultiHopArbOpportunity,
-        is_opportunity_still_valid: FVS,
-    ) -> Result<Signature, ArbError>
-    where FVS: FnMut() -> std::pin::Pin<Box<dyn std::future::Future<Output = bool> + Send + 'env>> + Send + 'env {
-        self.execute_opportunity_with_retries(opportunity, is_opportunity_still_valid).await
-    }
-
+    /// Stub: Builds transaction instructions from a multi-hop arbitrage opportunity.
+    /// This function currently returns an empty vector, awaiting an advanced implementation.
     fn build_instructions_from_multihop(
         &self,
         _opportunity: &MultiHopArbOpportunity,
     ) -> Result<Vec<Instruction>, ArbError> {
-        warn!("build_instructions_from_multihop is a stub. No actual swap instructions generated.");
+        warn!("build_instructions_from_multihop stub invoked; no swap instructions generated.");
         Ok(vec![])
     }
 
+    /// Retrieves the latest blockhash, using the high-availability client if available.
     async fn get_latest_blockhash_with_ha(&self) -> Result<Hash, ArbError> {
         if let Some(client) = &self.solana_rpc {
             client
@@ -346,6 +414,7 @@ impl ArbitrageExecutor {
         }
     }
 
+    /// Simulates a transaction execution pre-flight. Returns an error if simulation fails.
     async fn simulate_transaction_for_execution(
         &self,
         transaction: &Transaction,
@@ -354,7 +423,6 @@ impl ArbitrageExecutor {
             || self.rpc_client.clone(),
             |ha_client| ha_client.primary_client.clone(),
         );
-
         let sim_config = RpcSimulateTransactionConfig {
             sig_verify: false,
             replace_recent_blockhash: true,
@@ -371,85 +439,20 @@ impl ArbitrageExecutor {
         {
             Ok(sim_response) => {
                 if let Some(err) = &sim_response.value.err {
-                    error!("Transaction simulation failed: {:?}", err);
+                    error!("Simulation error: {:?}", err);
                     Err(ArbError::SimulationFailed(format!("{:?}", err)))
                 } else {
                     info!(
-                        "Transaction simulation successful. Logs: {:?}",
-                        sim_response.value.logs.as_deref().unwrap_or_default()
+                        "Simulation passed for transaction. Logs: {:?}",
+                        sim_response.value.logs.as_deref().unwrap_or_else(|| &[])
                     );
                     Ok(sim_response.value)
                 }
             }
             Err(e) => {
-                error!("Error during transaction simulation RPC call: {}", e);
+                error!("RPC simulation error: {}", e);
                 Err(ArbError::RpcError(e.to_string()))
             }
         }
     }
-}
-
-#[allow(dead_code)]
-pub async fn execute_with_retry<'env_lifetime, F, V>(
-    retry_policy: &RetryPolicy,
-    mut execute_once: F,
-    mut is_opportunity_still_valid: V,
-) -> Result<(), String>
-where
-    F: FnMut() -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), String>> + Send + 'env_lifetime>>,
-    V: FnMut() -> std::pin::Pin<Box<dyn std::future::Future<Output = bool> + Send + 'env_lifetime>>,
-{
-    use rand::{thread_rng, Rng};
-    use tokio::time::sleep; // Ensure sleep is imported from tokio::time
-
-    let mut attempt = 0;
-    let mut current_delay_ms = retry_policy.base_delay.as_millis();
-    loop {
-        attempt += 1;
-        let valid = (is_opportunity_still_valid)().await;
-        if !valid {
-            log::warn!("Retry aborted: opportunity no longer valid (attempt {})", attempt);
-            return Err("Opportunity no longer valid".to_string());
-        }
-
-        let result = execute_once().await;
-        match result {
-            Ok(_) => {
-                log::info!("Order executed successfully (attempt {})", attempt);
-                return Ok(());
-            }
-            Err(ref e) if attempt < retry_policy.max_attempts => {
-                log::warn!(
-                    "Order execution failed, will retry (attempt {}): {}",
-                    attempt,
-                    e
-                );
-                let jitter_ms: u128 = thread_rng().gen_range(0..(current_delay_ms / 2).max(1));
-                let sleep_duration_ms = current_delay_ms + jitter_ms;
-
-                sleep(Duration::from_millis(sleep_duration_ms as u64)).await;
-                current_delay_ms = (current_delay_ms * 2).min(retry_policy.max_delay.as_millis());
-            }
-            Err(e) => {
-                log::error!(
-                    "Order execution failed, no more retries (attempt {}): {}",
-                    attempt,
-                    e
-                );
-                return Err(e);
-            }
-        }
-    }
-}
-
-pub async fn execute_order_with_retries<'env_lifetime, F, V>(
-    retry_policy: &RetryPolicy,
-    execute_once: F, // Removed mut
-    is_opportunity_still_valid: V, // Removed mut
-) -> Result<(), String>
-where
-    F: FnMut() -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), String>> + Send + 'env_lifetime>>,
-    V: FnMut() -> std::pin::Pin<Box<dyn std::future::Future<Output = bool> + Send + 'env_lifetime>>,
-{
-    execute_with_retry(retry_policy, execute_once, is_opportunity_still_valid).await
 }

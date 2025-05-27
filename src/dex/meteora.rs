@@ -1,9 +1,9 @@
 // src/dex/meteora.rs
+//! Meteora API client for obtaining token swap quotes.
 
 use crate::cache::Cache;
 use crate::dex::http_utils::HttpRateLimiter;
 use crate::dex::quote::{DexClient, Quote as CanonicalQuote};
-
 use anyhow::{anyhow, Result as AnyhowResult};
 use async_trait::async_trait;
 use log::{debug, error, info, warn};
@@ -15,7 +15,13 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 static METEORA_RATE_LIMITER: Lazy<HttpRateLimiter> = Lazy::new(|| {
-    HttpRateLimiter::new(5, Duration::from_millis(200), 3, Duration::from_millis(500), vec![])
+    HttpRateLimiter::new(
+        5,
+        Duration::from_millis(200),
+        3,
+        Duration::from_millis(500),
+        vec![],
+    )
 });
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
@@ -29,14 +35,14 @@ struct MeteoraApiResponse {
     #[serde(rename = "outAmount")]
     out_amount: String,
     #[serde(rename = "priceImpactPct")]
-    price_impact_pct: Option<String>, // Or f64
+    price_impact_pct: Option<String>,
 }
 
-#[derive(Debug, Clone)] // MeteoraClient already derives Debug
+#[derive(Debug, Clone)]
 pub struct MeteoraClient {
     api_key: String,
     http_client: ReqwestClient,
-    cache: Arc<Cache>, // Cache itself now derives Debug
+    cache: Arc<Cache>,
     quote_cache_ttl_secs: u64,
 }
 
@@ -61,6 +67,7 @@ impl MeteoraClient {
         }
     }
 }
+
 #[async_trait]
 impl DexClient for MeteoraClient {
     async fn get_best_swap_quote(
@@ -77,10 +84,16 @@ impl DexClient for MeteoraClient {
         let cache_prefix = "quote:meteora";
 
         if let Ok(Some(cached_quote)) = self.cache.get_json::<CanonicalQuote>(cache_prefix, &cache_key_params).await {
-            debug!("Meteora quote cache HIT for {}->{} amount {}", input_token_mint, output_token_mint, amount_in_atomic_units);
+            debug!(
+                "Meteora quote cache HIT for {}->{} amount {}",
+                input_token_mint, output_token_mint, amount_in_atomic_units
+            );
             return Ok(cached_quote);
         }
-        debug!("Meteora quote cache MISS for {}->{} amount {}", input_token_mint, output_token_mint, amount_in_atomic_units);
+        debug!(
+            "Meteora quote cache MISS for {}->{} amount {}",
+            input_token_mint, output_token_mint, amount_in_atomic_units
+        );
 
         let url = format!(
             "https://api.meteora.ag/v1/quote?inputMint={}&outputMint={}&amount={}",
@@ -90,10 +103,10 @@ impl DexClient for MeteoraClient {
 
         let request_start_time = Instant::now();
         let response_result = METEORA_RATE_LIMITER
-            .get_with_backoff(&url, |request_url| { // Removed &self.http_client
-                let mut req_builder = self.http_client.get(request_url); // http_client is captured here
+            .get_with_backoff(&url, |request_url| {
+                let mut req_builder = self.http_client.get(request_url);
                 if !self.api_key.is_empty() {
-                    req_builder = req_builder.header("X-API-KEY", &self.api_key); // Example header
+                    req_builder = req_builder.header("X-API-KEY", &self.api_key);
                 }
                 req_builder
             })
@@ -104,17 +117,25 @@ impl DexClient for MeteoraClient {
             Ok(response) => {
                 let status = response.status();
                 if status.is_success() {
-                    let text = response.text().await.map_err(|e| anyhow!("Failed to read Meteora response text: {}", e))?;
-                    debug!("Meteora API response text for {}->{}: {}", input_token_mint, output_token_mint, text);
-                    
+                    let text = response
+                        .text()
+                        .await
+                        .map_err(|e| anyhow!("Failed to read Meteora response text: {}", e))?;
+                    debug!(
+                        "Meteora API response text for {}->{}: {}",
+                        input_token_mint, output_token_mint, text
+                    );
+
                     match serde_json::from_str::<MeteoraApiResponse>(&text) {
                         Ok(api_response) => {
-                            let input_amount_u64 = api_response.in_amount.parse::<u64>().map_err(|e| anyhow!("Parse Meteora in_amount: {}", e))?;
-                            let output_amount_u64 = api_response.out_amount.parse::<u64>().map_err(|e| anyhow!("Parse Meteora out_amount: {}", e))?;
+                            let input_amount_u64 = api_response.in_amount.parse::<u64>()
+                                .map_err(|e| anyhow!("Parse Meteora in_amount: {}", e))?;
+                            let output_amount_u64 = api_response.out_amount.parse::<u64>()
+                                .map_err(|e| anyhow!("Parse Meteora out_amount: {}", e))?;
                             
                             let slippage_estimate = api_response.price_impact_pct
                                 .as_ref()
-                                .and_then(|s| s.trim_end_matches('%').parse::<f64>().ok().map(|val| val / 100.0)); // Convert to fraction
+                                .and_then(|s| s.trim_end_matches('%').parse::<f64>().ok().map(|val| val / 100.0));
 
                             let canonical_quote = CanonicalQuote {
                                 input_token: api_response.input_mint,
@@ -122,14 +143,13 @@ impl DexClient for MeteoraClient {
                                 input_amount: input_amount_u64,
                                 output_amount: output_amount_u64,
                                 dex: self.get_name().to_string(),
-                                route: vec![input_token_mint.to_string(), output_token_mint.to_string()], // Simplified route
+                                route: vec![input_token_mint.to_string(), output_token_mint.to_string()],
                                 latency_ms: Some(request_duration_ms),
                                 execution_score: None,
                                 route_path: None,
                                 slippage_estimate,
                             };
 
-                            // Corrected call to set_ex
                             if let Err(e) = self.cache.set_ex(cache_prefix, &cache_key_params, &canonical_quote, Some(self.quote_cache_ttl_secs)).await {
                                 warn!("Failed to cache Meteora quote for {}->{}: {}", input_token_mint, output_token_mint, e);
                             }
@@ -137,18 +157,21 @@ impl DexClient for MeteoraClient {
                         }
                         Err(e) => {
                             error!("Deserialize Meteora quote: URL {}, Error: {:?}, Body: {}", url, e, text);
-                            Err(anyhow!("Deserialize Meteora: {}. Body: {}", e, text))
+                            Err(anyhow!("Deserialize Meteora quote error: {}. Body: {}", e, text))
                         }
                     }
                 } else {
                     let error_text = response.text().await.unwrap_or_else(|_| "No error body".to_string());
-                    error!("Fetch Meteora quote failed: Status {}, URL {}, Body: {}", status, url, error_text);
+                    error!(
+                        "Fetch Meteora quote failed: Status {}, URL {}, Body: {}",
+                        status, url, error_text
+                    );
                     Err(anyhow!("Fetch Meteora quote: Status {}, Body: {}", status, error_text))
                 }
             }
             Err(e) => {
-                 error!("HTTP request to Meteora failed for URL {}: {}", url, e);
-                 Err(e)
+                error!("HTTP request to Meteora failed for URL {}: {}", url, e);
+                Err(e)
             }
         }
     }

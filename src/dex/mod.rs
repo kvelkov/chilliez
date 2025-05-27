@@ -19,7 +19,8 @@ pub mod whirlpool;       // This is for the Whirlpool DEX *API client*
 pub mod whirlpool_parser; // For parsing Whirlpool on-chain account data
 
 // Re-export the main DexClient trait for easier access
-pub use crate::dex::quote::DexClient;
+pub use quote::DexClient;
+
 use crate::cache::Cache; // Import the Redis Cache
 use crate::config::Config; // Import the application Config
 

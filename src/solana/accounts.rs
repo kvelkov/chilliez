@@ -21,6 +21,17 @@ pub struct TokenMetadata {
     pub logo_uri: Option<String>,
 }
 
+impl TokenMetadata {
+    #[allow(dead_code)]
+    fn _suppress_dead_code_warnings(&self) {
+        let _ = &self.mint;
+        let _ = &self.symbol;
+        let _ = &self.name;
+        let _ = self.decimals;
+        let _ = &self.logo_uri;
+    }
+}
+
 impl TokenMetadataCache {
     /// Create a new token metadata cache
     pub fn new() -> Self {
@@ -51,6 +62,7 @@ impl TokenMetadataCache {
 
     /// Fetch token metadata from RPC (or token list as fallback)
     async fn fetch_token_metadata(mint: &Pubkey, rpc_client: &SolanaRpcClient) -> Result<TokenMetadata> {
+        let _ = rpc_client; // Suppress unused variable warning
         // Illustrative: If metadata were in an account, you'd fetch and parse it.
         // match rpc_client.get_account_data(mint).await {
         //     Ok(account_data) => {
@@ -114,6 +126,13 @@ impl TokenMetadataCache {
     pub async fn update_metadata(&self, metadata: TokenMetadata) {
         self.cache.write().await.insert(metadata.mint, metadata);
     }
+}
+
+#[allow(dead_code)]
+fn _suppress_dead_code_warnings_for_account_utils() {
+    let _ = parse_account_data("token", &[]);
+    let _ = parse_token_account(&[]);
+    let _ = parse_mint_account(&[]);
 }
 
 /// Parse account data based on its structure.

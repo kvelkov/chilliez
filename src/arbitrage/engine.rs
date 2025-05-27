@@ -1,63 +1,78 @@
-// /Users/kiril/Desktop/chilliez/src/arbitrage/engine.rs
-// src/arbitrage/engine.rs
-
 use crate::{
     arbitrage::{
-        detector::ArbitrageDetector, dynamic_threshold::DynamicThresholdUpdater,
+        detector::ArbitrageDetector,
+        dynamic_threshold::DynamicThresholdUpdater,
         opportunity::MultiHopArbOpportunity,
     },
     config::settings::Config,
-    dex::{
-        quote::DexClient,
-        whirlpool_parser::{WhirlpoolPoolParser, ORCA_WHIRLPOOL_PROGRAM_ID},
-    },
+    dex::DexClient,
     error::{ArbError, CircuitBreaker, RetryPolicy},
     metrics::Metrics,
     solana::{rpc::SolanaRpcClient, websocket::SolanaWebsocketManager},
-    utils::{PoolInfo, PoolParser},
-    websocket::CryptoDataProvider,
-    WebsocketUpdate,
+    utils::PoolInfo,
 };
 
+
+use crate::solana::WebsocketUpdate;
+use crate::websocket::CryptoDataProvider;
 use log::{debug, error, info, warn};
 use solana_sdk::pubkey::Pubkey;
 use std::{
     collections::HashMap,
-    ops::Deref,
-    str::FromStr,
     sync::{
-        atomic::{AtomicBool, AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64},
         Arc,
     },
     time::Instant,
 };
 use tokio::{
-    sync::{mpsc::error::TryRecvError, Mutex, RwLock},
-    time::{error::Elapsed as TimeoutError, timeout, Duration},
+    sync::{Mutex, RwLock},
+    time::{sleep, Duration},
 };
 
+/// The ArbitrageEngine orchestrates the entire arbitrage workflow:
+/// - It monitors and updates pool state via WebSocket feeds,
+/// - It triggers dynamic threshold updates through the DynamicThresholdUpdater,
+/// - It calls the detector to search for arbitrage opportunities,
+/// - And it schedules execution via the Executor (through mod.rs or directly).
 pub struct ArbitrageEngine {
+    // Shared pool state (keyed by pool address)
     pools: Arc<RwLock<HashMap<Pubkey, Arc<PoolInfo>>>>,
-    // Corrected: ws_manager should hold Arc<Mutex<SolanaWebsocketManager>>>
-    pub(crate) ws_manager: Option<Arc<Mutex<SolanaWebsocketManager>>>,
-    pub(crate) price_provider: Option<Arc<dyn CryptoDataProvider + Send + Sync>>,
+    // Optional websocket manager for pool & market updates.
+    pub ws_manager: Option<Arc<Mutex<SolanaWebsocketManager>>>,
+    // Price provider for dynamic threshold updates.
+    price_provider: Option<Arc<dyn CryptoDataProvider + Send + Sync>>,
+    // Metrics system for external recording of events and states.
     metrics: Arc<Mutex<Metrics>>,
-    pub(crate) rpc_client: Option<Arc<SolanaRpcClient>>,
-    config: Arc<Config>,
-    pub(crate) degradation_mode: Arc<AtomicBool>,
+    // Optional RPC client (e.g., Solana cluster interface)
+    rpc_client: Option<Arc<SolanaRpcClient>>,
+    pub config: Arc<Config>, // Made public for direct test access, consider getter for encapsulation
+    // A flag to indicate if the engine is in degradation mode.
+    pub degradation_mode: Arc<AtomicBool>,
+    // Timestamp for the last health check – used for periodic system status updates.
     last_health_check: Arc<RwLock<Instant>>,
-    pub(crate) health_check_interval: Duration,
-    pub(crate) ws_reconnect_attempts: Arc<AtomicU64>,
-    pub(crate) max_ws_reconnect_attempts: u64,
-    pub(crate) detector: Arc<Mutex<ArbitrageDetector>>,
-    pub(crate) _dex_providers: Vec<Arc<dyn DexClient>>, // Prefixed
-    pub(crate) dynamic_threshold_updater: Option<Arc<Mutex<DynamicThresholdUpdater>>>,
-    // Error handling components
+    // Interval at which health checks are run.
+    pub health_check_interval: Duration,
+    // Websocket reconnect attempts counter.
+    pub ws_reconnect_attempts: Arc<AtomicU64>,
+    // Maximum permitted websocket reconnect attempts.
+    pub max_ws_reconnect_attempts: u64,
+    // Detector instance used for scanning arbitrage opportunities.
+    detector: Arc<Mutex<ArbitrageDetector>>,
+    // Optionally provided DEX clients (if any).
+    _dex_providers: Vec<Arc<dyn DexClient>>,
+    // Dynamic threshold updater instance (for adjusting min profit thresholds in real time).
+    dynamic_threshold_updater: Option<Arc<Mutex<DynamicThresholdUpdater>>>,
+    // Circuit breaker to disable trading in extreme conditions.
     circuit_breaker: Arc<RwLock<CircuitBreaker>>,
+    // Policy for retrying operations in case of transient errors.
     retry_policy: RetryPolicy,
+    // Minimum profit threshold (in percentage) in use (shared with both the engine and detector).
+    min_profit_threshold_pct: Arc<RwLock<f64>>,
 }
 
 impl ArbitrageEngine {
+    /// Constructs a new ArbitrageEngine.
     pub fn new(
         pools: Arc<RwLock<HashMap<Pubkey, Arc<PoolInfo>>>>,
         ws_manager_instance: Option<Arc<Mutex<SolanaWebsocketManager>>>,
@@ -67,13 +82,17 @@ impl ArbitrageEngine {
         metrics: Arc<Mutex<Metrics>>,
         dex_api_clients: Vec<Arc<dyn DexClient>>,
     ) -> Self {
-        // Use new_from_config for ArbitrageDetector initialization
+        // Initialize the detector from the configuration.
         let internal_detector = Arc::new(Mutex::new(ArbitrageDetector::new_from_config(&config)));
         let health_check_interval_secs = config.health_check_interval_secs.unwrap_or(60);
-        // Corrected: Ensure max_ws_reconnect_val is u64
         let max_ws_reconnect_val = config.max_ws_reconnect_attempts.map_or(5, |v| v as u64);
+        let initial_profit_threshold = config.min_profit_pct * 100.0;
 
-        // Example of using dex_providers if needed for initialization or logging
+        // Initialize the dynamic threshold updater.
+        let dynamic_threshold_updater = Some(Arc::new(Mutex::new(
+            DynamicThresholdUpdater::new(Arc::clone(&config)),
+        )));
+
         if dex_api_clients.is_empty() {
             warn!("ArbitrageEngine initialized with no DEX API clients.");
         } else {
@@ -83,800 +102,386 @@ impl ArbitrageEngine {
             );
         }
 
-        // Initialize the dynamic threshold updater
-        let dynamic_threshold_updater = Some(Arc::new(Mutex::new(DynamicThresholdUpdater::new(
-            Arc::clone(&config),
-        )))); // Wrapped in Mutex
-
         Self {
             pools,
-            ws_manager: ws_manager_instance, // Corrected assignment
+            ws_manager: ws_manager_instance,
             price_provider,
             metrics,
             rpc_client,
             config: Arc::clone(&config),
             degradation_mode: Arc::new(AtomicBool::new(false)),
-            last_health_check: Arc::new(RwLock::new(
-                Instant::now() - Duration::from_secs(health_check_interval_secs * 2),
-            )),
+            last_health_check: Arc::new(RwLock::new(Instant::now() - Duration::from_secs(health_check_interval_secs * 2))),
             health_check_interval: Duration::from_secs(health_check_interval_secs),
             ws_reconnect_attempts: Arc::new(AtomicU64::new(0)),
-            max_ws_reconnect_attempts: max_ws_reconnect_val, // Corrected assignment
+            max_ws_reconnect_attempts: max_ws_reconnect_val,
             detector: internal_detector,
-            _dex_providers: dex_api_clients, // Prefixed
+            _dex_providers: dex_api_clients,
             dynamic_threshold_updater,
             circuit_breaker: Arc::new(RwLock::new(CircuitBreaker::default())),
             retry_policy: RetryPolicy::default(),
+            min_profit_threshold_pct: Arc::new(RwLock::new(initial_profit_threshold)),
         }
     }
 
-    async fn load_initial_pools(&self) -> Result<(), ArbError> {
-        info!("Attempting to load initial pools...");
-        if let Some(rpc_client) = &self.rpc_client {
-            // Example: Discovering Orca Whirlpools
-            let whirlpool_program_id =
-                Pubkey::from_str(ORCA_WHIRLPOOL_PROGRAM_ID).map_err(|e| {
-                    ArbError::ConfigError(format!("Invalid Whirlpool Program ID: {}", e))
-                })?;
+    /// Handles incoming updates from the WebSocket feed.
+    pub async fn handle_websocket_update(&self, update: WebsocketUpdate) -> Result<(), ArbError> {
+        match update {
+            WebsocketUpdate::PoolUpdate(pool_info) => {
+                let pubkey = pool_info.address;
+                debug!("[Engine] Received PoolUpdate for {} ({})", pubkey, pool_info.name);
+                let pool_info_arc = Arc::new(pool_info);
+                let mut new_pool = HashMap::new();
+                new_pool.insert(pubkey, pool_info_arc.clone());
 
-            match rpc_client
-                .get_program_accounts(&whirlpool_program_id, vec![])
-                .await
-            {
-                Ok(accounts_data) => {
-                    let mut discovered_pools = HashMap::new();
-                    for (pubkey, data) in accounts_data {
-                        match WhirlpoolPoolParser::parse_pool_data(pubkey, &data) {
-                            Ok(pool_info) => {
-                                discovered_pools.insert(pubkey, Arc::new(pool_info));
-                            }
-                            Err(e) => {
-                                warn!("Failed to parse pool data for account {}: {}", pubkey, e);
-                            }
-                        }
-                    }
-                    self.update_pools(discovered_pools).await?;
-                    info!(
-                        "Successfully loaded {} initial Whirlpool pools.",
-                        self.pools.read().await.len()
-                    );
-                }
-                Err(e) => {
-                    error!("Failed to get program accounts for Whirlpools: {}", e);
-                }
-            }
-        } else {
-            warn!("RPC client not available for initial pool loading.");
-        }
-        Ok(())
-    }
-
-    pub async fn start_services(&self, cache: Option<Arc<crate::cache::Cache>>) {
-        self.load_initial_pools()
-            .await
-            .unwrap_or_else(|e| error!("Failed to load initial pools: {}", e));
-
-        if let Some(manager_arc) = &self.ws_manager {
-            let manager = manager_arc.lock().await;
-            if let Err(e) = manager.start(cache.clone()).await {
-                error!("[ArbitrageEngine] Failed to start WebSocket manager: {}", e);
-            } else {
-                info!("[ArbitrageEngine] WebSocket manager started successfully.");
-            }
-        }
-
-        // Start dynamic threshold updater if available
-        if let Some(updater_arc) = &self.dynamic_threshold_updater {
-            let updater_clone = Arc::clone(updater_arc);
-            let metrics_clone = Arc::clone(&self.metrics);
-            let detector_clone = Arc::clone(&self.detector); // Pass detector for setting threshold
-            let price_provider_clone = self.price_provider.clone(); // Clone price_provider for the task
-
-            // Spawn the task so it doesn't block start_services
-            tokio::spawn(async move {
-                DynamicThresholdUpdater::start_monitoring_task(
-                    updater_clone,
-                    metrics_clone,
-                    detector_clone,
-                    price_provider_clone, // Pass it here
-                )
-                .await;
-            });
-            info!("[ArbitrageEngine] Dynamic threshold updater task spawned successfully.");
-        }
-
-        // Start other services like price provider if they have a start method
-        // Make run_full_health_check live by calling it once on startup
-        // TODO: Consider moving to a periodic task in the main application loop for continuous health monitoring.
-        info!("[ArbitrageEngine] Performing initial full health check...");
-        self.run_full_health_check(cache).await;
-
-        // Make get_cached_pool_count (and thus with_pool_guard_async) live
-        match self.get_cached_pool_count().await {
-            Ok(count) => info!("[ArbitrageEngine] Initial cached pool count: {}", count),
-            Err(e) => warn!(
-                "[ArbitrageEngine] Could not retrieve initial cached pool count: {}",
-                e
-            ),
-        }
-
-        info!("[ArbitrageEngine] All core services started or initialized.");
-    }
-
-    pub async fn get_min_profit_threshold_pct(&self) -> f64 {
-        self.detector.lock().await.get_min_profit_threshold_pct()
-    }
-
-    pub async fn set_min_profit_threshold_pct(&self, threshold_pct: f64) {
-        self.detector
-            .lock()
-            .await
-            .set_min_profit_threshold(threshold_pct);
-        info!(
-            "ArbitrageEngine's detector min_profit_threshold_pct updated to: {:.4}%",
-            threshold_pct
-        );
-        let fractional_threshold = threshold_pct / 100.0;
-        self.metrics
-            .lock()
-            .await
-            .log_dynamic_threshold_update(fractional_threshold);
-    }
-
-    // Added to expose the detector's min_profit_threshold_usd
-    pub async fn get_min_profit_threshold_usd(&self) -> f64 {
-        self.detector.lock().await.get_min_profit_threshold_usd()
-    }
-
-    async fn discover_opportunities_internal<F, Fut>(
-        &self,
-        operation_name: &str,
-        detector_call: F,
-    ) -> Result<Vec<MultiHopArbOpportunity>, ArbError>
-    // Corrected: Use MultiHopArbOpportunity
-    where
-        F: FnOnce(
-            Arc<Mutex<ArbitrageDetector>>,
-            HashMap<Pubkey, Arc<PoolInfo>>,
-            Arc<Mutex<Metrics>>,
-        ) -> Fut,
-        Fut: std::future::Future<Output = Result<Vec<MultiHopArbOpportunity>, ArbError>>, // Corrected: Use MultiHopArbOpportunity
-    {
-        self.maybe_check_health().await?;
-
-        let pools_map_clone = {
-            let guard_result = timeout(
-                Duration::from_millis(self.config.pool_read_timeout_ms.unwrap_or(1000)),
-                self.pools.read(),
-            )
-            .await
-            .map_err(|_elapsed: TimeoutError| {
-                warn!("{}: Timeout waiting for pools read lock", operation_name);
-                ArbError::TimeoutError(format!("Timeout for pools read lock in {}", operation_name))
-            })?;
-            guard_result.deref().clone()
-        };
-
-        detector_call(
-            Arc::clone(&self.detector),
-            pools_map_clone,
-            Arc::clone(&self.metrics),
-        )
-        .await
-    }
-
-    pub async fn _discover_direct_opportunities(
-        &self,
-    ) -> Result<Vec<MultiHopArbOpportunity>, ArbError> {
-        // Corrected: Use MultiHopArbOpportunity
-        self.discover_opportunities_internal(
-            "discover_direct_opportunities",
-            |detector_arc, pools_map, metrics_arc| async move {
-                let detector_guard = detector_arc.lock().await;
-                let mut metrics_guard = metrics_arc.lock().await;
-                // Call find_all_opportunities as suggested by the deprecation message.
-                detector_guard
-                    .find_all_opportunities(&pools_map, &mut *metrics_guard) // Corrected: Pass &mut *metrics_guard
-                    .await
-            },
-        )
-        .await
-    }
-
-    pub async fn discover_fixed_input_opportunities(
-        &self,
-        fixed_input_amount: f64,
-    ) -> Result<Vec<MultiHopArbOpportunity>, ArbError> {
-        // Corrected: Use MultiHopArbOpportunity
-        if fixed_input_amount <= 0.0 {
-            warn!(
-                "discover_fixed_input_opportunities called with non-positive amount: {}. Skipping.",
-                fixed_input_amount
-            );
-            return Ok(Vec::new());
-        }
-
-        self.discover_opportunities_internal(
-            "discover_fixed_input_opportunities",
-            move |detector_arc, pools_map, metrics_arc| async move {
-                let detector_guard = detector_arc.lock().await;
-                let mut metrics_guard = metrics_arc.lock().await;
-                detector_guard
-                    .find_two_hop_opportunities_with_fixed_input(
-                        &pools_map,
-                        &mut *metrics_guard,
-                        fixed_input_amount, // Corrected: Pass &mut *metrics_guard
-                    )
-                    .await
-            },
-        )
-        .await
-    }
-
-    pub async fn _discover_multihop_opportunities_with_risk(
-        &self,
-    ) -> Result<Vec<MultiHopArbOpportunity>, ArbError> {
-        // Corrected: Use MultiHopArbOpportunity
-        let max_slippage_pct = self.config.max_slippage_pct * 100.0;
-        let tx_fee_lamports_for_acceptance = self.config.default_priority_fee_lamports;
-
-        self.discover_opportunities_internal(
-            "discover_multihop_opportunities_with_risk",
-            move |detector_arc, pools_map, metrics_arc| async move {
-                let detector_guard = detector_arc.lock().await;
-                let mut metrics_guard = metrics_arc.lock().await;
-                detector_guard
-                    .find_all_multihop_opportunities_with_risk(
-                        &pools_map,
-                        &mut *metrics_guard, // Corrected: Pass &mut *metrics_guard
-                        max_slippage_pct,
-                        tx_fee_lamports_for_acceptance,
-                    )
-                    .await
-            },
-        )
-        .await
-    }
-
-    // Added back discover_multihop_opportunities
-    pub async fn discover_multihop_opportunities(
-        &self,
-    ) -> Result<Vec<MultiHopArbOpportunity>, ArbError> {
-        // This is a simplified version. The primary multihop logic is in _discover_multihop_opportunities_with_risk.
-        // This function can delegate or implement a simpler form of multihop detection if needed.
-        // For now, let's make it delegate to the risk-adjusted version or a simpler internal call.
-        // This is a placeholder implementation.
-        info!("discover_multihop_opportunities called (placeholder). Consider using _discover_multihop_opportunities_with_risk for full features.");
-        self._discover_multihop_opportunities_with_risk().await
-    }
-
-    // Added back resolve_pools_for_opportunity
-    pub async fn resolve_pools_for_opportunity(
-        &self,
-        opportunity: &MultiHopArbOpportunity,
-    ) -> Result<Vec<Arc<PoolInfo>>, ArbError> {
-        let mut resolved_pools = Vec::new();
-        let pools_guard = self.pools.read().await;
-
-        for pool_address in &opportunity.pool_path {
-            match pools_guard.get(pool_address) {
-                Some(pool_arc) => resolved_pools.push(Arc::clone(pool_arc)),
-                None => {
-                    let err_msg = format!("Pool not found in cache: {}", pool_address);
-                    error!("{}", err_msg);
-                    return Err(ArbError::PoolNotFound(pool_address.to_string()));
-                }
-            }
-        }
-
-        Ok(resolved_pools)
-    }
-
-    pub async fn maybe_check_health(&self) -> Result<(), ArbError> {
-        let mut last_check = self.last_health_check.write().await;
-        if last_check.elapsed() < self.health_check_interval {
-            return Ok(());
-        }
-
-        info!("[ArbitrageEngine] Performing system health check...");
-
-        let mut ws_healthy = true;
-        if let Some(manager_arc) = &self.ws_manager {
-            let manager = manager_arc.lock().await;
-            // The .start() method now requires a cache argument (Option<Arc<Cache>>)
-            // Always provide an argument, e.g., None if you don't have a cache instance here.
-            if !manager.is_connected().await {
-                ws_healthy = false;
-                let attempts = self.ws_reconnect_attempts.fetch_add(1, Ordering::Relaxed);
-                if attempts < self.max_ws_reconnect_attempts {
-                    warn!(
-                        "[ArbitrageEngine] WebSocket disconnected. Attempting reconnect (attempt {}/{})",
-                        attempts + 1,
-                        self.max_ws_reconnect_attempts
-                    );
-                    if let Err(e) = manager.start(None).await {
-                        // <-- FIX: pass None for cache
-                        error!(
-                            "[ArbitrageEngine] WebSocket reconnect attempt failed: {}",
-                            e
-                        );
-                    }
+                if let Err(e) = self.update_pools(new_pool).await {
+                    error!("[Engine] Failed to update pool {}: {}", pubkey, e);
                 } else {
-                    error!(
-                        "[ArbitrageEngine] WebSocket disconnected. Max reconnect attempts reached."
-                    );
+                    info!("[Engine] Pool {} updated via WS.", pubkey);
+                    let total_pools = self.pools.read().await.len();
+                    self.metrics.lock().await.log_pools_updated(0, 1, total_pools);
                 }
-            } else {
-                self.ws_reconnect_attempts.store(0, Ordering::Relaxed);
+            }
+            WebsocketUpdate::GenericUpdate(msg) => {
+                warn!("[Engine] Received GenericUpdate: {}", msg);
             }
         }
-
-        // Price provider health check placeholder (not used, so no warning)
-        if self.price_provider.is_some() {
-            info!("Price provider is configured (health check placeholder).");
-        } else {
-            warn!("Price provider not configured; skipping price provider health check.");
-        }
-
-        let mut rpc_healthy = true;
-        if let Some(client) = &self.rpc_client {
-            // If get_epoch_info is not available, fallback to is_healthy
-            if !client.is_healthy().await {
-                rpc_healthy = false;
-                warn!("[ArbitrageEngine] Primary RPC endpoint is unhealthy.");
-            }
-        }
-
-        let degradation_factor = self.config.degradation_profit_factor.unwrap_or(1.5);
-        let current_min_profit = self.get_min_profit_threshold_pct().await;
-        let should_degrade = !ws_healthy || !rpc_healthy;
-        let was_degraded = self
-            .degradation_mode
-            .swap(should_degrade, Ordering::Relaxed);
-
-        if should_degrade && !was_degraded {
-            warn!(
-                "[ArbitrageEngine] Entering degradation mode due to system health issues (WS: {}, RPC: {})",
-                ws_healthy, rpc_healthy
-            );
-            let new_threshold = current_min_profit * degradation_factor;
-            self.set_min_profit_threshold_pct(new_threshold).await;
-            info!(
-                "[ArbitrageEngine] Min profit threshold increased to {:.4}% due to degradation.",
-                new_threshold * 100.0
-            );
-        } else if !should_degrade && was_degraded {
-            info!("[ArbitrageEngine] Exiting degradation mode - system health restored.");
-            let base_threshold = self.config.min_profit_pct;
-            self.set_min_profit_threshold_pct(base_threshold * 100.0)
-                .await; // Fix: ensure f64 type
-            info!(
-                "[ArbitrageEngine] Min profit threshold reset to {:.4}%.",
-                base_threshold * 100.0
-            );
-            self.ws_reconnect_attempts.store(0, Ordering::Relaxed);
-        }
-
-        *last_check = Instant::now();
         Ok(())
     }
 
-    // Added back update_pools
+    /// Parses raw pool data using the pool parser registry.
+    pub async fn try_parse_pool_data(&self, pubkey: Pubkey, data: &[u8]) -> Result<PoolInfo, ArbError> {
+        use crate::dex::pool::POOL_PARSER_REGISTRY;
+        for (program_id, parser_fn) in POOL_PARSER_REGISTRY.iter() {
+            if let Ok(pool_info) = parser_fn(pubkey, data) {
+                debug!("Pool {} parsed with program {}.", pubkey, program_id);
+                return Ok(pool_info);
+            }
+        }
+        Err(ArbError::ParseError(format!("Could not parse data for pool {}", pubkey)))
+    }
+
+    /// Updates the shared pools cache with new pool data.
     pub async fn update_pools(
         &self,
         new_pools_data: HashMap<Pubkey, Arc<PoolInfo>>,
     ) -> Result<(), ArbError> {
-        let mut writable_pools_ref = self.pools.write().await;
-        let mut new_pools_count = 0;
-        let mut updated_pools_count = 0;
-
+        let mut pools_guard = self.pools.write().await;
+        let mut new_count = 0;
+        let mut update_count = 0;
         for (key, pool_info) in new_pools_data {
-            if writable_pools_ref.contains_key(&key) {
-                writable_pools_ref.insert(key, pool_info);
-                updated_pools_count += 1;
+            if pools_guard.contains_key(&key) {
+                pools_guard.insert(key, pool_info);
+                update_count += 1;
             } else {
-                writable_pools_ref.insert(key, pool_info);
-                new_pools_count += 1;
+                pools_guard.insert(key, pool_info);
+                new_count += 1;
             }
         }
-
-        if new_pools_count > 0 || updated_pools_count > 0 {
-            info!(
-                "Pools updated: {} new, {} updated. Total pools: {}",
-                new_pools_count,
-                updated_pools_count,
-                writable_pools_ref.len()
-            );
-        }
-
-        Ok(())
-    }
-
-    pub async fn run_health_checks(&self) {
-        info!("Health check task running periodical checks...");
-        let mut overall_healthy = true;
-
-        if let Some(rpc) = &self.rpc_client {
-            if !rpc.is_healthy().await {
-                // is_healthy is on SolanaRpcClient
-                warn!("RPC client reported as unhealthy.");
-                overall_healthy = false;
-            } else {
-                info!("RPC client reported as healthy.");
-            }
-            // Optionally, log more details if available
-        } else {
-            warn!("RPC client not configured; skipping RPC health check.");
-        }
-
-        if let Some(ws_manager_arc) = &self.ws_manager {
-            let manager = ws_manager_arc.lock().await;
-            if !manager.is_connected().await {
-                // is_connected is on SolanaWebsocketManager
-                warn!("WebSocket manager reported as disconnected.");
-                overall_healthy = false;
-                let attempts = self.ws_reconnect_attempts.fetch_add(1, Ordering::Relaxed) + 1;
-                if attempts <= self.max_ws_reconnect_attempts {
-                    warn!(
-                        "Attempting to reconnect WebSocket (attempt {}/{})",
-                        attempts, self.max_ws_reconnect_attempts
-                    );
-                    if let Err(e) = manager.start(None).await {
-                        error!("WebSocket reconnection failed: {}", e);
-                    } else {
-                        info!("WebSocket reconnection successful.");
-                        self.ws_reconnect_attempts.store(0, Ordering::Relaxed);
-                    }
-                } else {
-                    error!("Max WebSocket reconnection attempts reached. Manual intervention may be required.");
-                }
-            } else {
-                debug!("WebSocket manager reported as connected.");
-                self.ws_reconnect_attempts.store(0, Ordering::Relaxed);
-            }
-        } else {
-            warn!("WebSocket manager not configured; skipping WebSocket health check.");
-        }
-
-        if overall_healthy {
-            info!("Overall system health: HEALTHY");
-        } else {
-            warn!("Overall system health: DEGRADED");
-        }
-    }
-
-    pub async fn run_full_health_check(&self, _cache: Option<Arc<crate::cache::Cache>>) {
-        info!("Running full health check...");
-
-        // Check pool count
-        let pool_count = self.pools.read().await.len();
-        info!("Current pool count: {}", pool_count);
-
-        // Check degradation mode
-        let is_degraded = self.degradation_mode.load(Ordering::Relaxed);
         info!(
-            "Degradation mode: {}",
-            if is_degraded { "ACTIVE" } else { "INACTIVE" }
+            "[Engine] Pools updated: {} new, {} updated. Total: {}",
+            new_count,
+            update_count,
+            pools_guard.len()
         );
-
-        // Check current profit threshold
-        let current_threshold = self.get_min_profit_threshold_pct().await;
-        info!("Current min profit threshold: {:.4}%", current_threshold);
-
-        // Run standard health checks
-        self.run_health_checks().await;
-
-        // Update last health check timestamp
-        *self.last_health_check.write().await = Instant::now();
-
-        info!("Full health check completed.");
-    }
-
-    pub async fn get_cached_pool_count(&self) -> Result<usize, ArbError> {
-        self.with_pool_guard_async(|pools| pools.len()).await
-    }
-
-    pub async fn with_pool_guard_async<F, R>(&self, operation: F) -> Result<R, ArbError>
-    where
-        F: FnOnce(&HashMap<Pubkey, Arc<PoolInfo>>) -> R,
-    {
-        let timeout_duration =
-            Duration::from_millis(self.config.pool_read_timeout_ms.unwrap_or(1000));
-
-        match timeout(timeout_duration, self.pools.read()).await {
-            Ok(guard) => Ok(operation(&*guard)),
-            Err(_) => {
-                warn!("Timeout waiting for pools read lock in with_pool_guard_async");
-                Err(ArbError::TimeoutError("Pool read lock timeout".to_string()))
-            }
-        }
-    }
-
-    pub async fn process_websocket_updates(&self) -> Result<(), ArbError> {
-        if let Some(ws_manager_arc) = &self.ws_manager {
-            let mut manager = ws_manager_arc.lock().await;
-
-            loop {
-                match manager.try_recv_update().await {
-                    Ok(Some(update)) => {
-                        debug!("Processing WebSocket update: {:?}", update);
-                        self.handle_websocket_update(update).await?;
-                    }
-                    Ok(None) => {
-                        // No more updates available
-                        break;
-                    }
-                    Err(TryRecvError::Empty) => {
-                        // No updates available right now
-                        break;
-                    }
-                    Err(TryRecvError::Disconnected) => {
-                        warn!("WebSocket update channel disconnected");
-                        return Err(ArbError::WebSocketError(
-                            "Update channel disconnected".to_string(),
-                        ));
-                    }
-                }
-            }
-        }
         Ok(())
     }
 
-    async fn handle_websocket_update(&self, update: WebsocketUpdate) -> Result<(), ArbError> {
-        // Use a more generic approach since we don't know the exact variant names
-        debug!("Received WebSocket update: {:?}", update);
-
-        // For now, we'll implement a placeholder that can be extended
-        // once we know the exact structure of WebsocketUpdate
-        match update {
-            // Add specific handling once we know the correct variant names
-            _ => {
-                debug!("WebSocket update received but not specifically handled yet");
-            }
-        }
-        Ok(())
-    }
-
-    async fn try_parse_pool_data(&self, pubkey: Pubkey, data: &[u8]) -> Result<PoolInfo, ArbError> {
-        // This would use the pool parser registry to determine the correct parser
-        // For now, we'll use a simple approach
-        use crate::dex::pool::POOL_PARSER_REGISTRY;
-
-        // Try to determine the program owner and use appropriate parser
-        // This is a simplified version - in practice you'd need to get the account owner
-        for (program_id, parser_fn) in POOL_PARSER_REGISTRY.iter() {
-            if let Ok(pool_info) = parser_fn(pubkey, data) {
-                debug!(
-                    "Successfully parsed pool {} with parser for program {}",
-                    pubkey, program_id
-                );
-                return Ok(pool_info);
-            }
-        }
-
-        Err(ArbError::ParseError(format!(
-            "Could not parse pool data for {}",
-            pubkey
-        )))
-    }
-
-    pub async fn get_current_status_string(&self) -> String {
-        let mut status = String::new();
-        status.push_str(&format!(
-            "Engine Health: {}\n",
-            if self.degradation_mode.load(Ordering::Relaxed) {
-                "DEGRADED"
+    /// Resolves pool references for a given arbitrage opportunity.
+    pub async fn resolve_pools_for_opportunity(
+        &self,
+        opportunity: &MultiHopArbOpportunity,
+    ) -> Result<Vec<Arc<PoolInfo>>, ArbError> {
+        let mut resolved = Vec::new();
+        let pools_guard = self.pools.read().await;
+        for pool_address in &opportunity.pool_path {
+            if let Some(pool_arc) = pools_guard.get(pool_address) {
+                resolved.push(Arc::clone(pool_arc));
             } else {
-                "OK"
-            }
-        ));
-        status.push_str(&format!(
-            "Pools in cache: {}\n",
-            self.pools.read().await.len()
-        ));
-        if let Some(ws_manager_arc) = &self.ws_manager {
-            let manager = ws_manager_arc.lock().await;
-            status.push_str(&format!(
-                "WebSocket Connected: {}\n",
-                manager.is_connected().await
-            ));
-        }
-        if let Some(rpc_client) = &self.rpc_client {
-            status.push_str(&format!("RPC Healthy: {}\n", rpc_client.is_healthy().await));
-        }
-        status.push_str(&format!(
-            "Min Profit Threshold: {:.4}%\n",
-            self.get_min_profit_threshold_pct().await
-        ));
-        status.push_str(&format!(
-            "Min Profit USD Threshold: ${:.2}\n", // Added USD threshold display
-            self.get_min_profit_threshold_usd().await
-        ));
-        status.push_str(&format!(
-            "WS Reconnect Attempts: {}/{}\n",
-            self.ws_reconnect_attempts.load(Ordering::Relaxed),
-            self.max_ws_reconnect_attempts
-        ));
-
-        status
-    }
-
-    pub async fn shutdown(&self) -> Result<(), ArbError> {
-        info!("Shutting down ArbitrageEngine...");
-
-        // Stop WebSocket manager
-        if let Some(ws_manager_arc) = &self.ws_manager {
-            let _manager = ws_manager_arc.lock().await;
-            // If there's no stop method, just drop the manager
-            info!("WebSocket manager will be stopped when dropped.");
-        }
-
-        // Stop dynamic threshold updater if needed
-        if let Some(_updater_arc) = &self.dynamic_threshold_updater {
-            info!("Dynamic threshold updater will be stopped when dropped.");
-        }
-
-        // Clear pools cache
-        self.pools.write().await.clear();
-        info!("Pools cache cleared.");
-
-        info!("ArbitrageEngine shutdown completed.");
-        Ok(())
-    }
-
-    pub async fn run_dynamic_threshold_updates(&self) -> Result<(), ArbError> {
-        info!("Starting dynamic threshold updates...");
-
-        let mut interval = tokio::time::interval(Duration::from_secs(60)); // Update every minute
-
-        loop {
-            interval.tick().await;
-
-            // Check if we should stop
-            if self.degradation_mode.load(Ordering::Relaxed) {
-                warn!("Skipping threshold update due to degradation mode");
-                continue;
-            }
-
-            // Update threshold based on market conditions
-            let current_threshold = self.get_min_profit_threshold_pct().await;
-            let pool_count = self.pools.read().await.len();
-
-            // Simple dynamic adjustment logic
-            let new_threshold = if pool_count < 10 {
-                // Fewer pools, require higher profit
-                current_threshold * 1.1
-            } else if pool_count > 100 {
-                // More pools, can accept lower profit
-                current_threshold * 0.95
-            } else {
-                current_threshold
-            };
-
-            // Clamp to reasonable bounds
-            let clamped_threshold = new_threshold.max(0.1).min(5.0);
-
-            if (clamped_threshold - current_threshold).abs() > 0.01 {
-                info!(
-                    "Updating profit threshold from {:.4}% to {:.4}%",
-                    current_threshold, clamped_threshold
-                );
-                self.set_min_profit_threshold_pct(clamped_threshold).await;
-            }
-
-            debug!(
-                "Dynamic threshold update completed. Current: {:.4}%",
-                clamped_threshold
-            );
-        }
-    }
-
-    pub async fn process_websocket_updates_loop(&self) -> Result<(), ArbError> {
-        info!("Starting WebSocket updates processing loop...");
-
-        let mut interval = tokio::time::interval(Duration::from_millis(100)); // Process every 100ms
-
-        loop {
-            interval.tick().await;
-
-            // Process any pending WebSocket updates
-            if let Err(e) = self.process_websocket_updates().await {
-                warn!("Error processing WebSocket updates: {}", e);
-
-                // If we're in degradation mode, sleep longer
-                if self.degradation_mode.load(Ordering::Relaxed) {
-                    tokio::time::sleep(Duration::from_secs(5)).await;
-                }
-            }
-
-            // Check if we should continue
-            if self.degradation_mode.load(Ordering::Relaxed) {
-                // In degradation mode, process less frequently
-                tokio::time::sleep(Duration::from_secs(1)).await;
+                let err_msg = format!("Pool not found: {}", pool_address);
+                error!("{}", err_msg);
+                return Err(ArbError::PoolNotFound(pool_address.to_string()));
             }
         }
+        Ok(resolved)
     }
 
-    pub async fn detect_arbitrage(&self) -> Result<Vec<MultiHopArbOpportunity>, ArbError> {
-        debug!("Starting arbitrage detection...");
-
-        // Get current pools
-        let pools = self.pools.read().await.clone();
-        if pools.is_empty() {
-            debug!("No pools available for arbitrage detection");
-            return Ok(vec![]);
+    /// Sets the minimum profit threshold (as percent) and updates the detector.
+    pub async fn set_min_profit_threshold_pct(&self, threshold: f64) {
+        {
+            let mut guard = self.min_profit_threshold_pct.write().await;
+            *guard = threshold;
         }
-
-        debug!(
-            "Detecting arbitrage opportunities across {} pools",
-            pools.len()
-        );
-
-        // Use the ArbitrageDetector with proper constructor
-        let detector = ArbitrageDetector::new_from_config(&self.config);
-
-        // Convert pools to the format expected by the detector
-        let pools_hashmap: HashMap<Pubkey, Arc<PoolInfo>> =
-            pools.iter().map(|(k, v)| (*k, Arc::clone(v))).collect();
-
-        // Use the correct method name from detector.rs
-        let mut metrics = Metrics::default();
-        let opportunities = detector
-            .find_all_opportunities(&pools_hashmap, &mut metrics)
-            .await?;
-
-        info!("Found {} arbitrage opportunities", opportunities.len());
-
-        // Log summary of opportunities
-        for (i, opp) in opportunities.iter().enumerate() {
-            debug!(
-                "Opportunity {}: profit={:.4}% amount={:.6}",
-                i, opp.profit_pct, opp.total_profit
-            );
-        }
-
-        Ok(opportunities)
+        let mut detector_guard = self.detector.lock().await;
+        detector_guard.set_min_profit_threshold(threshold);
     }
 
-    /// Returns a reference to the price provider if configured.
-    pub fn get_price_provider(&self) -> Option<&Arc<dyn CryptoDataProvider + Send + Sync>> {
-        self.price_provider.as_ref()
+    /// Retrieves the current min profit threshold.
+    pub async fn get_min_profit_threshold_pct(&self) -> f64 {
+        *self.min_profit_threshold_pct.read().await
     }
 
-    /// Returns the health check interval duration.
-    pub fn get_health_check_interval(&self) -> Duration {
-        self.health_check_interval
-    }
-
-    /// Returns a clone of the circuit breaker Arc.
+    /// Returns a clone of the engine's circuit breaker.
     pub fn get_circuit_breaker(&self) -> Arc<RwLock<CircuitBreaker>> {
         Arc::clone(&self.circuit_breaker)
     }
 
-    /// Returns a reference to the retry policy.
-    pub fn get_retry_policy(&self) -> &RetryPolicy {
-        &self.retry_policy
+    /// Returns a clone of the engine's retry policy.
+    pub fn get_retry_policy(&self) -> RetryPolicy {
+        self.retry_policy.clone()
     }
 
-    // Placeholder for the actual implementation.
-    // This method is crucial for the retry logic in main.rs.
-    pub async fn is_opportunity_still_valid(&self, opportunity: &MultiHopArbOpportunity) -> bool {
-        info!("[ArbitrageEngine] Checking if opportunity ID {} is still valid.", opportunity.id);
-        // In a real implementation, you would:
-        // 1. Re-fetch or use cached current prices for the input token.
-        // 2. Re-calculate the opportunity's profit percentage and USD profit based on current pool states (if feasible without full re-detection).
-        //    Alternatively, check against slightly tighter thresholds than initial detection to account for market movement.
-        // 3. Compare against the detector's current min_profit_threshold_pct and min_profit_threshold_usd.
-        
-        // For now, let's assume it's valid if its original profit meets current thresholds.
-        // This is a simplification.
-        let detector_guard = self.detector.lock().await;
-        let current_min_pct = detector_guard.get_min_profit_threshold_pct();
-        let current_min_usd = detector_guard.get_min_profit_threshold_usd();
-        
-        let meets_pct = opportunity.profit_pct >= current_min_pct;
-        let meets_usd = opportunity.estimated_profit_usd.unwrap_or(-1.0) >= current_min_usd;
+    /// Returns a clone of the engine's configuration.
+    pub fn get_config(&self) -> Arc<Config> {
+        Arc::clone(&self.config)
+    }
 
-        meets_pct && meets_usd
+    /// Returns a clone of the Arc-wrapped last health check timestamp.
+    pub fn get_last_health_check(&self) -> Arc<RwLock<Instant>> {
+        Arc::clone(&self.last_health_check)
+    }
+
+    /// Executes a closure with a read guard to the pools map.
+    /// This allows safe, read-only access to the shared pool data.
+    pub async fn with_pool_guard_async<F, R>(&self, f: F) -> R
+    where
+        F: FnOnce(tokio::sync::RwLockReadGuard<'_, HashMap<Pubkey, Arc<PoolInfo>>>) -> R,
+    {
+        let pools_guard = self.pools.read().await;
+        f(pools_guard)
+    }
+
+    /// Discovers arbitrage opportunities by invoking the detector (both direct and multi-hop).
+    pub async fn detect_arbitrage(&self) -> Result<Vec<MultiHopArbOpportunity>, ArbError> {
+        let pools_guard = self.pools.read().await;
+        let mut metrics_guard = self.metrics.lock().await;
+        let detector_guard = self.detector.lock().await;
+        let mut opps = detector_guard.find_all_opportunities(&*pools_guard, &mut *metrics_guard).await?;
+        let mut multihop_opps = detector_guard.find_all_multihop_opportunities(&*pools_guard, &mut *metrics_guard).await?;
+        opps.append(&mut multihop_opps);
+        opps.sort_by(|a, b| b.profit_pct.partial_cmp(&a.profit_pct).unwrap_or(std::cmp::Ordering::Equal));
+        Ok(opps)
+    }
+
+    /// Discovers fixed input arbitrage opportunities.
+    pub async fn discover_fixed_input_opportunities(&self, fixed_input_amount: f64) -> Result<Vec<MultiHopArbOpportunity>, ArbError> {
+        let pools_guard = self.pools.read().await;
+        let mut metrics_guard = self.metrics.lock().await;
+        let detector_guard = self.detector.lock().await;
+        detector_guard.find_two_hop_opportunities(&*pools_guard, &mut *metrics_guard, fixed_input_amount).await
+    }
+
+    /// Discovers multi-hop arbitrage opportunities.
+    pub async fn discover_multihop_opportunities(&self) -> Result<Vec<MultiHopArbOpportunity>, ArbError> {
+        let pools_guard = self.pools.read().await;
+        let mut metrics_guard = self.metrics.lock().await;
+        let detector_guard = self.detector.lock().await;
+        detector_guard.find_all_multihop_opportunities(&*pools_guard, &mut *metrics_guard).await
+    }
+
+    /// Checks if an opportunity is still valid based on current market conditions.
+    pub async fn is_opportunity_still_valid(&self, opportunity: &MultiHopArbOpportunity) -> bool {
+        if opportunity.hops.is_empty() {
+            return false;
+        }
+        // This is a simplified check. A more robust check would re-simulate the trade
+        // with current pool reserves and compare against dynamic profit thresholds.
+        // For now, we'll assume it's valid if the profit percentage still meets the engine's current threshold.
+        let current_min_profit_pct = self.get_min_profit_threshold_pct().await;
+        opportunity.profit_pct >= current_min_profit_pct
+    }
+
+    /// Starts background services like WebSocket manager.
+    pub async fn start_services(&self, cache: Option<Arc<crate::cache::Cache>>) {
+        if let Some(ws_manager_arc) = &self.ws_manager {
+            info!("[Engine] Starting WebSocket Manager service...");
+            if let Err(e) = ws_manager_arc.lock().await.start(cache).await {
+                error!("[Engine] Failed to start WebSocket Manager: {}", e);
+            }
+        } else {
+            warn!("[Engine] WebSocket Manager not configured, skipping start_services for it.");
+        }
+        // Potentially start other services here
+    }
+
+    /// Health check: verifies that the websocket connection is active.
+    pub async fn run_health_checks(&self) {
+        if let Some(ws_manager_arc) = &self.ws_manager {
+            let ws_manager = ws_manager_arc.lock().await;
+            if !ws_manager.is_connected().await {
+                error!("[Engine] Websocket manager is NOT connected!");
+            } else {
+                debug!("[Engine] Websocket manager connection healthy.");
+            }
+        } else {
+            warn!("[Engine] No websocket manager configured.");
+        }
+    }
+
+    /// Processes incoming websocket updates in a non-blocking loop.
+    pub async fn process_websocket_updates_loop(&self) {
+        if let Some(ws_manager_arc) = &self.ws_manager {
+            let mut ws_manager = ws_manager_arc.lock().await;
+            loop {
+                match ws_manager.try_recv_update().await {
+                    Ok(Some(update)) => {
+                        if let Err(e) = self.handle_websocket_update(update).await {
+                            error!("[Engine] Error processing WS update: {}", e);
+                        }
+                    }
+                    Ok(None) => {
+                        tokio::task::yield_now().await;
+                    }
+                    Err(e) => {
+                        warn!("[Engine] WebSocket receive error: {}", e);
+                        sleep(Duration::from_millis(100)).await;
+                    }
+                }
+            }
+        } else {
+            warn!("[Engine] Skipping websocket update loop: not configured.");
+        }
+    }
+
+    /// Returns a status string summarizing the engine’s current state.
+    pub async fn get_current_status_string(&self) -> String {
+        let num_pools = self.pools.read().await.len();
+        let min_profit = self.get_min_profit_threshold_pct().await;
+        let detector_guard = self.detector.lock().await;
+        let detector_min_profit = detector_guard.get_min_profit_threshold_pct();
+        format!(
+            "ArbitrageEngine Status: Pools: {}, MinProfitThreshold (Engine): {:.4}%, DetectorMinProfit: {:.4}%",
+            num_pools, min_profit, detector_min_profit
+        )
+    }
+
+    /// Runs the dynamic threshold update loop.
+    /// This method is intended to be spawned as a separate task.
+    pub async fn run_dynamic_threshold_updates(&self) {
+        if let Some(dynamic_updater_arc) = &self.dynamic_threshold_updater {
+            let updater = Arc::clone(dynamic_updater_arc);
+            let metrics = Arc::clone(&self.metrics);
+            let detector = Arc::clone(&self.detector);
+            let price_provider = self.price_provider.clone(); // Clone the Option<Arc<...>>
+
+            DynamicThresholdUpdater::start_monitoring_task(
+                updater,
+                metrics,
+                detector,
+                price_provider,
+            ).await;
+        } else {
+            warn!("[Engine] Dynamic threshold updater not configured. Threshold updates will not run.");
+        }
+    }
+    /// Spawns and runs the key background services concurrently:
+    ///  - WebSocket update processing,
+    ///  - Dynamic threshold updates,
+    ///  - Periodic health checks,
+    ///  - And arbitrage detection scans.
+    pub async fn run_main_loop(&self) {
+        let ws_updates_task = {
+            let engine_clone = self.clone();
+            tokio::spawn(async move {
+                engine_clone.process_websocket_updates_loop().await;
+            })
+        };
+
+        let health_checks_task = {
+            let engine_clone = self.clone();
+            tokio::spawn(async move {
+                loop {
+                    engine_clone.run_health_checks().await;
+                    sleep(engine_clone.health_check_interval).await;
+                }
+            })
+        };
+
+        let dynamic_threshold_task = {
+            if let Some(dynamic_updater) = &self.dynamic_threshold_updater {
+                let updater = Arc::clone(dynamic_updater);
+                let metrics = self.metrics.clone();
+                let detector = self.detector.clone();
+                let price_provider = self.price_provider.clone();
+                tokio::spawn(async move {
+                    crate::arbitrage::dynamic_threshold::DynamicThresholdUpdater::start_monitoring_task(
+                        updater,
+                        metrics,
+                        detector,
+                        price_provider,
+                    ).await;
+                })
+            } else {
+                // If not configured, spawn a dummy future that never ends.
+                tokio::spawn(async move { loop { sleep(Duration::from_secs(3600)).await } })
+            }
+        };
+
+        let detection_task = {
+            let engine_clone = self.clone();
+            tokio::spawn(async move {
+                loop {
+                    match engine_clone.detect_arbitrage().await {
+                        Ok(opportunities) => {
+                            if opportunities.is_empty() {
+                                debug!("[Engine] No arbitrage opportunities found this cycle.");
+                            } else {
+                                for opp in opportunities.iter() {
+                                    info!("[Engine] Detected Opportunity: {}", opp.id);
+                                    opp.log_summary();
+                                    // Execution instruction is pushed via mod.rs (coordinator task) or directly to executor.
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            error!("[Engine] Error during arbitrage detection: {}", e);
+                        }
+                    }
+                    sleep(Duration::from_secs(engine_clone.config.cycle_interval_seconds.unwrap_or(5))).await;
+                }
+            })
+        };
+
+        // Wait for all background tasks (which never end in a long-running service)
+        tokio::select! {
+            _ = ws_updates_task => {},
+            _ = health_checks_task => {},
+            _ = dynamic_threshold_task => {},
+            _ = detection_task => {},
+        }
+    }
+
+    /// Gracefully shuts down the arbitrage engine and its components.
+    pub async fn shutdown(&self) -> Result<(), ArbError> {
+        info!("[Engine] Initiating shutdown sequence...");
+        // Example: If ws_manager was started by the engine, it should be stopped here.
+        // However, in the current main.rs, ws_manager.stop() is called directly.
+        // This shutdown method can be expanded for other engine-specific cleanup.
+        info!("[Engine] Shutdown sequence complete.");
+        Ok(())
+    }
+}
+
+// Implement Clone manually for ArbitrageEngine so we can pass it to spawned tasks.
+impl Clone for ArbitrageEngine {
+    fn clone(&self) -> Self {
+        Self {
+            pools: Arc::clone(&self.pools),
+            ws_manager: self.ws_manager.as_ref().map(Arc::clone),
+            price_provider: self.price_provider.as_ref().map(Arc::clone),
+            metrics: Arc::clone(&self.metrics),
+            rpc_client: self.rpc_client.as_ref().map(Arc::clone),
+            config: Arc::clone(&self.config),
+            degradation_mode: Arc::clone(&self.degradation_mode),
+            last_health_check: Arc::clone(&self.last_health_check),
+            health_check_interval: self.health_check_interval,
+            ws_reconnect_attempts: Arc::clone(&self.ws_reconnect_attempts),
+            max_ws_reconnect_attempts: self.max_ws_reconnect_attempts,
+            detector: Arc::clone(&self.detector),
+            _dex_providers: self._dex_providers.clone(),
+            dynamic_threshold_updater: self.dynamic_threshold_updater.as_ref().map(Arc::clone),
+            circuit_breaker: Arc::clone(&self.circuit_breaker),
+            retry_policy: self.retry_policy.clone(),
+            min_profit_threshold_pct: Arc::clone(&self.min_profit_threshold_pct),
+        }
     }
 }

@@ -2,7 +2,7 @@
 pub mod settings;
 
 // Re-export the primary Config struct
-pub use settings::Config;
+pub use settings::*; // Re-export all items from settings.rs
 
 use std::sync::Arc;
 use std::path::Path;

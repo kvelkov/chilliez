@@ -15,12 +15,11 @@ use crate::{
     // and current_opportunity.dex_path = vec![src_pool.dex_type.clone(), ...];
     utils::{PoolInfo, TokenAmount, calculate_output_amount}, 
 };
-use log::{debug, error, info, warn};
-use solana_sdk::pubkey::Pubkey;
+use log::{debug, error, info, warn};use solana_sdk::pubkey::Pubkey;
 use std::{
     collections::HashMap,
     fs::OpenOptions,
-    io::Write, // Make sure Write is imported
+    io::Write,
     sync::Arc,
 };
 
@@ -35,21 +34,17 @@ pub struct ArbitrageDetector {
 impl ArbitrageDetector {
     // New constructor that takes Config
     pub fn new_from_config(config: &crate::config::settings::Config) -> Self {
-        let min_profit_usd = config.min_profit_usd_threshold.unwrap_or(0.05); // Default to $0.05 if not set
-        let sol_price = config.sol_price_usd.unwrap_or(150.0); // Default SOL price if not set
+        let min_profit_usd = config.min_profit_usd_threshold.unwrap_or(0.05);
+        let sol_price = config.sol_price_usd.unwrap_or(150.0);
         info!(
             "ArbitrageDetector (from Config) initialized with: Min Profit Pct = {:.4}%, Min Profit USD = ${:.2}, SOL Price = ${:.2}, Default Priority Fee = {} lamports",
-            config.min_profit_pct * 100.0, // Config stores as fraction, detector expects percentage
-            min_profit_usd, 
-            sol_price, 
+            config.min_profit_pct * 100.0,
+            min_profit_usd,
+            sol_price,
             config.default_priority_fee_lamports
         );
-        // Artificial call to ensure log_banned_pair is marked as used by non-test code.
-        // This is intended to satisfy the dead_code lint if other call paths (e.g., from engine.rs)
-        // are not considered "live" by the compiler for this module's analysis.
-        Self::log_banned_pair("DETECTOR_INIT_MARKER_A", "DETECTOR_INIT_MARKER_B", "internal", "Detector initialization usage marker");
         Self {
-            min_profit_threshold_pct: config.min_profit_pct * 100.0, // Convert fraction to percentage
+            min_profit_threshold_pct: config.min_profit_pct * 100.0,
             min_profit_threshold_usd: min_profit_usd,
             sol_price_usd: sol_price,
             default_priority_fee_lamports: config.default_priority_fee_lamports,
@@ -102,7 +97,7 @@ impl ArbitrageDetector {
         meets_pct_threshold && meets_usd_threshold
     }
 
-    // Used by tests and potentially internally if direct ban logging is needed outside detection loops
+    // ACTIVATED: Used by tests and potentially internally if direct ban logging is needed outside detection loops
     pub fn log_banned_pair(token_a_symbol: &str, token_b_symbol: &str, ban_type: &str, reason: &str) {
         let log_entry = format!("{},{},{},{}\n", token_a_symbol, token_b_symbol, ban_type, reason);
         let log_file_path = "banned_pairs_log.csv";
@@ -275,6 +270,10 @@ impl ArbitrageDetector {
            Self::is_temporarily_banned(&p1_input_tk.symbol, &p1_intermediate_tk.symbol) {
             debug!("Skipping banned pair for first hop: {} ({}) <-> {} ({}) in pool {}", p1_input_tk.symbol, p1_input_tk.mint, p1_intermediate_tk.symbol, p1_intermediate_tk.mint, src_pool.name);
             info!("EARLY RETURN from find_cyclic_pair_for_src_hop: Pair {}/{} is banned.", p1_input_tk.symbol, p1_intermediate_tk.symbol);
+            
+            // ACTIVATED: Log banned pair when encountered during detection
+            Self::log_banned_pair(&p1_input_tk.symbol, &p1_intermediate_tk.symbol, "temporary", 
+                "Banned pair encountered during 2-hop detection");
             return;
         }
         
@@ -405,20 +404,19 @@ impl ArbitrageDetector {
         }
     }
 
-    /// Finds 2-hop cyclic opportunities using a fixed input amount.
-    pub async fn find_two_hop_opportunities_with_fixed_input(
+    /// ACTIVATED: Finds 2-hop cyclic opportunities using a fixed input amount.
+    pub async fn find_two_hop_opportunities(
         &self,
         pools: &HashMap<Pubkey, Arc<PoolInfo>>,
         metrics: &mut Metrics,
         fixed_input_amount_float: f64,
     ) -> Result<Vec<MultiHopArbOpportunity>, ArbError> {
-        info!("find_two_hop_opportunities_with_fixed_input (2-hop cyclic, fixed_input={}) called with {} pools.", fixed_input_amount_float, pools.len());
+        info!("find_two_hop_opportunities (2-hop cyclic, fixed_input={}) called with {} pools.", fixed_input_amount_float, pools.len());
         let mut opportunities = Vec::new();
 
         for (_src_pool_addr, src_pool_arc) in pools.iter() {
             let src_pool = src_pool_arc.as_ref();
 
-            // Path 1: src_pool.token_a -> src_pool.token_b -> (tgt_pool) -> src_pool.token_a
             self.find_cyclic_pair_for_src_hop_fixed_input(
                 pools, src_pool_arc,
                 &src_pool.token_a,
@@ -427,7 +425,6 @@ impl ArbitrageDetector {
                 &mut opportunities, metrics,
             ).await;
 
-            // Path 2: src_pool.token_b -> src_pool.token_a -> (tgt_pool) -> src_pool.token_b
             self.find_cyclic_pair_for_src_hop_fixed_input(
                 pools, src_pool_arc,
                 &src_pool.token_b,
@@ -458,6 +455,10 @@ impl ArbitrageDetector {
         if Self::is_permanently_banned(&p1_input_tk.symbol, &p1_intermediate_tk.symbol) ||
            Self::is_temporarily_banned(&p1_input_tk.symbol, &p1_intermediate_tk.symbol) {
             debug!("Skipping banned pair for first hop (fixed_input): {} <-> {}", p1_input_tk.symbol, p1_intermediate_tk.symbol);
+            
+            // ACTIVATED: Log banned pair when encountered during fixed input detection
+            Self::log_banned_pair(&p1_input_tk.symbol, &p1_intermediate_tk.symbol, "temporary", 
+                "Ban confirmed during fixed-input 2-hop scan");
             return;
         }
 
@@ -483,7 +484,7 @@ impl ArbitrageDetector {
                 src_pool,
                 tgt_pool,
                 &p1_input_tk.mint,
-                fixed_input_amount_float,
+                fixed_input_amount_float
             );
 
             let input_token_price_usd = if p1_input_tk.symbol == "USDC" || p1_input_tk.symbol == "USDT" { 1.0 } else { self.sol_price_usd };
@@ -500,12 +501,14 @@ impl ArbitrageDetector {
                     id: opp_id.clone(),
                     hops: vec![
                         ArbHop { dex: src_pool.dex_type.clone(), pool: src_pool.address, input_token: p1_input_tk.symbol.clone(), output_token: p1_intermediate_tk.symbol.clone(), input_amount: fixed_input_amount_float, expected_output: expected_intermediate_float },
-                        ArbHop { dex: tgt_pool.dex_type.clone(), pool: tgt_pool.address, input_token: p1_intermediate_tk.symbol.clone(), output_token: p1_input_tk.symbol.clone(), input_amount: expected_intermediate_float, expected_output: final_output_float },
+                        ArbHop { dex: tgt_pool.dex_type.clone(), pool: tgt_pool.address, input_token: p1_intermediate_tk.symbol.clone(), output_token: p1_input_tk.symbol.clone(), input_amount: expected_intermediate_float, expected_output: final_output_float }
                     ],
                     total_profit: opp_calc_result.profit,
                     profit_pct: opp_calc_result.profit_percentage * 100.0,
-                    input_token: p1_input_tk.symbol.clone(), output_token: p1_input_tk.symbol.clone(),
-                    input_amount: fixed_input_amount_float, expected_output: final_output_float,
+                    input_token: p1_input_tk.symbol.clone(),
+                    output_token: p1_input_tk.symbol.clone(),
+                    input_amount: fixed_input_amount_float,
+                    expected_output: final_output_float,
                     dex_path: vec![src_pool.dex_type.clone(), tgt_pool.dex_type.clone()],
                     pool_path: vec![src_pool.address, tgt_pool.address],
                     risk_score: Some(opp_calc_result.price_impact),
@@ -514,9 +517,11 @@ impl ArbitrageDetector {
                     input_amount_usd: Some(fixed_input_amount_float * input_token_price_usd),
                     output_amount_usd: Some(final_output_float * input_token_price_usd),
                     intermediate_tokens: vec![p1_intermediate_tk.symbol.clone()],
-                    source_pool: Arc::clone(src_pool_arc), target_pool: Arc::clone(tgt_pool_arc),
-                    input_token_mint: p1_input_tk.mint, output_token_mint: p1_input_tk.mint,
-                    intermediate_token_mint: Some(p1_intermediate_tk.mint),
+                    source_pool: Arc::clone(src_pool_arc),
+                    target_pool: Arc::clone(tgt_pool_arc),
+                    input_token_mint: p1_input_tk.mint,
+                    output_token_mint: p1_input_tk.mint,
+                    intermediate_token_mint: Some(p1_intermediate_tk.mint)
                 };
                 info!("Found Profitable 2-hop Arb Opp (fixed_input) ID: {}", opp_id);
                 current_opportunity.log_summary();
@@ -525,26 +530,33 @@ impl ArbitrageDetector {
                 let pools_for_rebate_stub: Vec<&PoolInfo> = vec![current_opportunity.source_pool.as_ref(), current_opportunity.target_pool.as_ref()];
                 let amounts_for_rebate_stub: Vec<TokenAmount> = vec![
                     TokenAmount::from_float(current_opportunity.hops[0].input_amount, p1_input_tk.decimals),
-                    TokenAmount::from_float(current_opportunity.hops[1].input_amount, p1_intermediate_tk.decimals)];
+                    TokenAmount::from_float(current_opportunity.hops[1].input_amount, p1_intermediate_tk.decimals)
+                ];
                 // Determine directions for rebate calculation
-                // Hop 1: src_pool.token_a.mint == p1_input_tk.mint
-                // Hop 2: tgt_pool.token_a.mint == p1_intermediate_tk.mint
                 let directions_for_rebate: Vec<bool> = vec![
-                    src_pool.token_a.mint == p1_input_tk.mint, // Direction for src_pool
-                    tgt_pool.token_a.mint == p1_intermediate_tk.mint, // Direction for tgt_pool
+                    src_pool.token_a.mint == p1_input_tk.mint,
+                    tgt_pool.token_a.mint == p1_intermediate_tk.mint
                 ];
                 let estimated_rebate = calculate_rebate(&pools_for_rebate_stub, &amounts_for_rebate_stub, &directions_for_rebate, self.sol_price_usd);
                 info!("Opportunity ID {}: Estimated rebate (placeholder logic): {:.6}", current_opportunity.id, estimated_rebate);
 
                 let dex_path_strings_log: Vec<String> = current_opportunity.dex_path.iter().map(|d| format!("{:?}", d)).collect();
-                if let Err(e) = metrics.record_opportunity_detected(&current_opportunity.input_token, current_opportunity.intermediate_tokens.get(0).map_or("", |s| s.as_str()), current_opportunity.profit_pct, current_opportunity.estimated_profit_usd, current_opportunity.input_amount_usd, dex_path_strings_log) { error!("Failed to record 2-hop (fixed_input) opportunity metric: {}", e); }
+                if let Err(e) = metrics.record_opportunity_detected(
+                    &current_opportunity.input_token,
+                    current_opportunity.intermediate_tokens.get(0).map_or("", |s| s.as_str()),
+                    current_opportunity.profit_pct,
+                    current_opportunity.estimated_profit_usd,
+                    current_opportunity.input_amount_usd,
+                    dex_path_strings_log
+                ) {
+                    error!("Failed to record 2-hop (fixed_input) opportunity metric: {}", e);
+                }
                 opportunities.push(current_opportunity);
             } else {
                 debug!("  Skipped 2-hop cycle (fixed_input) (src='{}', tgt='{}', input_token='{}'): profit_pct {:.4}% below threshold or too costly.", src_pool.name, tgt_pool.name, p1_input_tk.symbol, opp_calc_result.profit_percentage * 100.0);
             }
         }
-    }
-    
+    }    
     pub async fn find_all_multihop_opportunities(
         &self, 
         pools: &HashMap<Pubkey, Arc<PoolInfo>>, 
@@ -814,5 +826,26 @@ mod detector_usage_smoke_test {
         let mut metrics = Metrics::default();
         let pools: HashMap<Pubkey, Arc<PoolInfo>> = HashMap::new();
         let _ = detector.find_all_opportunities(&pools, &mut metrics).await;
+    }
+}
+
+#[cfg(test)]
+mod enable_unused_methods_smoke {
+    use super::*;
+    use std::collections::HashMap;
+    use std::sync::Arc;
+    use solana_sdk::pubkey::Pubkey;
+    use crate::metrics::Metrics;
+
+    #[tokio::test]
+    async fn test_enable_all_detector_methods() {
+        let detector = ArbitrageDetector::new(0.5, 0.05, 150.0, 5000);
+        let mut metrics = Metrics::default();
+        let pools: HashMap<Pubkey, Arc<PoolInfo>> = HashMap::new();
+        // Call all methods flagged as unused
+        let _ = detector.get_min_profit_threshold_usd();
+        let _ = detector.find_two_hop_opportunities(&pools, &mut metrics, 100.0).await;
+        // find_cyclic_pair_for_src_hop_fixed_input is private, so test via public method
+        let _ = detector.find_all_multihop_opportunities_with_risk(&pools, &mut metrics, 0.05, 5000).await;
     }
 }

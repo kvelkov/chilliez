@@ -4,7 +4,6 @@
 use crate::cache::Cache;
 use crate::dex::http_utils::HttpRateLimiter;
 use crate::dex::quote::{DexClient, Quote as CanonicalQuote};
-
 use anyhow::{anyhow, Result as AnyhowResult};
 use async_trait::async_trait;
 use log::{debug, error, info, warn};
@@ -35,7 +34,7 @@ struct WhirlpoolApiResponse {
     in_amount: String,
     #[serde(rename = "outAmount")]
     out_amount: String,
-    // Add other fields like priceImpactPct, feeAmount, etc., if provided by the API
+    // Additional fields like priceImpactPct or feeAmount can be added here if provided.
 }
 
 #[derive(Debug, Clone)]
@@ -90,6 +89,7 @@ impl DexClient for WhirlpoolClient {
         ];
         let cache_prefix = "quote:whirlpool";
 
+        // Try to get a cached quote first.
         if let Ok(Some(cached_quote)) = self
             .cache
             .get_json::<CanonicalQuote>(cache_prefix, &cache_key_params)
@@ -106,29 +106,21 @@ impl DexClient for WhirlpoolClient {
             input_token_mint, output_token_mint, amount_in_atomic_units
         );
 
-        // Using the Orca v2 quote endpoint, potentially filtering for Whirlpools if the API supports it.
-        // Or use a specific Whirlpool quote endpoint if one exists and is preferred.
-        // The original code had "https://api.orca.so/whirlpools/quote..."
-        // Let's assume for this client, we might want to ensure it's a Whirlpool route.
-        // Some APIs allow specifying `dexes=Whirlpool` or `strategy=WHIRLPOOL_ONLY`.
+        // Build the request URL. Here we force the strategy to WHIRLPOOL_ONLY.
         let url = format!(
-             "https://api.orca.so/v2/solana/quote?inputMint={}&outputMint={}&amountIn={}&strategy=WHIRLPOOL_ONLY", // Example strategy param
-            // "https://api.orca.so/whirlpools/quote?inputMint={}&outputMint={}&amount={}", // Alternative original
+            "https://api.orca.so/v2/solana/quote?inputMint={}&outputMint={}&amountIn={}&strategy=WHIRLPOOL_ONLY",
             input_token_mint, output_token_mint, amount_in_atomic_units
         );
         info!("Requesting Whirlpool quote from URL: {}", url);
 
         let request_start_time = Instant::now();
-        let response_result = WHIRLPOOL_API_RATE_LIMITER // Corrected: Use the defined static variable name
-            .get_with_backoff(&url, |request_url| {
-                // Pass only url and the closure
-                let mut req_builder = self.http_client.get(request_url);
-                if !self.api_key.is_empty() {
-                    req_builder = req_builder.header("X-API-KEY", &self.api_key);
-                }
-                req_builder
-            })
-            .await;
+        let response_result = WHIRLPOOL_API_RATE_LIMITER.get_with_backoff(&url, |request_url| {
+            let mut req_builder = self.http_client.get(request_url);
+            if !self.api_key.is_empty() {
+                req_builder = req_builder.header("X-API-KEY", &self.api_key);
+            }
+            req_builder
+        }).await;
         let request_duration_ms = request_start_time.elapsed().as_millis() as u64;
 
         match response_result {
@@ -140,11 +132,10 @@ impl DexClient for WhirlpoolClient {
                         .await
                         .map_err(|e| anyhow!("Failed to read Whirlpool response text: {}", e))?;
                     debug!(
-                        "Whirlpool API response text for {}->{}: {}",
+                        "Whirlpool API response for {}->{}: {}",
                         input_token_mint, output_token_mint, text
                     );
 
-                    // Assuming the response structure is WhirlpoolApiResponse or a compatible subset of OrcaQuoteResponse
                     match serde_json::from_str::<WhirlpoolApiResponse>(&text) {
                         Ok(api_response) => {
                             let input_amount_u64 = api_response
@@ -169,10 +160,10 @@ impl DexClient for WhirlpoolClient {
                                 latency_ms: Some(request_duration_ms),
                                 execution_score: None,
                                 route_path: None,
-                                slippage_estimate: None, // Populate if API provides
+                                slippage_estimate: None, // Populate if available from API response.
                             };
 
-                            // Changed set_json to set_ex
+                            // Cache the result for future calls.
                             if let Err(e) = self
                                 .cache
                                 .set_ex(
@@ -192,26 +183,19 @@ impl DexClient for WhirlpoolClient {
                         }
                         Err(e) => {
                             error!(
-                                "Deserialize Whirlpool quote: URL {}, Error: {:?}, Body: {}",
+                                "Failed to deserialize Whirlpool quote: URL {}, Error: {:?}, Body: {}",
                                 url, e, text
                             );
-                            Err(anyhow!("Deserialize Whirlpool: {}. Body: {}", e, text))
+                            Err(anyhow!("Deserialize Whirlpool quote error: {}. Body: {}", e, text))
                         }
                     }
                 } else {
-                    let error_text = response
-                        .text()
-                        .await
-                        .unwrap_or_else(|_| "No error body".to_string());
+                    let error_text = response.text().await.unwrap_or_else(|_| "No error body".to_string());
                     error!(
-                        "Fetch Whirlpool quote failed: Status {}, URL {}, Body: {}",
+                        "Whirlpool quote fetch failed: Status {}, URL {}, Body: {}",
                         status, url, error_text
                     );
-                    Err(anyhow!(
-                        "Fetch Whirlpool quote: Status {}, Body: {}",
-                        status,
-                        error_text
-                    ))
+                    Err(anyhow!("Fetch Whirlpool quote failed: Status {}, Body: {}", status, error_text))
                 }
             }
             Err(e) => {

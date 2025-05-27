@@ -17,9 +17,9 @@ use crate::{
         executor::ArbitrageExecutor,
     },
     cache::Cache, // Keep Cache import
-    config::init_and_get_config,
+    config::init_and_get_config, // ArbError is used
     dex::get_all_clients_arc,
-    error::{ArbError, CircuitBreaker, RetryPolicy}, // Import CircuitBreaker and RetryPolicy
+    error::ArbError, // CircuitBreaker and RetryPolicy are not directly used in main
     metrics::Metrics,
     solana::{
         rpc::SolanaRpcClient,
@@ -99,7 +99,7 @@ async fn main() -> ArbResult<()> {
     // Initialize WebSocket Manager components
     // ws_setup_opt will hold the manager Arc and the initial raw updates receiver
     let ws_setup_opt: Option<(Arc<Mutex<SolanaWebsocketManager>>, broadcast::Receiver<RawAccountUpdate>)> = if !app_config.ws_url.is_empty() {
-        let (manager, raw_updates_rx_for_main) = SolanaWebsocketManager::new( // Renamed receiver
+        let (manager, raw_updates_rx_for_main) = SolanaWebsocketManager::new(
             app_config.ws_url.clone(),
             app_config.rpc_url_backup
                 .as_ref()
@@ -107,7 +107,12 @@ async fn main() -> ArbResult<()> {
                 .unwrap_or_else(Vec::new),
             app_config.ws_update_channel_size.unwrap_or(1024),
         );
+        // Start the websocket manager (heartbeat, reconnection)
         let manager_arc = Arc::new(Mutex::new(manager));
+        {
+            let mut mgr = manager_arc.lock().await;
+            let _ = mgr.start(Some(redis_cache.clone())).await;
+        }
         Some((manager_arc, raw_updates_rx_for_main))
     } else {
         warn!("WebSocket URL not configured, WebSocket manager not started.");
@@ -142,7 +147,8 @@ async fn main() -> ArbResult<()> {
         app_config.paper_trading, // Correctly pass paper_trading_mode
         arbitrage_engine.get_circuit_breaker(), // Pass the engine's circuit breaker
         arbitrage_engine.get_retry_policy().clone(), // Pass a clone of the engine's retry policy
-    ).with_solana_rpc(ha_solana_rpc_client.clone()));
+        None, // event_sender: Option<tokio::sync::mpsc::Sender<ExecutorEvent>>
+    ).with_solana_rpc(ha_solana_rpc_client.clone())); // Add None for the event_sender
     info!("ArbitrageExecutor initialized.");
 
     if let Some((ws_manager_arc, raw_updates_rx_consumer)) = ws_setup_opt { // Take ownership of components
@@ -161,19 +167,19 @@ async fn main() -> ArbResult<()> {
         tokio::spawn(async move {
             info!("[RawUpdateLogger] Started");
             loop {
-                match actual_raw_updates_rx.recv().await { // Use actual_raw_updates_rx here
+                match actual_raw_updates_rx.recv().await {
                     Ok(update) => {
-                        match update {
-                            RawAccountUpdate::Account { pubkey, ref data, timestamp } => {
-                                info!("[RawUpdateLogger] Account Update: Pubkey={}, DataLen={}, Timestamp={}", pubkey, data.len(), timestamp);
+                        info!(
+                            "[RawUpdateLogger] Update: Pubkey={}, DataLen={:?}, Timestamp={:?}",
+                            update.pubkey(),
+                            update.data().map(|d| d.len()),
+                            // Extract timestamp if possible
+                            match &update {
+                                RawAccountUpdate::Account { timestamp, .. } => Some(timestamp),
+                                RawAccountUpdate::Disconnected { timestamp, .. } => Some(timestamp),
+                                RawAccountUpdate::Error { timestamp, .. } => Some(timestamp),
                             }
-                            RawAccountUpdate::Disconnected { pubkey, timestamp } => {
-                                info!("[RawUpdateLogger] Disconnected: Pubkey={}, Timestamp={}", pubkey, timestamp);
-                            }
-                            RawAccountUpdate::Error { pubkey, ref message, timestamp } => {
-                                info!("[RawUpdateLogger] Error: Pubkey={}, Message='{}', Timestamp={}", pubkey, message, timestamp);
-                            }
-                        }
+                        );
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
                         warn!("[RawUpdateLogger] Lagged behind, some raw updates were missed.");
@@ -304,7 +310,7 @@ async fn main() -> ArbResult<()> {
                         }
                     }
                     Err(e) => {
-                        error!("Error during arbitrage detection cycle: {}", e);
+                        error!("[CAT: {:?}] Error during arbitrage detection cycle: {}", e.categorize(), e);
                     }
                 }
                 metrics.lock().await.record_main_cycle_duration(cycle_start_time.elapsed().as_millis() as u64);
@@ -331,7 +337,7 @@ async fn main() -> ArbResult<()> {
                         }
                     }
                     Err(e) => {
-                        error!("Error during fixed input opportunity detection: {}", e);
+                        error!("[CAT: {:?}] Error during fixed input opportunity detection: {}", e.categorize(), e);
                     }
                 }
 
@@ -349,7 +355,7 @@ async fn main() -> ArbResult<()> {
                         }
                     }
                     Err(e) => {
-                        error!("Error during multi-hop opportunity detection: {}", e);
+                        error!("[CAT: {:?}] Error during multi-hop opportunity detection: {}", e.categorize(), e);
                     }
                 }
             },
@@ -385,6 +391,12 @@ async fn main() -> ArbResult<()> {
                     }
                 }
                 info!("Background tasks aborted. Exiting.");
+                // Call engine shutdown
+                info!("[Main] Shutting down ArbitrageEngine...");
+                if let Err(e) = arbitrage_engine.shutdown().await {
+                    error!("[Main] Error during ArbitrageEngine shutdown: {}", e);
+                }
+                info!("[Main] ArbitrageEngine shutdown complete.");
                 break;
             }
         }

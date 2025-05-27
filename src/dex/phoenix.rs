@@ -1,10 +1,10 @@
 // src/dex/phoenix.rs
+//! Phoenix API client for querying swap quotes.
 
 use crate::cache::Cache;
 use crate::dex::http_utils::HttpRateLimiter;
 use crate::dex::quote::{DexClient, Quote as CanonicalQuote};
-use crate::dex::http_utils_shared::log_timed_request; // Added for potential future use
-
+use crate::dex::http_utils_shared::log_timed_request;
 use anyhow::{anyhow, Result as AnyhowResult};
 use async_trait::async_trait;
 use log::{debug, error, info, warn};
@@ -16,13 +16,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 static PHOENIX_RATE_LIMITER: Lazy<HttpRateLimiter> = Lazy::new(|| {
-    HttpRateLimiter::new(
-        5,
-        Duration::from_millis(200),
-        3,
-        Duration::from_millis(500),
-        vec![],
-    )
+    HttpRateLimiter::new(5, Duration::from_millis(200), 3, Duration::from_millis(500), vec![])
 });
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
@@ -35,28 +29,29 @@ struct PhoenixApiResponse {
     in_amount: String,
     #[serde(rename = "outAmount")]
     out_amount: String,
-    #[serde(rename = "priceImpactPercent")] 
-    price_impact_percent: Option<String>, 
+    #[serde(rename = "priceImpactPercent")]
+    price_impact_percent: Option<String>,
 }
 
 pub const _PHOENIX_PROGRAM_ID: &str = "PhoeNiXZ8ByJGLkxNfZRnkUfjvmuYqLR89jjFHGqdXY"; // Prefixed
 
 #[derive(Debug, Clone)]
 pub struct PhoenixClient {
-    _api_key: String, // Prefixed
+    _api_key: String, // Prefixed field for internal use.
     http_client: ReqwestClient,
     cache: Arc<Cache>,
     quote_cache_ttl_secs: u64,
 }
 
 impl PhoenixClient {
+    /// Constructs a new Phoenix client using the provided cache and an optional TTL for quotes.
     pub fn new(cache: Arc<Cache>, quote_cache_ttl_secs: Option<u64>) -> Self {
         let api_key = env::var("PHOENIX_API_KEY").unwrap_or_else(|_| {
             warn!("PHOENIX_API_KEY not set. This may affect API access for Phoenix.");
             String::new()
         });
         Self {
-            _api_key: api_key, // Used prefixed field
+            _api_key: api_key,
             http_client: ReqwestClient::builder()
                 .timeout(Duration::from_secs(10))
                 .user_agent(format!("RhodesArbBot/{}", env!("CARGO_PKG_VERSION")))
@@ -66,12 +61,8 @@ impl PhoenixClient {
                     ReqwestClient::new()
                 }),
             cache,
-            quote_cache_ttl_secs: quote_cache_ttl_secs.unwrap_or(10), 
+            quote_cache_ttl_secs: quote_cache_ttl_secs.unwrap_or(10),
         }
-    }
-
-    pub fn _get_api_key(&self) -> &str { // Prefixed
-        &self._api_key
     }
 }
 
@@ -92,28 +83,34 @@ impl DexClient for PhoenixClient {
             ];
             let cache_prefix = "quote:phoenix";
 
+            // Check cache first.
             if let Ok(Some(cached_quote)) = self.cache.get_json::<CanonicalQuote>(cache_prefix, &cache_key_params).await {
-                debug!("Phoenix quote cache HIT for {}->{} amount {}", input_token_mint, output_token_mint, amount_in_atomic_units);
+                debug!(
+                    "Phoenix quote cache HIT for {}->{} amount {}",
+                    input_token_mint, output_token_mint, amount_in_atomic_units
+                );
                 return Ok(cached_quote);
             }
-            debug!("Phoenix quote cache MISS for {}->{} amount {}", input_token_mint, output_token_mint, amount_in_atomic_units);
+            debug!(
+                "Phoenix quote cache MISS for {}->{} amount {}",
+                input_token_mint, output_token_mint, amount_in_atomic_units
+            );
 
+            // Construct the API URL.
             let url = format!(
-                "https://api.phoenix.trade/v1/quote?inputMint={}&outputMint={}&amountIn={}", 
+                "https://api.phoenix.trade/v1/quote?inputMint={}&outputMint={}&amountIn={}",
                 input_token_mint, output_token_mint, amount_in_atomic_units
             );
             info!("Requesting Phoenix quote from URL: {}", url);
 
             let request_start_time = Instant::now();
-            let response_result = PHOENIX_RATE_LIMITER // Corrected call
-                .get_with_backoff(&url, |request_url| {
-                    let mut req_builder = self.http_client.get(request_url);
-                    if !self._api_key.is_empty() { // Used prefixed field
-                        req_builder = req_builder.header("X-API-KEY", &self._api_key); // Assuming X-API-KEY for Phoenix, adjust if needed
-                    }
-                    req_builder
-                })
-                .await;
+            let response_result = PHOENIX_RATE_LIMITER.get_with_backoff(&url, |request_url| {
+                let mut req_builder = self.http_client.get(request_url);
+                if !self._api_key.is_empty() {
+                    req_builder = req_builder.header("X-API-KEY", &self._api_key);
+                }
+                req_builder
+            }).await;
             let request_duration_ms = request_start_time.elapsed().as_millis() as u64;
 
             match response_result {
@@ -122,11 +119,12 @@ impl DexClient for PhoenixClient {
                     if status.is_success() {
                         let text = response.text().await.map_err(|e| anyhow!("Failed to read Phoenix response text: {}", e))?;
                         debug!("Phoenix API response text for {}->{}: {}", input_token_mint, output_token_mint, text);
-
                         match serde_json::from_str::<PhoenixApiResponse>(&text) {
                             Ok(api_response) => {
-                                let input_amount_u64 = api_response.in_amount.parse::<u64>().map_err(|e| anyhow!("Parse Phoenix in_amount: {}", e))?;
-                                let output_amount_u64 = api_response.out_amount.parse::<u64>().map_err(|e| anyhow!("Parse Phoenix out_amount: {}", e))?;
+                                let input_amount_u64 = api_response.in_amount.parse::<u64>()
+                                    .map_err(|e| anyhow!("Parse Phoenix in_amount: {}", e))?;
+                                let output_amount_u64 = api_response.out_amount.parse::<u64>()
+                                    .map_err(|e| anyhow!("Parse Phoenix out_amount: {}", e))?;
                                 
                                 let slippage_estimate = api_response.price_impact_percent
                                     .as_ref()
@@ -152,7 +150,7 @@ impl DexClient for PhoenixClient {
                             }
                             Err(e) => {
                                 error!("Deserialize Phoenix quote: URL {}, Error: {:?}, Body: {}", url, e, text);
-                                Err(anyhow!("Deserialize Phoenix: {}. Body: {}", e, text))
+                                Err(anyhow!("Deserialize Phoenix error: {}. Body: {}", e, text))
                             }
                         }
                     } else {
@@ -162,8 +160,8 @@ impl DexClient for PhoenixClient {
                     }
                 }
                 Err(e) => {
-                     error!("HTTP request to Phoenix failed for URL {}: {}", url, e);
-                     Err(e)
+                    error!("HTTP request to Phoenix failed for URL {}: {}", url, e);
+                    Err(e)
                 }
             }
         }).await

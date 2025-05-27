@@ -63,12 +63,10 @@ pub async fn _exercise_dex_clients() {
         log_timed_request("Initialize Meteora Client", async { MeteoraClient::new(cache.clone(), None) }).await;
     let phoenix =
         log_timed_request("Initialize Phoenix Client", async { PhoenixClient::new(cache.clone(), None) }).await;
-    
-    let _ = orca._get_api_key(); // Use prefixed
+
     let _ = raydium.get_api_key(); // Fixed: use get_api_key, not _get_api_key
     let _ = whirlpool.get_api_key(); // Fixed: use get_api_key, not _get_api_key
     let _ = lifinity.get_api_key(); // Assuming this one might be used or was missed for prefixing
-    let _ = phoenix._get_api_key(); // Use prefixed
     
     let _ = orca.get_supported_pairs();
     let _ = raydium.get_supported_pairs();

@@ -1,4 +1,5 @@
 // src/dex/raydium.rs
+//! Raydium API client and pool parser for interacting with Raydium liquidity pools and obtaining quotes.
 
 use crate::cache::Cache;
 use crate::dex::http_utils_shared::build_auth_headers;
@@ -8,7 +9,7 @@ use crate::utils::{DexType, PoolInfo, PoolParser as UtilsPoolParser, PoolToken};
 
 use anyhow::{anyhow, Result as AnyhowResult};
 use async_trait::async_trait;
-use log::{debug, error, warn}; // Removed info
+use log::{debug, error, warn};
 use once_cell::sync::Lazy;
 use reqwest::Client as ReqwestClient;
 use serde::Deserialize;
@@ -19,8 +20,10 @@ use reqwest::header::{HeaderMap, HeaderName};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-
+/// RaydiumPoolParser implements the PoolParser trait using stub logic for now.
+/// Replace the stub logic with actual data extraction when the on-chain layout is available.
 pub struct RaydiumPoolParser;
+
 pub const RAYDIUM_LIQUIDITY_PROGRAM_V4: &str = "675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8";
 
 impl UtilsPoolParser for RaydiumPoolParser {
@@ -32,12 +35,28 @@ impl UtilsPoolParser for RaydiumPoolParser {
         warn!("Using STUB RaydiumPoolParser for address {}. Implement actual parsing logic.", address);
         Ok(PoolInfo {
             address,
-            name: format!("RaydiumStubPool/{}", address.to_string().chars().take(6).collect::<String>()),
-            token_a: PoolToken { mint: Pubkey::new_unique(), symbol: "TKA".to_string(), decimals: 6, reserve: 1_000_000_000 },
-            token_b: PoolToken { mint: Pubkey::new_unique(), symbol: "TKB".to_string(), decimals: 6, reserve: 1_000_000_000 },
-            fee_numerator: 25, 
-            fee_denominator: 10000, 
-            last_update_timestamp: SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs(),
+            name: format!(
+                "RaydiumStubPool/{}",
+                address.to_string().chars().take(6).collect::<String>()
+            ),
+            token_a: PoolToken {
+                mint: Pubkey::new_unique(),
+                symbol: "TKA".to_string(),
+                decimals: 6,
+                reserve: 1_000_000_000,
+            },
+            token_b: PoolToken {
+                mint: Pubkey::new_unique(),
+                symbol: "TKB".to_string(),
+                decimals: 6,
+                reserve: 1_000_000_000,
+            },
+            fee_numerator: 25,
+            fee_denominator: 10000,
+            last_update_timestamp: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs(),
             dex_type: DexType::Raydium,
         })
     }
@@ -53,7 +72,6 @@ impl UtilsPoolParser for RaydiumPoolParser {
     }
 }
 
-
 #[derive(Deserialize, Debug)]
 struct RaydiumApiResponse {
     #[serde(rename = "inputMint")]
@@ -66,8 +84,8 @@ struct RaydiumApiResponse {
     out_amount: String,
     #[serde(rename = "priceImpactPct")]
     price_impact_pct: Option<f64>,
-    #[serde(rename = "fee")] 
-    fee_amount: Option<String>, 
+    #[serde(rename = "fee")]
+    fee_amount: Option<String>,
 }
 
 #[derive(Debug, Clone)] 
@@ -103,10 +121,10 @@ impl RaydiumClient {
         &self.api_key
     }
     
-    // Use the api_key in other methods
+    // Example placeholder for an authenticated request.
     pub fn make_authenticated_request(&self) -> Result<(), Box<dyn std::error::Error>> {
-        let _key = self.get_api_key(); // This would use the method
-        // ... rest of implementation
+        let _key = self.get_api_key();
+        // ... implementation here
         Ok(())
     }
 }
@@ -137,10 +155,16 @@ impl DexClient for RaydiumClient {
         let cache_prefix = "quote:raydium";
 
         if let Some(cached_quote) = self.cache.get_json::<Quote>(cache_prefix, &cache_key_params).await? {
-            debug!("Raydium quote cache HIT for {}->{} amount {}", input_token_mint, output_token_mint, amount_in_atomic_units);
+            debug!(
+                "Raydium quote cache HIT for {}->{} amount {}",
+                input_token_mint, output_token_mint, amount_in_atomic_units
+            );
             return Ok(cached_quote);
         }
-        debug!("Raydium quote cache MISS for {}->{} amount {}", input_token_mint, output_token_mint, amount_in_atomic_units);
+        debug!(
+            "Raydium quote cache MISS for {}->{} amount {}",
+            input_token_mint, output_token_mint, amount_in_atomic_units
+        );
 
         let url = format!(
             "https://api.raydium.io/v2/sdk/token/quote?inputMint={}&outputMint={}&amount={}&slippage=0", 
@@ -153,12 +177,11 @@ impl DexClient for RaydiumClient {
             Some(self.api_key.as_str())
         };
 
-        // Assuming Raydium uses "X-API-KEY" header without a prefix. Adjust if necessary.
         let headers = build_auth_headers(api_key_option, HeaderName::from_static("x-api-key"), None);
 
-        let request_start_time = Instant::now(); // Define request_start_time here
+        let request_start_time = Instant::now();
         let response_result = RAYDIUM_RATE_LIMITER
-            .get_with_backoff(&url, |request_url| { // Removed &self.http_client
+            .get_with_backoff(&url, |request_url| {
                 self.http_client.get(request_url).headers(headers.clone())
             })
             .await;
@@ -169,8 +192,14 @@ impl DexClient for RaydiumClient {
             Ok(response) => {
                 let status = response.status();
                 if status.is_success() {
-                    let text = response.text().await.map_err(|e| anyhow!("Failed to read Raydium response text: {}", e))?;
-                    debug!("Raydium API response text for {}->{}: {}", input_token_mint, output_token_mint, text);
+                    let text = response
+                        .text()
+                        .await
+                        .map_err(|e| anyhow!("Failed to read Raydium response text: {}", e))?;
+                    debug!(
+                        "Raydium API response text for {}->{}: {}",
+                        input_token_mint, output_token_mint, text
+                    );
 
                     match serde_json::from_str::<RaydiumApiResponse>(&text) {
                         Ok(api_response) => {
@@ -189,24 +218,43 @@ impl DexClient for RaydiumClient {
                                 dex: self.get_name().to_string(),
                                 route: vec![input_token_mint.to_string(), output_token_mint.to_string()],
                                 latency_ms: Some(request_duration_ms),
-                                execution_score: None, 
-                                route_path: None,      
-                                slippage_estimate: api_response.price_impact_pct, 
+                                execution_score: None,
+                                route_path: None,
+                                slippage_estimate: api_response.price_impact_pct,
                             };
 
-                            if let Err(e) = self.cache.set_ex(cache_prefix, &cache_key_params, &quote, Some(self.quote_cache_ttl_secs)).await { // Changed to set_ex
-                                warn!("Failed to cache Raydium quote for {}->{}: {}", input_token_mint, output_token_mint, e);
+                            if let Err(e) = self.cache.set_ex(
+                                cache_prefix,
+                                &cache_key_params,
+                                &quote,
+                                Some(self.quote_cache_ttl_secs),
+                            )
+                            .await
+                            {
+                                warn!(
+                                    "Failed to cache Raydium quote for {}->{}: {}",
+                                    input_token_mint, output_token_mint, e
+                                );
                             }
                             Ok(quote)
                         }
                         Err(e) => {
-                            error!("Failed to deserialize Raydium quote from URL {}: {:?}. Response text: {}", url, e, text);
+                            error!(
+                                "Failed to deserialize Raydium quote from URL {}: {:?}. Response text: {}",
+                                url, e, text
+                            );
                             Err(anyhow!("Failed to deserialize Raydium quote from {}. Error: {}. Body: {}", url, e, text))
                         }
                     }
                 } else {
-                    let error_text = response.text().await.unwrap_or_else(|_| "Failed to read error response body".to_string());
-                    error!("Failed to fetch Raydium quote from URL {}: Status {}. Body: {}", url, status, error_text);
+                    let error_text = response
+                        .text()
+                        .await
+                        .unwrap_or_else(|_| "Failed to read error response body".to_string());
+                    error!(
+                        "Failed to fetch Raydium quote from URL {}: Status {}. Body: {}",
+                        url, status, error_text
+                    );
                     Err(anyhow!("Failed to fetch Raydium quote from {}: {}. Body: {}", url, status, error_text))
                 }
             }
@@ -218,7 +266,7 @@ impl DexClient for RaydiumClient {
     }
 
     fn get_supported_pairs(&self) -> Vec<(String, String)> {
-        warn!("RaydiumClient::get_supported_pairs returning empty; dynamic fetching or larger static list recommended.");
+        warn!("RaydiumClient::get_supported_pairs returning empty; dynamic fetching or a larger static list may be implemented.");
         vec![]
     }
 

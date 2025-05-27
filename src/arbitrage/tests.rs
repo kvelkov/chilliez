@@ -296,7 +296,7 @@ mod tests {
         // Reference get_current_status_string
         let _ = engine.get_current_status_string().await;
         // Reference start_services (implicitly tests dynamic_threshold_updater setup if Some)
-        let _ = engine.start_services().await;
+        let _ = engine.start_services(None).await;
     }
 
     #[test]

@@ -45,14 +45,6 @@ pub fn init_and_get_config() -> Arc<Config> {
     }
 }
 
-// Remove #[ctor::ctor] and the function using it, as the crate is not available.
-// Instead, call ensure_config_functions_used() from your main.rs or main initialization logic.
-
-pub fn ensure_config_functions_used() {
-    let _ = load_app_config();
-    let _ = load_app_config_from_file("Config.toml");
-}
-
 // Example usage in this module (for demonstration):
 #[cfg(test)]
 mod tests {

@@ -7,6 +7,7 @@ use solana_sdk::commitment_config::CommitmentConfig;
 use solana_sdk::pubkey::Pubkey;
 use std::sync::Arc;
 use tokio::time::Duration;
+use crate::error::ArbError;
 
 /// Provides high-availability RPC with retries/fallbacks.
 /// Not yet called by main flow but will be integrated for production HA.
@@ -227,50 +228,31 @@ impl SolanaRpcClient {
         }
     }
 
-    /// Get recent priority fee levels to determine competitive fee
+    /// Fetches recent prioritization fees for dynamic fee adjustment.
     pub async fn get_recent_prioritization_fees(
         &self,
-        recent_slots: usize,
-    ) -> Result<(u64, u64, u64)> {
-        match self
-            .primary_client
-            .get_recent_prioritization_fees(&[])
-            .await
-        {
-            Ok(fees) => {
-                if fees.is_empty() {
-                    return Ok((5000, 10000, 25000)); // Default values if no data
+    ) -> Result<Vec<u64>, ArbError> {
+        let mut last_err = None;
+        for client in std::iter::once(&self.primary_client).chain(self.fallback_clients.iter()) {
+            for _ in 0..=self.max_retries {
+                // The correct method is get_recent_prioritization_fees(&[Pubkey])
+                // Here, we pass an empty slice to get all recent fees.
+                match client.get_recent_prioritization_fees(&[]).await {
+                    Ok(fees) => {
+                        // fees is Vec<RpcPrioritizationFee>, extract the fee values
+                        let lamports: Vec<u64> = fees.into_iter().map(|f| f.prioritization_fee).collect();
+                        return Ok(lamports);
+                    }
+                    Err(e) => {
+                        last_err = Some(e);
+                        tokio::time::sleep(self.retry_delay).await;
+                    }
                 }
-
-                // Limit to the specified number of recent slots
-                let recent_fees: Vec<_> = fees
-                    .iter()
-                    .take(recent_slots)
-                    .map(|f| f.prioritization_fee)
-                    .collect();
-
-                if recent_fees.is_empty() {
-                    return Ok((5000, 10000, 25000)); // Default values if no data after filtering
-                }
-
-                // Calculate percentiles for fee strategy
-                let mut sorted_fees = recent_fees.clone();
-                sorted_fees.sort_unstable();
-
-                let p25_idx = (sorted_fees.len() as f64 * 0.25) as usize;
-                let p50_idx = (sorted_fees.len() as f64 * 0.5) as usize;
-                let p75_idx = (sorted_fees.len() as f64 * 0.75) as usize;
-
-                let p25 = sorted_fees.get(p25_idx).copied().unwrap_or(5000);
-                let p50 = sorted_fees.get(p50_idx).copied().unwrap_or(10000);
-                let p75 = sorted_fees.get(p75_idx).copied().unwrap_or(25000);
-
-                Ok((p25, p50, p75))
-            }
-            Err(err) => {
-                error!("Failed to get recent prioritization fees: {}", err);
-                Ok((5000, 10000, 25000)) // Default values on error
             }
         }
+        Err(ArbError::RpcError(format!(
+            "Failed to fetch recent prioritization fees: {:?}",
+            last_err
+        )))
     }
 }

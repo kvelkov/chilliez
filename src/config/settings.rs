@@ -1,5 +1,5 @@
 use serde::Deserialize;
-use std::{collections::HashMap, env, time::Duration};
+use std::{collections::HashMap, env};
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct Config {
@@ -35,8 +35,8 @@ pub struct Config {
     pub paper_trading: bool,
     pub metrics_log_path: Option<String>,
     pub health_check_token_symbol: Option<String>,
-    pub enable_fixed_input_arb_detection: bool, // Changed to bool, with default handling below
-    pub fixed_input_arb_amount: Option<f64>,    // Kept as Option<f64>
+    pub enable_fixed_input_arb_detection: bool,
+    pub fixed_input_arb_amount: Option<f64>,
     pub rpc_url_backup: Option<String>,
     pub rpc_max_retries: Option<u32>,
     pub rpc_retry_delay_ms: Option<u64>,
@@ -111,55 +111,52 @@ impl Config {
         }
     }
 
+    /// Returns a default config for testing purposes.
     pub fn test_default() -> Self {
         Self {
+            min_profit_pct: 0.1,
+            dynamic_threshold_update_interval_secs: Some(60),
             rpc_url: "http://localhost:8899".to_string(),
             rpc_url_secondary: None,
             ws_url: "ws://localhost:8900".to_string(),
-            wallet_path: "dummy-wallet.json".to_string(),
-            min_profit_pct: 0.001,
-            min_profit_usd_threshold: Some(0.0),
-            sol_price_usd: Some(1.0),
-            max_slippage_pct: 0.01,
-            transaction_priority_fee_lamports: 0,
-            default_priority_fee_lamports: 0,
-            pool_refresh_interval_secs: 10,
-            pool_read_timeout_ms: Some(1000),
+            wallet_path: "test_wallet.json".to_string(),
+            trader_wallet_keypair_path: Some("test_keypair.json".to_string()),
+            default_priority_fee_lamports: 5000,
             health_check_interval_secs: Some(60),
-            max_ws_reconnect_attempts: Some(5),
-            log_level: Some("info".to_string()),
-            redis_url: "redis://127.0.0.1/".to_string(),
-            redis_default_ttl_secs: 60,
-            dex_quote_cache_ttl_secs: None,
-            volatility_tracker_window: Some(20),
-            volatility_threshold_factor: Some(0.1),
-            dynamic_threshold_update_interval_secs: Some(300),
+            health_check_token_symbol: Some("SOL/USDC".to_string()),
             degradation_profit_factor: Some(1.5),
-            max_tx_fee_lamports_for_acceptance: Some(10000),
-            max_risk_score_for_acceptance: Some(1.0),
+            max_ws_reconnect_attempts: Some(5),
+            enable_fixed_input_arb_detection: false,
+            fixed_input_arb_amount: None,
+            sol_price_usd: Some(150.0),
+            min_profit_usd_threshold: Some(0.05),
+            max_slippage_pct: 0.005,
+            max_tx_fee_lamports_for_acceptance: Some(100000),
+            transaction_priority_fee_lamports: 10000,
+            pool_refresh_interval_secs: 10,
+            redis_url: "redis://127.0.0.1/".to_string(),
+            redis_default_ttl_secs: 3600,
+            dex_quote_cache_ttl_secs: Some(std::collections::HashMap::new()),
+            volatility_tracker_window: Some(20),
+            volatility_threshold_factor: Some(0.5),
+            max_risk_score_for_acceptance: Some(0.75),
             max_hops: Some(3),
             max_pools_per_hop: Some(5),
-            max_concurrent_executions: Some(1),
+            max_concurrent_executions: Some(10),
             execution_timeout_secs: Some(30),
             simulation_mode: false,
             paper_trading: false,
             metrics_log_path: None,
-            health_check_token_symbol: Some("SOL/USDC".to_string()),
-            enable_fixed_input_arb_detection: false,
-            fixed_input_arb_amount: None,
             rpc_url_backup: None,
             rpc_max_retries: Some(3),
-            rpc_retry_delay_ms: Some(500),
-            trader_wallet_keypair_path: Some("dummy-wallet.json".to_string()),
-            max_transaction_timeout_seconds: Some(30),
+            rpc_retry_delay_ms: Some(1000),
+            max_transaction_timeout_seconds: Some(120),
             ws_update_channel_size: Some(1024),
-            congestion_update_interval_secs: Some(60),
-            cycle_interval_seconds: Some(10),
+            congestion_update_interval_secs: Some(15),
+            cycle_interval_seconds: Some(5),
+            pool_read_timeout_ms: Some(1000),
+            log_level: Some("info".to_string()),
         }
-    }
-
-    pub fn get_rpc_timeout_duration(&self) -> Duration {
-        Duration::from_millis(self.pool_read_timeout_ms.unwrap_or(1000))
     }
 
     pub fn validate_and_log(&self) {

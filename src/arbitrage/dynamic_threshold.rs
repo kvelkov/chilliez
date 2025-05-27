@@ -58,15 +58,17 @@ impl VolatilityTracker {
         self.current_volatility
     }
 
-    pub fn get_price_history(&self) -> &VecDeque<f64> {
+    // TODO: This method is currently unused in the main program flow.
+    // It's kept for potential future use in debugging, detailed logging, or advanced volatility analysis.
+    pub fn _get_price_history(&self) -> &VecDeque<f64> {
         &self.price_history
     }
 }
 
 pub struct DynamicThresholdUpdater {
     volatility_tracker: VolatilityTracker,
-    config: Arc<Config>, 
-    _current_threshold: Arc<Mutex<f64>>, 
+    config: Arc<Config>,
+    _current_threshold: Arc<Mutex<f64>>,
     _update_interval: Duration, // Prefixed
     _last_update_time: Arc<Mutex<Instant>>, // Prefixed
 }
@@ -74,12 +76,12 @@ pub struct DynamicThresholdUpdater {
 impl DynamicThresholdUpdater {
     pub fn new(config: Arc<Config>) -> Self {
         let window_size = config.volatility_tracker_window.unwrap_or(DEFAULT_VOLATILITY_WINDOW);
-        let initial_threshold_pct = config.min_profit_pct * 100.0; 
+        let initial_threshold_pct = config.min_profit_pct * 100.0;
         let update_interval_secs = config.dynamic_threshold_update_interval_secs.unwrap_or(300);
 
         Self {
             volatility_tracker: VolatilityTracker::new(window_size),
-            config: Arc::clone(&config), 
+            config: Arc::clone(&config),
             _current_threshold: Arc::new(Mutex::new(initial_threshold_pct)),
             _update_interval: Duration::from_secs(update_interval_secs), // Prefixed
             _last_update_time: Arc::new(Mutex::new(Instant::now())), // Prefixed
@@ -93,11 +95,11 @@ impl DynamicThresholdUpdater {
             return;
         }
         // Directly access volatility_tracker's method
-        self.volatility_tracker.add_price(price); 
+        self.volatility_tracker.add_price(price);
         debug!(
             "Added price observation: {}. History size: {}. Volatility: {:.6}",
             price,
-            self.volatility_tracker.price_history.len(), 
+            self.volatility_tracker.price_history.len(),
             self.volatility_tracker.volatility()
         );
     }
@@ -105,9 +107,9 @@ impl DynamicThresholdUpdater {
     // This method is now synchronous
     pub fn get_current_threshold(&self) -> f64 {
         let volatility = self.volatility_tracker.volatility(); // Directly access
-        let base_threshold = self.config.min_profit_pct * 100.0; 
+        let base_threshold = self.config.min_profit_pct * 100.0;
 
-        let adjustment_factor = 1.0 + (volatility * BASE_THRESHOLD_ADJUSTMENT_FACTOR * 10.0); 
+        let adjustment_factor = 1.0 + (volatility * BASE_THRESHOLD_ADJUSTMENT_FACTOR * 10.0);
         let mut new_threshold = base_threshold * adjustment_factor;
 
         new_threshold = new_threshold.max(MIN_THRESHOLD_PCT).min(MAX_THRESHOLD_PCT);
@@ -120,12 +122,12 @@ impl DynamicThresholdUpdater {
     }
 
     pub async fn start_monitoring_task(
-        updater_arc: Arc<Mutex<DynamicThresholdUpdater>>, 
+        updater_arc: Arc<Mutex<DynamicThresholdUpdater>>,
         metrics: Arc<Mutex<Metrics>>,
-        engine_detector: Arc<Mutex<ArbitrageDetector>>, 
+        engine_detector: Arc<Mutex<ArbitrageDetector>>,
     ) {
         info!("DynamicThresholdUpdater monitoring task started.");
-        let (update_interval_secs, _price_provider_symbol) = { 
+        let (update_interval_secs, _price_provider_symbol) = {
             let updater_guard = updater_arc.lock().await;
             (
                 updater_guard.config.dynamic_threshold_update_interval_secs.unwrap_or(300),
@@ -138,20 +140,20 @@ impl DynamicThresholdUpdater {
             interval.tick().await;
             debug!("DynamicThresholdUpdater task tick.");
 
-            let new_threshold_pct = { 
-                let updater = updater_arc.lock().await; 
+            let new_threshold_pct = {
+                let updater = updater_arc.lock().await;
                 updater.get_current_threshold() // Call synchronous method
-            }; 
+            };
 
-            { 
+            {
                 let mut detector_guard = engine_detector.lock().await;
                 detector_guard.set_min_profit_threshold(new_threshold_pct);
-            } 
+            }
 
-            { 
+            {
                 let mut metrics_guard = metrics.lock().await;
                 metrics_guard.log_dynamic_threshold_update(new_threshold_pct / 100.0);
-            } 
+            }
 
             info!(
                 "DynamicThresholdUpdater Task: Applied new min profit threshold: {:.4}% to detector.",
@@ -164,13 +166,13 @@ impl DynamicThresholdUpdater {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::settings::Config; 
+    use crate::config::settings::Config;
     use tokio;
     use std::collections::HashMap;
 
     fn create_test_config(vol_window: Option<usize>, base_profit_pct: f64) -> Arc<Config> {
         Arc::new(Config {
-            min_profit_pct: base_profit_pct / 100.0, 
+            min_profit_pct: base_profit_pct / 100.0,
             dynamic_threshold_update_interval_secs: Some(60),
             rpc_url: "test_rpc_url".to_string(),
             rpc_url_secondary: None,
@@ -186,33 +188,33 @@ mod tests {
             fixed_input_arb_amount: None,
             sol_price_usd: Some(150.0),
             min_profit_usd_threshold: Some(0.05),
-            max_slippage_pct: 0.005, 
+            max_slippage_pct: 0.005,
             max_tx_fee_lamports_for_acceptance: Some(100000),
             
-            transaction_priority_fee_lamports: Some(10000).unwrap_or(5000), 
-            pool_refresh_interval_secs: Some(10).unwrap_or(30), 
-            redis_url: None::<String>.unwrap_or_else(|| "".to_string()), 
-            redis_default_ttl_secs: Some(3600).unwrap_or(300), 
+            transaction_priority_fee_lamports: Some(10000).unwrap_or(5000),
+            pool_refresh_interval_secs: Some(10).unwrap_or(30),
+            redis_url: None::<String>.unwrap_or_else(|| "".to_string()),
+            redis_default_ttl_secs: Some(3600).unwrap_or(300),
             dex_quote_cache_ttl_secs: Some(HashMap::new()), // Wrapped in Some()
-            volatility_tracker_window: vol_window, 
+            volatility_tracker_window: vol_window,
             volatility_threshold_factor: Some(0.5),
             max_risk_score_for_acceptance: Some(0.75),
             max_hops: Some(3),
             max_pools_per_hop: Some(5),
             max_concurrent_executions: Some(10),
             execution_timeout_secs: Some(30),
-            simulation_mode: Some(false).unwrap_or(true), 
-            paper_trading: Some(false).unwrap_or(false), 
+            simulation_mode: Some(false).unwrap_or(true),
+            paper_trading: Some(false).unwrap_or(false),
             metrics_log_path: None,
-            rpc_url_backup: None, 
+            rpc_url_backup: None,
             rpc_max_retries: Some(3),
             rpc_retry_delay_ms: Some(1000),
             max_transaction_timeout_seconds: Some(120),
             ws_update_channel_size: Some(1024),
             congestion_update_interval_secs: Some(15),
             cycle_interval_seconds: Some(5),
-            pool_read_timeout_ms: Some(1000), 
-            log_level: Some("info".to_string()), 
+            pool_read_timeout_ms: Some(1000),
+            log_level: Some("info".to_string()),
         })
     }
 

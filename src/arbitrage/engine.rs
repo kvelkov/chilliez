@@ -99,7 +99,7 @@ impl ArbitrageEngine {
         }
     }
 
-    pub async fn start_services(&self) {
+    pub async fn start_services(&self, cache: Option<Arc<crate::cache::Cache>>) {
         // Make update_pools live with an initial empty update
         // TODO: Load initial pools from a persistent source or configuration if available.
         if let Err(e) = self.update_pools(HashMap::new()).await {
@@ -108,7 +108,7 @@ impl ArbitrageEngine {
 
         if let Some(manager_arc) = &self.ws_manager {
             let manager = manager_arc.lock().await;
-            if let Err(e) = manager.start().await {
+            if let Err(e) = manager.start(cache.clone()).await {
                 error!("[ArbitrageEngine] Failed to start WebSocket manager: {}", e);
             } else {
                 info!("[ArbitrageEngine] WebSocket manager started successfully.");
@@ -138,7 +138,7 @@ impl ArbitrageEngine {
         // Make run_full_health_check live by calling it once on startup
         // TODO: Consider moving to a periodic task in the main application loop for continuous health monitoring.
         info!("[ArbitrageEngine] Performing initial full health check...");
-        self.run_full_health_check().await;
+        self.run_full_health_check(cache).await;
 
         // Make get_cached_pool_count (and thus with_pool_guard_async) live
         match self.get_cached_pool_count().await {
@@ -322,12 +322,14 @@ impl ArbitrageEngine {
         let mut ws_healthy = true;
         if let Some(manager_arc) = &self.ws_manager {
             let manager = manager_arc.lock().await;
+            // The .start() method now requires a cache argument (Option<Arc<Cache>>)
+            // Always provide an argument, e.g., None if you don't have a cache instance here.
             if !manager.is_connected().await {
                 ws_healthy = false;
                 let attempts = self.ws_reconnect_attempts.fetch_add(1, Ordering::Relaxed);
                 if attempts < self.max_ws_reconnect_attempts {
                     warn!("[ArbitrageEngine] WebSocket disconnected. Attempting reconnect (attempt {}/{})", attempts + 1, self.max_ws_reconnect_attempts);
-                    if let Err(e) = manager.start().await {
+                    if let Err(e) = manager.start(None).await { // <-- FIX: pass None for cache
                         error!(
                             "[ArbitrageEngine] WebSocket reconnect attempt failed: {}",
                             e
@@ -507,7 +509,7 @@ impl ArbitrageEngine {
     }
 
     // Added back run_full_health_check
-    pub async fn run_full_health_check(&self) {
+    pub async fn run_full_health_check(&self, _cache: Option<Arc<crate::cache::Cache>>) {
         info!("Running full engine health check (including DEX providers)...");
 
         // General health checks
@@ -515,6 +517,12 @@ impl ArbitrageEngine {
 
         // DEX specific checks
         self.dex_providers_health_check().await;
+
+        // Optionally, re-check WebSocket manager with cache
+        if let Some(manager_arc) = &self.ws_manager {
+            let manager = manager_arc.lock().await;
+            let _ = manager.start(None).await; // Pass None for cache argument
+        }
 
         info!("Full engine health check completed.");
     }

@@ -1,5 +1,5 @@
-// src/main.rs
-mod arbitrage; 
+// /Users/kiril/Desktop/chilliez/src/main.rs
+mod arbitrage;
 mod cache;
 mod config;
 mod dex;
@@ -7,13 +7,12 @@ mod error;
 mod metrics;
 mod solana;
 pub mod utils;
-pub mod websocket; // Ensuring this is present
+pub mod websocket;
 
 use crate::{
     arbitrage::{
-        calculator, 
-        // detector::ArbitrageDetector, // No longer need to instantiate detector here
-        engine::ArbitrageEngine, 
+        calculator,
+        engine::ArbitrageEngine,
         executor::ArbitrageExecutor,
     },
     cache::Cache,
@@ -23,27 +22,26 @@ use crate::{
     metrics::Metrics,
     solana::{
         rpc::SolanaRpcClient,
-        websocket::SolanaWebsocketManager,
+        websocket::{SolanaWebsocketManager, RawAccountUpdate, WebsocketUpdate}, // Added RawAccountUpdate, WebsocketUpdate
     },
     utils::{setup_logging, PoolInfo, ProgramConfig},
-    websocket::CryptoDataProvider, // Added for price_provider in Engine
+    websocket::CryptoDataProvider,
 };
-use log::{error, info, warn}; 
+use log::{error, info, warn};
 use solana_client::nonblocking::rpc_client::RpcClient as NonBlockingRpcClient;
 use solana_sdk::{pubkey::Pubkey, signature::read_keypair_file, signer::Signer};
 use std::collections::HashMap;
-use std::env; 
+use std::env;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{Mutex, RwLock};
-use tokio::time::interval; 
+use tokio::time::interval;
 
 #[tokio::main]
 async fn main() -> Result<(), ArbError> {
     setup_logging().expect("Failed to initialize logging");
     info!("Solana Arbitrage Bot starting...");
 
-    // Use the unified config loader:
     let app_config = init_and_get_config();
     info!("Application configuration loaded and validated successfully.");
 
@@ -51,14 +49,13 @@ async fn main() -> Result<(), ArbError> {
     program_config.log_details();
 
     let metrics = Arc::new(Mutex::new(Metrics::new(
-        app_config.sol_price_usd.unwrap_or(100.0), 
+        app_config.sol_price_usd.unwrap_or(100.0),
         app_config.metrics_log_path.clone(),
     )));
     metrics.lock().await.log_launch();
 
     info!("Initializing Solana RPC clients...");
     let primary_rpc_endpoint = app_config.rpc_url.clone();
-
     let fallback_rpc_endpoints: Vec<String> = app_config.rpc_url_backup
         .as_ref()
         .map(|s| s.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect())
@@ -97,21 +94,21 @@ async fn main() -> Result<(), ArbError> {
     info!("Trader wallet loaded: {}", wallet.pubkey());
 
     let simulation_mode_from_env = env::var("SIMULATION_MODE")
-        .unwrap_or_else(|_| "false".to_string()) 
+        .unwrap_or_else(|_| "false".to_string())
         .parse::<bool>()
-        .unwrap_or(false); 
+        .unwrap_or(false);
 
     let tx_executor: Arc<ArbitrageExecutor> = Arc::new(ArbitrageExecutor::new(
         wallet.clone(), direct_rpc_client.clone(),
         app_config.default_priority_fee_lamports,
         Duration::from_secs(app_config.max_transaction_timeout_seconds.expect("max_transaction_timeout_seconds must be set")),
-        simulation_mode_from_env, 
+        simulation_mode_from_env,
         app_config.paper_trading,
     ).with_solana_rpc(ha_solana_rpc_client.clone()));
     info!("ArbitrageExecutor initialized.");
 
-    let ws_manager = if !app_config.ws_url.is_empty() {
-        let (manager, _raw_update_receiver) = SolanaWebsocketManager::new(
+    let ws_manager_opt = if !app_config.ws_url.is_empty() {
+        let (manager, raw_updates_rx_for_main) = SolanaWebsocketManager::new( // Renamed receiver
             app_config.ws_url.clone(),
             app_config.rpc_url_backup
                 .as_ref()
@@ -119,14 +116,53 @@ async fn main() -> Result<(), ArbError> {
                 .unwrap_or_else(Vec::new),
             app_config.ws_update_channel_size.unwrap_or(1024),
         );
-        Some(Arc::new(Mutex::new(manager)))
-    } else { warn!("WebSocket URL not configured, WebSocket manager not started."); None };
+        let manager_arc = Arc::new(Mutex::new(manager));
+
+        // Spawn RawAccountUpdate consumer task
+        let mut raw_updates_rx_consumer = raw_updates_rx_for_main; // Use the receiver returned by new()
+        tokio::spawn(async move {
+            info!("[RawUpdateLogger] Started");
+            loop {
+                match raw_updates_rx_consumer.recv().await {
+                    Ok(update) => {
+                        match update {
+                            RawAccountUpdate::Account { pubkey, ref data, timestamp } => {
+                                info!("[RawUpdateLogger] Account Update: Pubkey={}, DataLen={}, Timestamp={}", pubkey, data.len(), timestamp);
+                                let _ = update.pubkey(); // Use accessor
+                                let _ = update.data();   // Use accessor
+                            }
+                            RawAccountUpdate::Disconnected { pubkey, timestamp } => {
+                                info!("[RawUpdateLogger] Disconnected: Pubkey={}, Timestamp={}", pubkey, timestamp);
+                            }
+                            RawAccountUpdate::Error { pubkey, ref message, timestamp } => {
+                                info!("[RawUpdateLogger] Error: Pubkey={}, Message='{}', Timestamp={}", pubkey, message, timestamp);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        error!("[RawUpdateLogger] Error receiving raw update: {}", e);
+                        if let tokio::sync::broadcast::error::RecvError::Lagged(_) = e {
+                            warn!("[RawUpdateLogger] Lagged behind, some raw updates were missed.");
+                        } else { // Closed
+                            info!("[RawUpdateLogger] Broadcast channel closed.");
+                            break;
+                        }
+                    }
+                }
+            }
+            info!("[RawUpdateLogger] Stopped");
+        });
+        Some(manager_arc)
+    } else {
+        warn!("WebSocket URL not configured, WebSocket manager not started.");
+        None
+    };
 
     let price_provider_instance: Option<Arc<dyn CryptoDataProvider + Send + Sync>> = None;
 
     let arbitrage_engine: Arc<ArbitrageEngine> = Arc::new(ArbitrageEngine::new(
         pools_map.clone(),
-        ws_manager.clone(),
+        ws_manager_opt.clone(),
         price_provider_instance,
         Some(ha_solana_rpc_client.clone()),
         app_config.clone(),
@@ -134,10 +170,16 @@ async fn main() -> Result<(), ArbError> {
         dex_api_clients.clone(),
     ));
     info!("ArbitrageEngine initialized.");
-    
 
-    if let Some(ws_manager) = &ws_manager {
-        arbitrage_engine.start_services().await; 
+    if let Some(ws_manager_arc) = &ws_manager_opt {
+        arbitrage_engine.start_services(Some(Arc::clone(&redis_cache))).await;
+
+        // Dummy subscription to make subscribe_to_account live
+        let dummy_pubkey_to_sub = solana_sdk::system_program::id();
+        info!("[Main] Subscribing to dummy account {} for testing purposes.", dummy_pubkey_to_sub);
+        if let Err(e) = ws_manager_arc.lock().await.subscribe_to_account(dummy_pubkey_to_sub, Some(redis_cache.clone())).await {
+            warn!("[Main] Failed to subscribe to dummy account: {}", e);
+        }
     }
 
     let engine_for_threshold_task: Arc<ArbitrageEngine> = Arc::clone(&arbitrage_engine);
@@ -146,7 +188,7 @@ async fn main() -> Result<(), ArbError> {
         info!("Dynamic threshold update task finished (normally runs indefinitely).");
     });
 
-    let executor_for_congestion_task: Arc<ArbitrageExecutor> = Arc::clone(&tx_executor); 
+    let executor_for_congestion_task: Arc<ArbitrageExecutor> = Arc::clone(&tx_executor);
     let congestion_update_interval_secs = app_config.congestion_update_interval_secs.unwrap_or(30);
     let congestion_task_handle = tokio::spawn(async move {
         info!("Starting congestion update task (interval: {}s).", congestion_update_interval_secs);
@@ -158,7 +200,7 @@ async fn main() -> Result<(), ArbError> {
             }
         }
     });
-    
+
     let engine_for_health_task: Arc<ArbitrageEngine> = Arc::clone(&arbitrage_engine);
     let health_check_interval_from_config = Duration::from_secs(app_config.health_check_interval_secs.unwrap_or(60));
     let health_check_task_handle = tokio::spawn(async move {
@@ -176,6 +218,10 @@ async fn main() -> Result<(), ArbError> {
     let mut main_cycle_interval = interval(Duration::from_secs(app_config.cycle_interval_seconds.expect("cycle_interval_seconds must be set")));
     main_cycle_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
+    // Interval for checking WebsocketUpdate
+    let mut ws_update_check_interval = interval(Duration::from_millis(500));
+
+
     loop {
         tokio::select! {
             _ = main_cycle_interval.tick() => {
@@ -191,7 +237,7 @@ async fn main() -> Result<(), ArbError> {
                         if !all_opportunities.is_empty() {
                             info!("Detected {} total opportunities in this cycle.", all_opportunities.len());
                             all_opportunities.sort_by(|a, b| b.profit_pct.partial_cmp(&a.profit_pct).unwrap_or(std::cmp::Ordering::Equal));
-                            
+
                             if let Some(best_opp) = all_opportunities.first() {
                                 info!("Best opportunity ID: {} with profit: {:.4}%", best_opp.id, best_opp.profit_pct);
                                 if app_config.paper_trading || simulation_mode_from_env {
@@ -226,11 +272,44 @@ async fn main() -> Result<(), ArbError> {
                 }
                 metrics.lock().await.record_main_cycle_duration(cycle_start_time.elapsed().as_millis() as u64);
             },
+            _ = ws_update_check_interval.tick(), if ws_manager_opt.is_some() => {
+                if let Some(ws_manager_arc_for_updates) = ws_manager_opt.as_ref().map(Arc::clone) {
+                    let mut manager_guard = ws_manager_arc_for_updates.lock().await;
+                    match manager_guard.try_recv_update().await {
+                        Ok(Some(WebsocketUpdate::PoolUpdate(pool_info))) => {
+                            info!("[WebsocketUpdateLogger] Pool Update: Name={}, Address={}", pool_info.name, pool_info.address);
+                            // Potentially update a shared pool map or trigger re-evaluation
+                            if let Err(e) = arbitrage_engine.update_pools(HashMap::from([(pool_info.address, Arc::new(pool_info))])).await {
+                                error!("[WebsocketUpdateLogger] Failed to update engine pools from WS: {}", e);
+                            }
+                        }
+                        Ok(Some(WebsocketUpdate::GenericUpdate(message))) => {
+                            info!("[WebsocketUpdateLogger] Generic Update: {}", message);
+                        }
+                        Ok(None) => { /* No update available */ }
+                        Err(e) => {
+                            warn!("[WebsocketUpdateLogger] Error trying to receive websocket update: {:?}", e);
+                        }
+                    }
+                }
+            },
             _ = tokio::signal::ctrl_c() => {
                 info!("CTRL-C received, shutting down tasks...");
                 threshold_task_handle.abort();
                 congestion_task_handle.abort();
                 health_check_task_handle.abort();
+
+                if let Some(manager_arc) = &ws_manager_opt {
+                    let dummy_pubkey_to_unsub = solana_sdk::system_program::id();
+                    info!("[Main] Unsubscribing from dummy account {} before shutdown.", dummy_pubkey_to_unsub);
+                    if let Err(e) = manager_arc.lock().await.unsubscribe(&dummy_pubkey_to_unsub).await {
+                         warn!("[Main] Failed to unsubscribe from dummy account: {}", e);
+                    }
+                    // Call stop
+                    manager_arc.lock().await.stop().await;
+                    info!("[Main] WebSocket manager stop called.");
+                }
+
                 info!("Background tasks aborted. Exiting.");
                 break;
             }
@@ -239,3 +318,4 @@ async fn main() -> Result<(), ArbError> {
     metrics.lock().await.summary();
     Ok(())
 }
+

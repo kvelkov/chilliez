@@ -16,14 +16,15 @@ use crate::{
         engine::ArbitrageEngine,
         executor::ArbitrageExecutor,
     },
-    cache::Cache,
+    cache::Cache, // Keep Cache import
     config::init_and_get_config,
     dex::get_all_clients_arc,
-    error::ArbError,
+    error::{ArbError, CircuitBreaker, RetryPolicy}, // Import CircuitBreaker and RetryPolicy
     metrics::Metrics,
     solana::{
         rpc::SolanaRpcClient,
         websocket::{SolanaWebsocketManager, RawAccountUpdate, WebsocketUpdate}, // Added RawAccountUpdate, WebsocketUpdate
+        // Ensure FutureExt is in scope if not already via other imports, or add `use futures::FutureExt;`
     },
     utils::{setup_logging, PoolInfo, ProgramConfig},
     websocket::CryptoDataProvider,
@@ -37,6 +38,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{broadcast, Mutex, RwLock}; // Added broadcast
 use tokio::time::interval;
+use futures::FutureExt; // Add this for .boxed()
 
 #[tokio::main]
 async fn main() -> ArbResult<()> {
@@ -94,6 +96,39 @@ async fn main() -> ArbResult<()> {
     };
     info!("Trader wallet loaded: {}", wallet.pubkey());
 
+    // Initialize WebSocket Manager components
+    // ws_setup_opt will hold the manager Arc and the initial raw updates receiver
+    let ws_setup_opt: Option<(Arc<Mutex<SolanaWebsocketManager>>, broadcast::Receiver<RawAccountUpdate>)> = if !app_config.ws_url.is_empty() {
+        let (manager, raw_updates_rx_for_main) = SolanaWebsocketManager::new( // Renamed receiver
+            app_config.ws_url.clone(),
+            app_config.rpc_url_backup
+                .as_ref()
+                .map(|s| s.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect())
+                .unwrap_or_else(Vec::new),
+            app_config.ws_update_channel_size.unwrap_or(1024),
+        );
+        let manager_arc = Arc::new(Mutex::new(manager));
+        Some((manager_arc, raw_updates_rx_for_main))
+    } else {
+        warn!("WebSocket URL not configured, WebSocket manager not started.");
+        None
+    };
+
+
+    // Initialize ArbitrageEngine BEFORE ArbitrageExecutor
+    let price_provider_instance: Option<Arc<dyn CryptoDataProvider + Send + Sync>> = None; // Assuming no price provider for now
+
+    let arbitrage_engine: Arc<ArbitrageEngine> = Arc::new(ArbitrageEngine::new(
+        pools_map.clone(),
+        ws_setup_opt.as_ref().map(|(manager_arc, _rx)| manager_arc.clone()), // Engine gets the manager Arc
+        price_provider_instance,
+        Some(ha_solana_rpc_client.clone()),
+        app_config.clone(),
+        metrics.clone(),
+        dex_api_clients.clone(),
+    ));
+    info!("ArbitrageEngine initialized.");
+
     let simulation_mode_from_env = env::var("SIMULATION_MODE")
         .unwrap_or_else(|_| "false".to_string())
         .parse::<bool>()
@@ -104,33 +139,33 @@ async fn main() -> ArbResult<()> {
         app_config.default_priority_fee_lamports,
         Duration::from_secs(app_config.max_transaction_timeout_seconds.expect("max_transaction_timeout_seconds must be set")),
         simulation_mode_from_env,
-        app_config.paper_trading,
+        app_config.paper_trading, // Correctly pass paper_trading_mode
+        arbitrage_engine.get_circuit_breaker(), // Pass the engine's circuit breaker
+        arbitrage_engine.get_retry_policy().clone(), // Pass a clone of the engine's retry policy
     ).with_solana_rpc(ha_solana_rpc_client.clone()));
     info!("ArbitrageExecutor initialized.");
 
-    let ws_manager_opt = if !app_config.ws_url.is_empty() {
-        let (manager, raw_updates_rx_for_main) = SolanaWebsocketManager::new( // Renamed receiver
-            app_config.ws_url.clone(),
-            app_config.rpc_url_backup
-                .as_ref()
-                .map(|s| s.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect())
-                .unwrap_or_else(Vec::new),
-            app_config.ws_update_channel_size.unwrap_or(1024),
-        );
-        let manager_arc = Arc::new(Mutex::new(manager));
+    if let Some((ws_manager_arc, raw_updates_rx_consumer)) = ws_setup_opt { // Take ownership of components
+        arbitrage_engine.start_services(Some(Arc::clone(&redis_cache))).await;
 
-        // Spawn RawAccountUpdate consumer task
-        let mut raw_updates_rx_consumer = raw_updates_rx_for_main; // Use the receiver returned by new()
+        // Dummy subscription to make subscribe_to_account live
+        let dummy_pubkey_to_sub = solana_sdk::system_program::id();
+        info!("[Main] Subscribing to dummy account {} for testing purposes.", dummy_pubkey_to_sub);
+        if let Err(e) = ws_manager_arc.lock().await.subscribe_to_account(dummy_pubkey_to_sub, Some(redis_cache.clone())).await {
+            warn!("[Main] Failed to subscribe to dummy account: {}", e);
+        }
+
+        // Spawn RawAccountUpdate consumer task only if ws_manager_opt is Some
+        // We use the raw_updates_rx_consumer obtained when ws_manager was initialized.
+        let mut actual_raw_updates_rx = raw_updates_rx_consumer; // Move receiver into the task
         tokio::spawn(async move {
             info!("[RawUpdateLogger] Started");
             loop {
-                match raw_updates_rx_consumer.recv().await {
+                match actual_raw_updates_rx.recv().await { // Use actual_raw_updates_rx here
                     Ok(update) => {
                         match update {
                             RawAccountUpdate::Account { pubkey, ref data, timestamp } => {
                                 info!("[RawUpdateLogger] Account Update: Pubkey={}, DataLen={}, Timestamp={}", pubkey, data.len(), timestamp);
-                                let _ = update.pubkey(); // Use accessor
-                                let _ = update.data();   // Use accessor
                             }
                             RawAccountUpdate::Disconnected { pubkey, timestamp } => {
                                 info!("[RawUpdateLogger] Disconnected: Pubkey={}, Timestamp={}", pubkey, timestamp);
@@ -140,47 +175,17 @@ async fn main() -> ArbResult<()> {
                             }
                         }
                     }
-                    Err(e) => {
-                        error!("[RawUpdateLogger] Error receiving raw update: {}", e);
-                        if let tokio::sync::broadcast::error::RecvError::Lagged(_) = e {
-                            warn!("[RawUpdateLogger] Lagged behind, some raw updates were missed.");
-                        } else { // Closed
-                            info!("[RawUpdateLogger] Broadcast channel closed.");
-                            break;
-                        }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                        warn!("[RawUpdateLogger] Lagged behind, some raw updates were missed.");
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                        info!("[RawUpdateLogger] Broadcast channel closed. Logger stopping.");
+                        break;
                     }
                 }
             }
             info!("[RawUpdateLogger] Stopped");
         });
-        Some(manager_arc)
-    } else {
-        warn!("WebSocket URL not configured, WebSocket manager not started.");
-        None
-    };
-
-    let price_provider_instance: Option<Arc<dyn CryptoDataProvider + Send + Sync>> = None;
-
-    let arbitrage_engine: Arc<ArbitrageEngine> = Arc::new(ArbitrageEngine::new(
-        pools_map.clone(),
-        ws_manager_opt.clone(),
-        price_provider_instance,
-        Some(ha_solana_rpc_client.clone()),
-        app_config.clone(),
-        metrics.clone(),
-        dex_api_clients.clone(),
-    ));
-    info!("ArbitrageEngine initialized.");
-
-    if let Some(ws_manager_arc) = &ws_manager_opt {
-        arbitrage_engine.start_services(Some(Arc::clone(&redis_cache))).await;
-
-        // Dummy subscription to make subscribe_to_account live
-        let dummy_pubkey_to_sub = solana_sdk::system_program::id();
-        info!("[Main] Subscribing to dummy account {} for testing purposes.", dummy_pubkey_to_sub);
-        if let Err(e) = ws_manager_arc.lock().await.subscribe_to_account(dummy_pubkey_to_sub, Some(redis_cache.clone())).await {
-            warn!("[Main] Failed to subscribe to dummy account: {}", e);
-        }
     }
 
     let engine_for_threshold_task: Arc<ArbitrageEngine> = Arc::clone(&arbitrage_engine);
@@ -219,20 +224,21 @@ async fn main() -> ArbResult<()> {
     let mut main_cycle_interval = interval(Duration::from_secs(app_config.cycle_interval_seconds.expect("cycle_interval_seconds must be set")));
     main_cycle_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
+    // Create a separate interval for the fixed input/multi-hop detection cycle part
+    let mut fixed_input_cycle_interval = interval(Duration::from_secs(app_config.cycle_interval_seconds.expect("cycle_interval_seconds must be set"))); // Or a different interval if needed
+    fixed_input_cycle_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+
     // Setup shutdown signal for the new WebSocket processing task
-    let (shutdown_tx_ws_processor, shutdown_rx_ws_processor) = broadcast::channel(1);
+       let (shutdown_tx_ws_processor, _shutdown_rx_ws_processor) = broadcast::channel(1); // Prefixed for now
     let mut ws_processor_task_handle = None;
 
-    if let Some(ws_manager_arc_for_loop) = ws_manager_opt.clone() {
+    // Check if the engine has a WS manager configured for its processing loop
+    if arbitrage_engine.ws_manager.is_some() {
         let engine_for_ws_loop = Arc::clone(&arbitrage_engine);
         info!("[Main] Spawning ArbitrageEngine's WebSocket update processing loop.");
         ws_processor_task_handle = Some(tokio::spawn(async move {
-            // We need to lock the manager to pass a mutable reference.
             // The loop inside process_websocket_updates_loop will handle repeated calls to try_recv_update.
-            let mut manager_guard = ws_manager_arc_for_loop.lock().await;
-            engine_for_ws_loop
-                .process_websocket_updates_loop(&mut manager_guard, shutdown_rx_ws_processor)
-                .await;
+            engine_for_ws_loop.process_websocket_updates_loop().await;
         }));
     } else {
         warn!("[Main] WebSocket manager not configured, ArbitrageEngine's WebSocket update processing loop will not be started.");
@@ -257,10 +263,17 @@ async fn main() -> ArbResult<()> {
                             if let Some(best_opp) = all_opportunities.first() {
                                 info!("Best opportunity ID: {} with profit: {:.4}%", best_opp.id, best_opp.profit_pct);
                                 if app_config.paper_trading || simulation_mode_from_env {
-                                    info!("Paper/Simulation Mode: Logging execution for opportunity {}", best_opp.id);
-                                    match tx_executor.execute_opportunity(best_opp).await {
-                                        Ok(signature) => {
-                                            info!("(Paper/Simulated) Successfully processed opportunity {} with signature: {}", best_opp.id, signature);
+                                    info!("Paper/Simulation Mode: Logging execution for opportunity {} (using execute_opportunity_with_retries)", best_opp.id);
+                                    // For paper/simulation, validity check can be simple or always true. Use .boxed()
+                                    let is_valid_sim = || async { true }.boxed();
+                                    match tx_executor.execute_opportunity_with_retries(best_opp, is_valid_sim).await {
+                                        Ok(_signature) => { // signature might be unused here
+                                            // execute_opportunity_with_retries returns Result<(), String>, map to Signature
+                                            // In simulation/paper mode, the signature is often dummy or not needed.
+                                            // We can return a dummy signature here or adjust the return type if needed.
+                                            // For now, let's just log success.
+                                            info!("(Paper/Simulated) Successfully processed opportunity {}", best_opp.id);
+                                            // Note: Actual signature is not returned by execute_opportunity_with_retries
                                         }
                                         Err(e) => {
                                             error!("(Paper/Simulated) Failed to process opportunity {}: {}", best_opp.id, e);
@@ -268,9 +281,17 @@ async fn main() -> ArbResult<()> {
                                     }
                                 } else {
                                     info!("Real Trading Mode: Attempting to execute opportunity {}", best_opp.id);
-                                     match tx_executor.execute_opportunity(best_opp).await {
-                                        Ok(signature) => {
-                                            info!("Successfully EXECUTED opportunity {} with signature: {}", best_opp.id, signature);
+                                    // Define the async closure for opportunity validity check
+                                    let engine_clone = Arc::clone(&arbitrage_engine);
+                                    let opp_clone = best_opp.clone();
+                                    let is_valid_real = move || {
+                                        let engine = Arc::clone(&engine_clone);
+                                        let opp = opp_clone.clone();
+                                        async move { engine.is_opportunity_still_valid(&opp).await }.boxed()
+                                    };
+                                     match tx_executor.execute_opportunity_with_retries(best_opp, is_valid_real).await {
+                                        Ok(_signature) => { // signature might be unused here
+                                            info!("Successfully EXECUTED opportunity {}", best_opp.id);
                                         }
                                         Err(e) => {
                                             error!("Failed to EXECUTE opportunity {}: {}", best_opp.id, e);
@@ -288,6 +309,50 @@ async fn main() -> ArbResult<()> {
                 }
                 metrics.lock().await.record_main_cycle_duration(cycle_start_time.elapsed().as_millis() as u64);
             },
+            // Separate tick for fixed input opportunities if desired, or combine with main cycle
+            // For simplicity, adding them sequentially in the main cycle tick here.
+            // _ = async {} => { // Placeholder if you want a separate select arm
+            // }
+            _ = fixed_input_cycle_interval.tick() => { // Use the new interval
+                info!("Fixed input and multi-hop detection cycle part.");
+                let fixed_input_amount_example = app_config.fixed_input_arb_amount.unwrap_or(100.0); // Ensure fixed_input_arb_amount is in your Config
+
+                match arbitrage_engine.discover_fixed_input_opportunities(fixed_input_amount_example).await {
+                    Ok(mut fixed_input_opps) => {
+                        if !fixed_input_opps.is_empty() {
+                            info!("Detected {} fixed input (2-hop) opportunities.", fixed_input_opps.len());
+                            fixed_input_opps.sort_by(|a, b| b.profit_pct.partial_cmp(&a.profit_pct).unwrap_or(std::cmp::Ordering::Equal));
+                            if let Some(best_opp) = fixed_input_opps.first() {
+                                info!("Best fixed input opportunity ID: {} with profit: {:.4}%", best_opp.id, best_opp.profit_pct);
+                                // Potentially execute similar to other opportunities
+                            }
+                        } else {
+                            info!("No fixed input (2-hop) opportunities found in this cycle part.");
+                        }
+                    }
+                    Err(e) => {
+                        error!("Error during fixed input opportunity detection: {}", e);
+                    }
+                }
+
+                match arbitrage_engine.discover_multihop_opportunities().await {
+                    Ok(mut multihop_opps) => {
+                        if !multihop_opps.is_empty() {
+                            info!("Detected {} multi-hop opportunities.", multihop_opps.len());
+                            multihop_opps.sort_by(|a, b| b.profit_pct.partial_cmp(&a.profit_pct).unwrap_or(std::cmp::Ordering::Equal));
+                            if let Some(best_opp) = multihop_opps.first() {
+                                info!("Best multi-hop opportunity ID: {} with profit: {:.4}%", best_opp.id, best_opp.profit_pct);
+                                // Potentially execute similar to other opportunities
+                            }
+                        } else {
+                            info!("No multi-hop opportunities found in this cycle part.");
+                        }
+                    }
+                    Err(e) => {
+                        error!("Error during multi-hop opportunity detection: {}", e);
+                    }
+                }
+            },
             // The WebSocket update checking logic has been moved to the dedicated arbitrage_engine.process_websocket_updates_loop task
             _ = tokio::signal::ctrl_c() => {
                 info!("CTRL-C received, shutting down tasks...");
@@ -295,7 +360,8 @@ async fn main() -> ArbResult<()> {
                 congestion_task_handle.abort();
                 health_check_task_handle.abort();
 
-                if let Some(manager_arc) = &ws_manager_opt {
+                // Use the manager from the engine for shutdown, if it was initialized
+                if let Some(manager_arc) = &arbitrage_engine.ws_manager {
                     // Send shutdown signal to the WebSocket processing loop
                     if shutdown_tx_ws_processor.send(()).is_err() {
                         error!("[Main] Failed to send shutdown signal to WebSocket processor task.");

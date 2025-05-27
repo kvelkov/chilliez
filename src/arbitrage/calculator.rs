@@ -24,6 +24,9 @@ static OPTIMAL_INPUT_CACHE: Lazy<DashMap<(Pubkey, Pubkey, bool, u64), TokenAmoun
 
 static MULTI_HOP_CACHE: Lazy<DashMap<String, (f64, f64, f64)>> = Lazy::new(DashMap::new);
 
+// Both functions below are essential for the arbitrage bot's core logic and must be called from the ArbitrageDetector logic.
+// If you see dead_code warnings, ensure they are called from ArbitrageDetector's opportunity search routines.
+
 pub fn calculate_simple_opportunity_result(
     pool_a: &PoolInfo,
     pool_b: &PoolInfo,
@@ -356,27 +359,12 @@ pub fn calculate_multihop_profit_and_slippage(
 
     if pools.is_empty() || directions.is_empty() || pools.len() != directions.len() || (last_fee_data.len() != pools.len() && !last_fee_data.is_empty()) {
         warn!("calculate_multihop_profit_and_slippage called with empty or mismatched inputs. Pools: {}, Directions: {}, Fees: {}", pools.len(), directions.len(), last_fee_data.len());
-        // Provide a default value for last_fee_data if it's empty and pools is not, to avoid panic in FeeManager
-        let default_last_fee_data_if_needed;
-        let _fees_to_use = if last_fee_data.is_empty() && !pools.is_empty() {
-            default_last_fee_data_if_needed = vec![(None, None, None); pools.len()];
-            &default_last_fee_data_if_needed
-        } else if last_fee_data.len() != pools.len() {
-             warn!("Correcting last_fee_data length mismatch for multi-hop calculation.");
-             default_last_fee_data_if_needed = vec![(None, None, None); pools.len()];
-            &default_last_fee_data_if_needed
-        }
-         else {
-            last_fee_data
-        };
-
-
          if pools.is_empty() { // Still handle if pools itself is empty
             MULTI_HOP_CACHE.insert(cache_key.clone(), (0.0, 1.0, 0.0));
             return (0.0, 1.0, 0.0);
          }
-          // Proceed with fees_to_use for FeeManager call if pools is not empty
     }
+
     let fees_to_use = if last_fee_data.len() != pools.len() {
         warn!("Correcting last_fee_data length mismatch for multi-hop calculation. Pools: {}, Fees: {}", pools.len(), last_fee_data.len());
         vec![(None, None, None); pools.len()] // Create a default vec of the correct length
@@ -480,29 +468,38 @@ fn get_dex_fee_rebate_percentage(dex_type: &crate::utils::DexType) -> f64 {
     }
 }
 
-pub fn calculate_rebate(pools: &[&PoolInfo], amounts: &[TokenAmount], sol_price_usd: f64) -> f64 {
+pub fn calculate_rebate(
+    pools: &[&PoolInfo], 
+    amounts: &[TokenAmount], 
+    directions: &[bool], // Added: true for A->B, false for B->A for each hop
+    sol_price_usd: f64
+) -> f64 {
     let mut total_rebate_usd = 0.0;
 
-    if pools.len() != amounts.len() {
-        warn!("calculate_rebate: pools and amounts slices have different lengths. pools: {}, amounts: {}. Cannot calculate rebate.", pools.len(), amounts.len());
+    if pools.len() != amounts.len() || pools.len() != directions.len() {
+        warn!(
+            "calculate_rebate: pools, amounts, or directions slices have mismatched lengths. Pools: {}, Amounts: {}, Directions: {}. Cannot calculate rebate.",
+            pools.len(), amounts.len(), directions.len()
+        );
         return 0.0;
     }
 
     for i in 0..pools.len() {
         let pool = pools[i];
         let input_amount_for_hop = &amounts[i]; // This is the input to the current hop
+        let is_a_to_b_this_hop = directions[i];
 
-        // Determine the input token for this hop to get its symbol for price lookup
-        // This assumes the `amounts` correspond to the primary direction of the hop (e.g. A->B or B->A)
-        // For simplicity, we'll assume amounts[i] has correct decimals for pool's input token.
-        // A more robust way would be to know which token of the pool is the input for this specific hop.
-        // For now, we'll use token_a as a proxy if amounts[i].decimals matches, else token_b. This is a heuristic.
-        let (input_token_mint_for_hop, input_token_symbol_for_hop) = if input_amount_for_hop.decimals == pool.token_a.decimals {
-            (&pool.token_a.mint, &pool.token_a.symbol)
-        } else if input_amount_for_hop.decimals == pool.token_b.decimals {
-            (&pool.token_b.mint, &pool.token_b.symbol)
+        let (input_token_mint_for_hop, input_token_symbol_for_hop, expected_input_decimals) = if is_a_to_b_this_hop {
+            (&pool.token_a.mint, &pool.token_a.symbol, pool.token_a.decimals)
         } else {
-            warn!("calculate_rebate: Could not determine input token for hop {} in pool {} based on decimals. Skipping rebate for this hop.", i, pool.name);
+            (&pool.token_b.mint, &pool.token_b.symbol, pool.token_b.decimals)
+        };
+
+        if input_amount_for_hop.decimals != expected_input_decimals {
+            warn!(
+                "calculate_rebate: Decimal mismatch for input amount in hop {} for pool {}. Expected {}, got {}. Skipping rebate for this hop.",
+                i, pool.name, expected_input_decimals, input_amount_for_hop.decimals
+            );
             continue;
         };
 
@@ -515,7 +512,7 @@ pub fn calculate_rebate(pools: &[&PoolInfo], amounts: &[TokenAmount], sol_price_
 
         total_rebate_usd += rebate_for_hop_usd;
         debug!("Rebate for hop {} (Pool: {}, DEX: {:?}): {:.6} {} (USD {:.4})",
-               i, pool.name, pool.dex_type, rebate_in_hop_input_token, input_token_symbol_for_hop, rebate_for_hop_usd);
+        i, pool.name, pool.dex_type, rebate_in_hop_input_token, input_token_symbol_for_hop, rebate_for_hop_usd);
     }
 
     info!("Total calculated rebate: {:.4} USD", total_rebate_usd);
@@ -523,7 +520,7 @@ pub fn calculate_rebate(pools: &[&PoolInfo], amounts: &[TokenAmount], sol_price_
 }
 
 pub fn clear_caches_if_needed() {
-    const MAX_CACHE_SIZE: usize = 10000; 
+    const MAX_CACHE_SIZE: usize = 10000;
     let mut cleared_any = false;
     if CALCULATION_CACHE.len() > MAX_CACHE_SIZE {
         CALCULATION_CACHE.clear();

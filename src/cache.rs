@@ -1,8 +1,7 @@
 // src/cache.rs
 //! Provides a Redis-based caching layer, primarily for DEX API responses.
-
+use anyhow::{anyhow, Result as AnyhowResult}; // Import anyhow macro and Result
 use crate::error::ArbError;
-use anyhow::{anyhow, Result as AnyhowResult};
 use log::{debug, error, info, warn};
 use redis::{aio::ConnectionManager, AsyncCommands};
 use serde::{de::DeserializeOwned, Serialize};
@@ -30,14 +29,14 @@ impl fmt::Debug for Cache {
 
 impl Cache {
     pub async fn new(redis_url: &str, default_ttl_secs: u64) -> AnyhowResult<Self> {
+        // anyhow::Result is fine for constructor where immediate panic/exit might be acceptable
         info!(
             "Initializing Redis connection manager for URL: {}",
             redis_url
         );
         let client = redis::Client::open(redis_url)?;
         let conn_manager = ConnectionManager::new(client).await.map_err(|e| {
-            error!("Failed to create Redis ConnectionManager: {}", e);
-            anyhow!("Failed to create Redis ConnectionManager: {}", e)
+            anyhow!("Failed to create Redis ConnectionManager: {}", e) // Use the imported anyhow macro
         })?;
         info!(
             "Redis ConnectionManager initialized successfully. Default TTL: {}s",
@@ -78,23 +77,17 @@ impl Cache {
                             "Failed to deserialize cached JSON for key {}: {}. Data: '{}'",
                             key, e, value_str
                         );
-                        Err(ArbError::Unknown(format!(
-                            "Cache deserialization error for key {}: {}",
-                            key, e
-                        )))
+                        Err(ArbError::ParseError(format!("Cache deserialization error for key {}: {}", key, e)))
                     }
                 }
             }
             Ok(None) => {
                 debug!("Cache MISS for key: {}", key);
                 Ok(None)
-            }
-            Err(e) => {
+            },
+            Err(e) => { // Redis specific error
                 error!("Redis GET error for key {}: {}", key, e);
-                Err(ArbError::Unknown(format!(
-                    "Redis GET error for key {}: {}",
-                    key, e
-                )))
+                Err(ArbError::CacheError(format!("Redis GET error for key {}: {}", key, e)))
             }
         }
     }
@@ -105,8 +98,10 @@ impl Cache {
         params: &[&str],
         value: &T,
         ttl_seconds: Option<u64>,
-    ) -> AnyhowResult<()> {
-        let key = Self::generate_key(prefix, params);
+    ) -> Result<(), ArbError> { // Changed to Result<(), ArbError>
+        let key = Self::generate_key(prefix, params); 
+        // The '?' operator will now work because ArbError implements From<serde_json::Error>
+        // and serde_json::to_string returns Result<String, serde_json::Error>
         let value_str = serde_json::to_string(value)?;
         let mut conn = self.conn_manager.clone();
         let ttl_to_use = ttl_seconds.unwrap_or(self.default_ttl_secs);
@@ -121,7 +116,7 @@ impl Cache {
             }
             Err(e) => {
                 warn!("Failed to SETEX key '{}' in Redis: {}", key, e);
-                Err(anyhow!(e))
+                Err(ArbError::CacheError(format!("Redis SETEX error for key {}: {}", key, e)))
             }
         }
     }
@@ -129,7 +124,7 @@ impl Cache {
     /// Delete a value from the cache by key.
     // TODO: This method is currently unused. It's available for future cache invalidation strategies.
     #[allow(dead_code)] // Add this attribute to explicitly acknowledge it's unused for now
-    pub async fn _delete(&self, key: &str) -> Result<(), String> {
+    pub async fn _delete(&self, key: &str) -> Result<(), ArbError> { // Changed to Result<(), ArbError>
         let mut conn = self.conn_manager.clone();
         match conn.del::<_, ()>(key).await {
             Ok(_) => {
@@ -138,7 +133,7 @@ impl Cache {
             }
             Err(e) => {
                 warn!("Failed to DELETE key '{}' in Redis: {}", key, e);
-                Err(format!("Redis DEL error for key {}: {}", key, e))
+                Err(ArbError::CacheError(format!("Redis DEL error for key {}: {}", key, e)))
             }
         }
     }
@@ -149,7 +144,7 @@ impl Cache {
         pool_pubkey: &str,
         pool_data: &T,
         ttl_seconds: Option<u64>,
-    ) -> anyhow::Result<()> {
+    ) -> Result<(), ArbError> { // Changed to Result<(), ArbError>
         // Use a consistent prefix for pool cache entries, e.g., "pool"
         self.set_ex("pool", &[pool_pubkey], pool_data, ttl_seconds)
             .await

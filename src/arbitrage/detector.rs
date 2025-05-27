@@ -377,7 +377,15 @@ impl ArbitrageDetector {
                 let amounts_for_rebate_stub: Vec<TokenAmount> = vec![
                     TokenAmount::from_float(current_opportunity.hops[0].input_amount, p1_input_tk.decimals),
                     TokenAmount::from_float(current_opportunity.hops[1].input_amount, p1_intermediate_tk.decimals)];
-                let estimated_rebate = calculate_rebate(&pools_for_rebate_stub, &amounts_for_rebate_stub, self.sol_price_usd);
+                // Determine directions for rebate calculation
+                // Hop 1: src_pool_is_a_to_b
+                // Hop 2: tgt_pool.token_a.mint == p1_intermediate_tk.mint (intermediate is input, original input is output)
+                let tgt_pool_input_is_token_a = tgt_pool.token_a.mint == p1_intermediate_tk.mint;
+                let directions_for_rebate: Vec<bool> = vec![
+                    src_pool_is_a_to_b,
+                    tgt_pool_input_is_token_a,
+                ];
+                let estimated_rebate = calculate_rebate(&pools_for_rebate_stub, &amounts_for_rebate_stub, &directions_for_rebate, self.sol_price_usd);
                 info!("Opportunity ID {}: Estimated rebate (placeholder logic): {:.6}", current_opportunity.id, estimated_rebate);
                 
                 let dex_path_strings_log: Vec<String> = current_opportunity.dex_path.iter().map(|d| format!("{:?}", d)).collect();
@@ -518,7 +526,14 @@ impl ArbitrageDetector {
                 let amounts_for_rebate_stub: Vec<TokenAmount> = vec![
                     TokenAmount::from_float(current_opportunity.hops[0].input_amount, p1_input_tk.decimals),
                     TokenAmount::from_float(current_opportunity.hops[1].input_amount, p1_intermediate_tk.decimals)];
-                let estimated_rebate = calculate_rebate(&pools_for_rebate_stub, &amounts_for_rebate_stub, self.sol_price_usd);
+                // Determine directions for rebate calculation
+                // Hop 1: src_pool.token_a.mint == p1_input_tk.mint
+                // Hop 2: tgt_pool.token_a.mint == p1_intermediate_tk.mint
+                let directions_for_rebate: Vec<bool> = vec![
+                    src_pool.token_a.mint == p1_input_tk.mint, // Direction for src_pool
+                    tgt_pool.token_a.mint == p1_intermediate_tk.mint, // Direction for tgt_pool
+                ];
+                let estimated_rebate = calculate_rebate(&pools_for_rebate_stub, &amounts_for_rebate_stub, &directions_for_rebate, self.sol_price_usd);
                 info!("Opportunity ID {}: Estimated rebate (placeholder logic): {:.6}", current_opportunity.id, estimated_rebate);
 
                 let dex_path_strings_log: Vec<String> = current_opportunity.dex_path.iter().map(|d| format!("{:?}", d)).collect();
@@ -530,14 +545,6 @@ impl ArbitrageDetector {
         }
     }
     
-    // This function is marked deprecated and calls find_all_opportunities.
-    // To ensure it's "used", it can remain as is. External callers should prefer find_all_opportunities.
-    // #[deprecated(note = "Use find_all_opportunities for 2-hop cycles as this is now a passthrough.")] // This was already commented out or removed
-    pub async fn find_two_hop_opportunities(&self, pools: &HashMap<Pubkey, Arc<PoolInfo>>, metrics: &mut Metrics) -> Result<Vec<MultiHopArbOpportunity>, ArbError> {
-        warn!("Deprecated find_two_hop_opportunities called, redirecting to find_all_opportunities.");
-        self.find_all_opportunities(pools, metrics).await
-    }
-
     pub async fn find_all_multihop_opportunities(
         &self, 
         pools: &HashMap<Pubkey, Arc<PoolInfo>>, 
@@ -709,8 +716,8 @@ impl ArbitrageDetector {
             for i in 0..current_opportunity.hops.len() {
                 pools_for_rebate_stub.push(all_involved_pools[i]);
                 amounts_for_rebate_stub.push(TokenAmount::from_float(current_opportunity.hops[i].input_amount, all_involved_tokens_for_hops[i].decimals));
-            } // Added sol_price_usd
-            let estimated_rebate = calculate_rebate(&pools_for_rebate_stub, &amounts_for_rebate_stub, self.sol_price_usd);
+            }
+            let estimated_rebate = calculate_rebate(&pools_for_rebate_stub, &amounts_for_rebate_stub, &directions, self.sol_price_usd);
             info!("Opportunity ID {}: Estimated rebate (placeholder logic): {:.6}", current_opportunity.id, estimated_rebate);
 
             
@@ -806,6 +813,6 @@ mod detector_usage_smoke_test {
         let detector = ArbitrageDetector::new(0.5, 0.05, 150.0, 5000);
         let mut metrics = Metrics::default();
         let pools: HashMap<Pubkey, Arc<PoolInfo>> = HashMap::new();
-        let _ = detector.find_two_hop_opportunities(&pools, &mut metrics).await;
+        let _ = detector.find_all_opportunities(&pools, &mut metrics).await;
     }
 }

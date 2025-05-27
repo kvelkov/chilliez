@@ -4,6 +4,7 @@ use crate::config::settings::Config;
 use crate::metrics::Metrics;
 use log::{debug, info, warn};
 use std::collections::VecDeque;
+use crate::websocket::CryptoDataProvider; // Added for price_provider
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::time::Duration;
@@ -125,13 +126,14 @@ impl DynamicThresholdUpdater {
         updater_arc: Arc<Mutex<DynamicThresholdUpdater>>,
         metrics: Arc<Mutex<Metrics>>,
         engine_detector: Arc<Mutex<ArbitrageDetector>>,
+        price_provider: Option<Arc<dyn CryptoDataProvider + Send + Sync>>, // Added price_provider
     ) {
         info!("DynamicThresholdUpdater monitoring task started.");
-        let (update_interval_secs, _price_provider_symbol) = {
+        let (update_interval_secs, health_check_symbol) = {
             let updater_guard = updater_arc.lock().await;
             (
                 updater_guard.config.dynamic_threshold_update_interval_secs.unwrap_or(300),
-                updater_guard.config.health_check_token_symbol.clone().unwrap_or_else(|| "SOL/USDC".to_string()),
+                updater_guard.config.health_check_token_symbol.clone().unwrap_or_default(),
             )
         };
         let mut interval = tokio::time::interval(Duration::from_secs(update_interval_secs));
@@ -139,6 +141,24 @@ impl DynamicThresholdUpdater {
         loop {
             interval.tick().await;
             debug!("DynamicThresholdUpdater task tick.");
+
+            // Fetch price and update volatility tracker
+            if let Some(provider) = &price_provider {
+                if !health_check_symbol.is_empty() {
+                    // Assuming provider.get_price now returns Option<f64> directly
+                    let price_option = provider.get_price(&health_check_symbol).await;
+
+                    match price_option {
+                        Some(price) => { // Successfully got a price
+                            let mut updater_guard = updater_arc.lock().await;
+                            updater_guard.add_price_observation(price); // This makes add_price_observation live
+                        }
+                        None => { // Original Result was an Err, or get_price itself returned None if it were Option-based
+                            warn!("[DynamicThresholdUpdater] Failed to get price for {} or price was not available.", health_check_symbol);
+                        }
+                    }
+                }
+            }
 
             let new_threshold_pct = {
                 let updater = updater_arc.lock().await;

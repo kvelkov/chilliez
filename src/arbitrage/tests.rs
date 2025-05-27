@@ -290,7 +290,7 @@ mod tests {
         // Reference discover_multihop_opportunities (re-added)
         let _ = engine.discover_multihop_opportunities().await;
         // Reference with_pool_guard_async (re-added)
-        let _ = engine.with_pool_guard_async("test", false, |_pools| async { Ok::<_, ArbError>(()) }).await;
+        let _ = engine.with_pool_guard_async(|_pools| ()).await;
         // Reference update_pools (re-added)
         let _ = engine.update_pools(HashMap::new()).await;
         // Reference get_current_status_string

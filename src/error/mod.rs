@@ -1,84 +1,85 @@
-use anyhow::Result as AnyhowResult;
-use std::fmt;
+// Removed: use anyhow::Result as AnyhowResult; // This was unused
 use std::time::{Duration, Instant};
 use tokio::time::sleep;
 use log::{error, warn, info, debug};
+use thiserror::Error; // Import thiserror::Error
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Error)] // Add thiserror::Error derive
 pub enum ArbError {
     /// Network/connectivity issues
+    #[error("Network Error: {0}")]
     NetworkError(String),
     
     /// WebSocket connection/data issues - CRITICAL for real-time data
+    #[error("WebSocket Error: {0}")]
     WebSocketError(String),
     
     /// DEX-specific errors (slippage, insufficient liquidity, etc.)
+    #[error("DEX Error: {0}")]
     DexError(String),
     
     /// RPC/Solana network errors
+    #[error("RPC Error: {0}")]
     RpcError(String),
     
     /// Parsing errors for pool data
+    #[error("Parse Error: {0}")]
     ParseError(String),
     
     /// Insufficient balance for trade execution
+    #[error("Insufficient Balance: {0}")]
     InsufficientBalance(String),
     
     /// Circuit breaker has been triggered
+    #[error("Circuit Breaker Triggered: {0}")]
     CircuitBreakerTriggered(String),
     
+    #[error("Circuit breaker is open, operation blocked")] // This attribute comes from thiserror
+    CircuitBreakerOpen,
+    
     /// Configuration errors
+    #[error("Config Error: {0}")]
     ConfigError(String),
     
     /// Cache/Redis errors
+    #[error("Cache Error: {0}")]
     CacheError(String),
     
     /// Timeout errors for operations
+    #[error("Timeout Error: {0}")]
     TimeoutError(String),
     
     /// Pool not found errors
+    #[error("Pool Not Found: {0}")]
     PoolNotFound(String),
     
     /// Trade execution errors
+    #[error("Execution Error: {0}")]
     ExecutionError(String),
     
     /// Transaction/blockchain errors
+    #[error("Transaction Error: {0}")]
     TransactionError(String),
     
     /// Simulation failed errors
+    #[error("Simulation Failed: {0}")]
     SimulationFailed(String),
     
     /// Unknown/unclassified errors
+    #[error("Unknown Error: {0}")]
     Unknown(String),
     
     /// Errors that should not be retried
+    #[error("Non-Recoverable Error: {0}")]
     NonRecoverable(String),
 }
 
-impl fmt::Display for ArbError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            ArbError::NetworkError(msg) => write!(f, "Network Error: {}", msg),
-            ArbError::WebSocketError(msg) => write!(f, "WebSocket Error: {}", msg),
-            ArbError::DexError(msg) => write!(f, "DEX Error: {}", msg),
-            ArbError::RpcError(msg) => write!(f, "RPC Error: {}", msg),
-            ArbError::ParseError(msg) => write!(f, "Parse Error: {}", msg),
-            ArbError::InsufficientBalance(msg) => write!(f, "Insufficient Balance: {}", msg),
-            ArbError::CircuitBreakerTriggered(msg) => write!(f, "Circuit Breaker Triggered: {}", msg),
-            ArbError::ConfigError(msg) => write!(f, "Config Error: {}", msg),
-            ArbError::CacheError(msg) => write!(f, "Cache Error: {}", msg),
-            ArbError::TimeoutError(msg) => write!(f, "Timeout Error: {}", msg),
-            ArbError::PoolNotFound(msg) => write!(f, "Pool Not Found: {}", msg),
-            ArbError::ExecutionError(msg) => write!(f, "Execution Error: {}", msg),
-            ArbError::TransactionError(msg) => write!(f, "Transaction Error: {}", msg),
-            ArbError::SimulationFailed(msg) => write!(f, "Simulation Failed: {}", msg),
-            ArbError::Unknown(msg) => write!(f, "Unknown Error: {}", msg),
-            ArbError::NonRecoverable(msg) => write!(f, "Non-Recoverable Error: {}", msg),
-        }
+// Implement From<serde_json::Error> for ArbError
+impl From<serde_json::Error> for ArbError {
+    fn from(err: serde_json::Error) -> Self {
+        ArbError::ParseError(format!("JSON serialization/deserialization error: {}", err))
     }
 }
-
-impl std::error::Error for ArbError {}
 
 impl ArbError {
     /// Determines if an error is recoverable through retry
@@ -94,6 +95,7 @@ impl ArbError {
             ArbError::ParseError(_) => false, // Data format issues aren't recoverable
             ArbError::InsufficientBalance(_) => false, // Need to wait for balance
             ArbError::CircuitBreakerTriggered(_) => false, // Manual intervention needed
+            ArbError::CircuitBreakerOpen => false, // Not recoverable by immediate retry
             ArbError::ConfigError(_) => false, // Config needs fixing
             ArbError::CacheError(_) => true, // Redis might recover
             ArbError::TimeoutError(_) => true, // Timeouts are usually recoverable
@@ -148,6 +150,7 @@ impl ArbError {
             ArbError::ParseError(_) => ErrorCategory::Data,
             ArbError::InsufficientBalance(_) => ErrorCategory::Balance,
             ArbError::CircuitBreakerTriggered(_) => ErrorCategory::Safety,
+            ArbError::CircuitBreakerOpen => ErrorCategory::Safety,
             ArbError::ConfigError(_) => ErrorCategory::Configuration,
             ArbError::CacheError(_) => ErrorCategory::Infrastructure,
             ArbError::TimeoutError(_) => ErrorCategory::Network,
@@ -285,9 +288,9 @@ impl CircuitBreaker {
 /// Retry policy with exponential backoff
 #[derive(Debug, Clone)]
 pub struct RetryPolicy {
-    max_attempts: u32,
-    base_delay: Duration,
-    max_delay: Duration,
+    pub max_attempts: u32,     // Made public
+    pub base_delay: Duration,      // Made public
+    pub max_delay: Duration,       // Made public
 }
 
 impl RetryPolicy {

@@ -3,7 +3,6 @@ use crate::utils::{PoolInfo, TokenAmount};
 use dashmap::DashMap;
 use log::{debug, warn};
 use once_cell::sync::Lazy;
-use solana_sdk::pubkey::Pubkey;
 
 #[derive(Debug, Clone)]
 

@@ -1,83 +1,133 @@
 // src/dex/orca.rs
-//! Orca API client for obtaining liquidity pool swap quotes and a pool parser for Orca.
-
-use crate::dex::http_utils::HttpRateLimiter;
-use crate::dex::quote::{DexClient, Quote};
-use crate::utils::{DexType, PoolInfo, PoolParser as UtilsPoolParser, PoolToken};
 use crate::cache::Cache;
-use crate::dex::http_utils_shared::{build_auth_headers, log_timed_request};
+use crate::dex::http_utils::HttpRateLimiter;
+use crate::dex::quote::{DexClient, Quote as CanonicalQuote};
+use crate::solana::rpc::SolanaRpcClient;
+use crate::utils::{DexType, PoolInfo, PoolParser as UtilsPoolParser, PoolToken};
 use anyhow::{anyhow, Result as AnyhowResult};
 use async_trait::async_trait;
-use log::{debug, error, warn};
+use bytemuck::{Pod, Zeroable};
+use log::{debug, error, info, warn};
 use once_cell::sync::Lazy;
+use solana_sdk::pubkey::Pubkey; // Added import for Pubkey
 use reqwest::Client as ReqwestClient;
-use reqwest::header::AUTHORIZATION;
-use serde::Deserialize;
-use solana_sdk::pubkey::Pubkey;
+use serde::{Deserialize, Serialize};
 use std::env;
-use std::str::FromStr;
 use std::sync::Arc;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
+
+pub const ORCA_SWAP_PROGRAM_ID_V2: &str = "9W959DqEETiGZocYWCQPaJ6sBmUzgfxXfqGeTEdp3aQP";
+
+// --- Orca Pool Parser V2 ---
+#[derive(Clone, Copy, Debug, Pod, Zeroable)]
+#[repr(C)]
+pub struct OrcaPoolStateV2 {
+    // Based on common Orca V2 pool layouts. Ensure this matches the actual structure.
+    pub _account_type: u8, // Typically 2 for Pool
+    pub _bump_seed: u8,
+    pub _padding0: [u8; 6],
+    pub token_a_mint: Pubkey, // Uses the imported Pubkey
+    pub token_b_mint: Pubkey, // Uses the imported Pubkey
+    pub token_a_vault: Pubkey, // Uses the imported Pubkey
+    pub token_b_vault: Pubkey, // Uses the imported Pubkey
+    pub lp_token_mint: Pubkey, // Uses the imported Pubkey
+    // ... other fields like fees, curve type etc.
+    // For simplicity, focusing on mints and vaults for PoolInfo.
+    // Ensure the total size matches the on-chain account data size you expect.
+    // This is a minimal example. A full struct would be larger.
+    pub _padding1: [u8; 128], // 128 bytes. [u8; 128] is Pod.
+    pub _padding2: [u8; 30],  // 30 bytes. [u8; 30] is Pod. Total padding = 158 bytes.
+}
+const ORCA_POOL_STATE_V2_SIZE: usize = std::mem::size_of::<OrcaPoolStateV2>(); // Should be 326 if padding is correct
 
 pub struct OrcaPoolParser;
-pub const ORCA_SWAP_PROGRAM_ID_V2: &str = "9W959DqEETiGZoccp2FfeJNjCagVfgtsJy72RykeK2rK";
 
+#[async_trait]
 impl UtilsPoolParser for OrcaPoolParser {
-    fn parse_pool_data(address: Pubkey, data: &[u8]) -> AnyhowResult<PoolInfo> {
-        if data.len() < 100 {
-            error!("Orca pool parsing failed for {} - Insufficient data length: {}", address, data.len());
-            return Err(anyhow!("Data too short for Orca pool: {}", address));
+    async fn parse_pool_data(
+        &self,
+        address: Pubkey,
+        data: &[u8], // address is Pubkey
+        rpc_client: &Arc<SolanaRpcClient>,
+    ) -> AnyhowResult<PoolInfo> {
+        if data.len() < ORCA_POOL_STATE_V2_SIZE {
+            return Err(anyhow!(
+                "Data too short for Orca V2 pool {}: expected {} bytes, got {}",
+                address,
+                ORCA_POOL_STATE_V2_SIZE,
+                data.len()
+            ));
         }
-        warn!("Using STUB OrcaPoolParser for address {}. Implement actual parsing logic.", address);
+
+        let state: &OrcaPoolStateV2 = bytemuck::from_bytes(&data[..ORCA_POOL_STATE_V2_SIZE]);
+
+        // Fetch reserves and mint decimals in parallel
+        let (reserve_a, reserve_b, decimals_a, decimals_b): (u64, u64, u8, u8) = tokio::try_join!(
+            rpc_client.get_token_account_balance(&state.token_a_vault),
+            rpc_client.get_token_account_balance(&state.token_b_vault),
+            rpc_client.get_token_mint_decimals(&state.token_a_mint),
+            rpc_client.get_token_mint_decimals(&state.token_b_mint)
+        )?;
+
         Ok(PoolInfo {
             address,
-            name: format!("OrcaStubPool/{}", address.to_string().chars().take(6).collect::<String>()),
-            token_a: PoolToken { 
-                mint: Pubkey::new_unique(), 
-                symbol: "TKA".to_string(), 
-                decimals: 6, 
-                reserve: 1_000_000_000 
+            name: format!("OrcaV2-{}", address.to_string().chars().take(4).collect::<String>()),
+            token_a: PoolToken {
+                mint: state.token_a_mint,
+                symbol: format!("TKA-{}", state.token_a_mint.to_string().chars().take(4).collect::<String>()),
+                decimals: decimals_a,
+                reserve: reserve_a,
             },
-            token_b: PoolToken { 
-                mint: Pubkey::new_unique(), 
-                symbol: "TKB".to_string(), 
-                decimals: 6, 
-                reserve: 1_000_000_000 
+            token_b: PoolToken {
+                mint: state.token_b_mint,
+                symbol: format!("TKB-{}", state.token_b_mint.to_string().chars().take(4).collect::<String>()),
+                decimals: decimals_b,
+                reserve: reserve_b,
             },
-            fee_numerator: 30, 
+            // Placeholder fees, actual fees depend on the curve and pool config
+            fee_numerator: 30, // e.g., 0.30%
             fee_denominator: 10000,
-            last_update_timestamp: SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs(),
+            last_update_timestamp: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs(),
             dex_type: DexType::Orca,
         })
     }
 
-    fn get_program_id() -> Pubkey {
-        Pubkey::from_str(ORCA_SWAP_PROGRAM_ID_V2).expect("Static Orca program ID should be valid")
-    }
-
-    fn get_dex_type() -> DexType { 
-        DexType::Orca 
+    fn get_program_id(&self) -> Pubkey {
+        ORCA_SWAP_PROGRAM_ID_V2.parse().unwrap() // Pubkey::from_str is an alias for str::parse::<Pubkey>
     }
 }
 
-#[derive(Deserialize, Debug)]
-pub struct OrcaQuoteResponse {
-    #[serde(rename = "inputMint")]
-    input_mint: String,
-    #[serde(rename = "outputMint")]
-    output_mint: String,
-    #[serde(rename = "inAmount")]
-    in_amount: String,
+// --- Orca API Client (for V1 API / Legacy Pools) ---
+
+#[derive(Deserialize, Serialize, Debug, Clone)]
+struct OrcaApiRoute {
     #[serde(rename = "outAmount")]
     out_amount: String,
-    pub route: Option<Vec<String>>,
-    #[serde(rename = "slippageBps")]
-    pub slippage_bps: Option<u64>,
+    // ... other fields like `amount`, `networkFee`, `minAmountOut` might be present
 }
+
+#[derive(Deserialize, Serialize, Debug, Clone)]
+struct OrcaApiQuoteResponse {
+    route: Vec<OrcaApiRoute>, // Orca API returns an array of routes, usually we take the first.
+    // ... other top-level fields
+}
+
+static ORCA_API_RATE_LIMITER: Lazy<HttpRateLimiter> = Lazy::new(|| {
+    HttpRateLimiter::new(
+        5, // Max concurrent requests
+        Duration::from_millis(200), // min_delay
+        3, // max_retries
+        Duration::from_millis(500), // base_backoff
+        vec![], // fallback_urls
+    )
+});
 
 #[derive(Debug, Clone)]
 pub struct OrcaClient {
-    _api_key: String,
+    api_key: String,
     http_client: ReqwestClient,
     cache: Arc<Cache>,
     quote_cache_ttl_secs: u64,
@@ -86,131 +136,129 @@ pub struct OrcaClient {
 impl OrcaClient {
     pub fn new(cache: Arc<Cache>, quote_cache_ttl_secs: Option<u64>) -> Self {
         let api_key = env::var("ORCA_API_KEY").unwrap_or_else(|_| {
-            warn!("ORCA_API_KEY not set. API calls might be limited or fail.");
+            warn!("ORCA_API_KEY not set. This might affect API access for Orca legacy pools.");
             String::new()
         });
-
         Self {
-            _api_key: api_key,
+            api_key,
             http_client: ReqwestClient::builder()
                 .timeout(Duration::from_secs(10))
                 .user_agent(format!("RhodesArbBot/{}", env!("CARGO_PKG_VERSION")))
                 .build()
-                .unwrap_or_else(|e| { 
-                    warn!("Failed to build ReqwestClient for Orca, using default: {}", e); 
-                    ReqwestClient::new() 
+                .unwrap_or_else(|e| {
+                    warn!("Failed to build ReqwestClient for Orca, using default: {}", e);
+                    ReqwestClient::new()
                 }),
             cache,
-            quote_cache_ttl_secs: quote_cache_ttl_secs.unwrap_or(60),
+            quote_cache_ttl_secs: quote_cache_ttl_secs.unwrap_or(60), // Example TTL
         }
     }
 }
 
-static ORCA_RATE_LIMITER: Lazy<HttpRateLimiter> = Lazy::new(|| {
-    HttpRateLimiter::new(5, Duration::from_millis(200), 3, Duration::from_millis(500), vec![])
-});
-
 #[async_trait]
 impl DexClient for OrcaClient {
     async fn get_best_swap_quote(
-        &self, 
-        input_token_mint: &str, 
-        output_token_mint: &str, 
-        amount_in_atomic_units: u64
-    ) -> AnyhowResult<Quote> {
-        let operation_label = format!("OrcaClient_GetQuote_{}_{}", input_token_mint, output_token_mint);
-        
-        log_timed_request(&operation_label, async {
-            let cache_key_params = [input_token_mint, output_token_mint, &amount_in_atomic_units.to_string()];
-            let cache_prefix = "quote:orca";
-            
-            if let Ok(Some(cached_quote)) = self.cache.get_json::<Quote>(cache_prefix, &cache_key_params).await {
-                debug!("Orca quote cache HIT for {}->{} amount {}", input_token_mint, output_token_mint, amount_in_atomic_units);
-                return Ok(cached_quote);
-            }
+        &self,
+        input_token_mint: &str,
+        output_token_mint: &str,
+        amount_in_atomic_units: u64,
+    ) -> AnyhowResult<CanonicalQuote> {
+        let cache_key_params = [
+            input_token_mint,
+            output_token_mint,
+            &amount_in_atomic_units.to_string(),
+        ];
+        let cache_prefix = "quote:orca_v1";
 
-            debug!("Orca quote cache MISS for {}->{} amount {}", input_token_mint, output_token_mint, amount_in_atomic_units);
-
-            let url = format!(
-                "https://api.orca.so/v2/solana/quote?inputMint={}&outputMint={}&amountIn={}", 
+        if let Ok(Some(cached_quote)) = self.cache.get_json::<CanonicalQuote>(cache_prefix, &cache_key_params).await {
+            debug!(
+                "Orca (Legacy) quote cache HIT for {}->{} amount {}",
                 input_token_mint, output_token_mint, amount_in_atomic_units
             );
+            return Ok(cached_quote);
+        }
+        debug!(
+            "Orca (Legacy) quote cache MISS for {}->{} amount {}",
+            input_token_mint, output_token_mint, amount_in_atomic_units
+        );
 
-            let request_start_time = Instant::now();
-            // Build headers using Bearer token scheme if API key is set.
-            let api_key_option = if self._api_key.is_empty() { None } else { Some(self._api_key.as_str()) };
-            let headers = build_auth_headers(api_key_option, AUTHORIZATION, Some("Bearer "));
-            
-            let response_result = ORCA_RATE_LIMITER.get_with_backoff(&url, |request_url| {
-                self.http_client.get(request_url).headers(headers.clone())
-            }).await;
+        let url = format!(
+            "https://api.orca.so/v1/quote/routes?input={}&output={}&amount={}&slippage=0.5", // slippage can be configurable
+            input_token_mint, output_token_mint, amount_in_atomic_units
+        );
+        info!("Requesting Orca (Legacy) quote from URL: {}", url);
 
-            let request_duration_ms = request_start_time.elapsed().as_millis() as u64;
+        let request_start_time = Instant::now();
+        let response_result = ORCA_API_RATE_LIMITER // Now correctly refers to the static variable
+            .get_with_backoff(&url, |request_url| {
+                let mut req_builder = self.http_client.get(request_url);
+                if !self.api_key.is_empty() {
+                    req_builder = req_builder.header("X-API-KEY", &self.api_key);
+                }
+                req_builder
+            })
+            .await;
+        let request_duration_ms = request_start_time.elapsed().as_millis() as u64;
 
-            match response_result {
-                Ok(response) => {
-                    let status = response.status();
-                    if status.is_success() {
-                        let text = response.text().await.map_err(|e| anyhow!("Failed to read Orca response text: {}", e))?;
-                        debug!("Orca API response text for {}->{}: {}", input_token_mint, output_token_mint, text);
-                        
-                        match serde_json::from_str::<OrcaQuoteResponse>(&text) {
-                            Ok(api_response) => {
-                                let input_amount_u64 = api_response.in_amount.parse::<u64>()
-                                    .map_err(|e| anyhow!("Parse Orca in_amount: {}", e))?;
-                                let output_amount_u64 = api_response.out_amount.parse::<u64>()
-                                    .map_err(|e| anyhow!("Parse Orca out_amount: {}", e))?;
+        match response_result {
+            Ok(response) => {
+                let status = response.status();
+                if status.is_success() {
+                    let text = response.text().await.map_err(|e| anyhow!("Failed to read Orca (Legacy) response text: {}", e))?;
+                    debug!("Orca (Legacy) API response text for {}->{}: {}", input_token_mint, output_token_mint, text);
 
-                                let quote = Quote {
-                                    input_token: api_response.input_mint, 
-                                    output_token: api_response.output_mint,
-                                    input_amount: input_amount_u64, 
+                    match serde_json::from_str::<OrcaApiQuoteResponse>(&text) {
+                        Ok(api_response) => {
+                            if let Some(best_route) = api_response.route.get(0) {
+                                let output_amount_u64 = best_route.out_amount.parse::<u64>()
+                                    .map_err(|e| anyhow!("Parse Orca (Legacy) out_amount: {}", e))?;
+
+                                let canonical_quote = CanonicalQuote {
+                                    input_token: input_token_mint.to_string(),
+                                    output_token: output_token_mint.to_string(),
+                                    input_amount: amount_in_atomic_units,
                                     output_amount: output_amount_u64,
                                     dex: self.get_name().to_string(),
-                                    route: api_response.route.unwrap_or_else(|| vec![
-                                        input_token_mint.to_string(), 
-                                        output_token_mint.to_string()
-                                    ]),
+                                    route: vec![input_token_mint.to_string(), output_token_mint.to_string()], // Simplified route
                                     latency_ms: Some(request_duration_ms),
                                     execution_score: None,
-                                    route_path: None,
-                                    slippage_estimate: api_response.slippage_bps.map(|bps| bps as f64 / 10000.0),
+                                    route_path: None, // API might provide more detailed path
+                                    slippage_estimate: None, // API might provide this
                                 };
 
-                                if let Err(e) = self.cache.set_ex(cache_prefix, &cache_key_params, &quote, Some(self.quote_cache_ttl_secs)).await {
-                                    warn!("Failed to cache Orca quote for {}->{}: {}", input_token_mint, output_token_mint, e);
+                                if let Err(e) = self.cache.set_ex(cache_prefix, &cache_key_params, &canonical_quote, Some(self.quote_cache_ttl_secs)).await {
+                                    warn!("Failed to cache Orca (Legacy) quote for {}->{}: {}", input_token_mint, output_token_mint, e);
                                 }
-
-                                Ok(quote)
-                            }
-                            Err(e) => {
-                                error!("Deserialize Orca quote: URL {}, Error: {:?}, Body: {}", url, e, text);
-                                Err(anyhow!("Deserialize Orca quote error: {}. Body: {}", e, text))
+                                Ok(canonical_quote)
+                            } else {
+                                Err(anyhow!("Orca (Legacy) API returned no routes for {}->{}", input_token_mint, output_token_mint))
                             }
                         }
-                    } else {
-                        let error_text = response.text().await.unwrap_or_else(|_| "No error body".to_string());
-                        error!("Fetch Orca quote failed: Status {}, URL {}, Body: {}", status, url, error_text);
-                        Err(anyhow!("Fetch Orca quote: Status {}, Body: {}", status, error_text))
+                        Err(e) => {
+                            error!("Deserialize Orca (Legacy) quote: URL {}, Error: {:?}, Body: {}", url, e, text);
+                            Err(anyhow!("Deserialize Orca (Legacy) quote error: {}. Body: {}", e, text))
+                        }
                     }
-                }
-                Err(e) => { 
-                    error!("HTTP request to Orca failed for URL {}: {}", url, e);
-                    Err(e)
+                } else {
+                    let error_text = response.text().await.unwrap_or_else(|_| "No error body".to_string());
+                    error!("Fetch Orca (Legacy) quote failed: Status {}, URL {}, Body: {}", status, url, error_text);
+                    Err(anyhow!("Fetch Orca (Legacy) quote: Status {}, Body: {}", status, error_text))
                 }
             }
-        }).await
+            Err(e) => {
+                error!("HTTP request to Orca (Legacy) failed for URL {}: {}", url, e);
+                Err(anyhow!("HTTP request to Orca (Legacy) failed: {}", e))
+            }
+        }
     }
 
     fn get_supported_pairs(&self) -> Vec<(String, String)> {
-        warn!("OrcaClient::get_supported_pairs returning placeholder data.");
-        vec![(
-            "So11111111111111111111111111111111111111112".to_string(), 
-            "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v".to_string()
-        )]
+        // Placeholder: Implement actual logic if needed, e.g., from API or config
+        warn!("OrcaClient::get_supported_pairs returning empty list for legacy pools.");
+        vec![]
     }
 
-    fn get_name(&self) -> &str { 
-        "Orca" 
+    fn get_name(&self) -> &str {
+        "OrcaLegacy" // Differentiate from Whirlpool if necessary
     }
 }

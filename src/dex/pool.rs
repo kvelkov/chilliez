@@ -1,53 +1,43 @@
 // src/dex/pool.rs
-//! Defines PoolInfo, PoolMap, and the POOL_PARSER_REGISTRY for associating
+//! Defines PoolMap and the POOL_PARSER_REGISTRY for associating
 //! program IDs with their respective pool data parsers.
 
-use crate::utils::{PoolInfo, PoolParser as UtilsPoolParser}; 
-use anyhow::Result as AnyhowResult; 
+use crate::utils::{PoolInfo, PoolParser as UtilsPoolParser};
+use crate::dex::{
+    orca::OrcaPoolParser,
+    raydium::RaydiumPoolParser,
+    lifinity::LifinityPoolParser, // Assuming you have this parser defined
+    whirlpool_parser::WhirlpoolPoolParser,
+};
+use anyhow::Result as AnyhowResult; // Kept for PoolInfo if it uses it, though PoolParseFn is removed
 use once_cell::sync::Lazy;
 use solana_sdk::pubkey::Pubkey;
 use std::collections::HashMap;
 use log;
 use std::sync::Arc;
 
-/// Type alias for a pool parser function.
-/// These functions take a pool address and raw account data, and return a parsed PoolInfo.
-pub type PoolParseFn = fn(address: Pubkey, data: &[u8]) -> AnyhowResult<PoolInfo>;
-
-/// Static registry mapping DEX program IDs to their corresponding `PoolParseFn`.
+/// Static registry mapping DEX program IDs to their corresponding `PoolParser` instances.
 /// This registry allows the dynamic dispatch of parsing logic based on an account's owner program.
-/// It must be integrated into the WebSocket message handler (or a dedicated processing service)
-/// so that incoming raw account data can be transformed into PoolInfo objects.
-pub static POOL_PARSER_REGISTRY: Lazy<HashMap<Pubkey, PoolParseFn>> = Lazy::new(|| {
+pub static POOL_PARSER_REGISTRY: Lazy<HashMap<Pubkey, Arc<dyn UtilsPoolParser>>> = Lazy::new(|| {
     let mut m = HashMap::new();
-    
-    let orca_program_id = crate::dex::orca::OrcaPoolParser::get_program_id();
-    m.insert(
-        orca_program_id,
-        crate::dex::orca::OrcaPoolParser::parse_pool_data as PoolParseFn,
-    );
-    log::info!("Registered Orca legacy pool parser for program ID: {}", orca_program_id);
 
-    let raydium_program_id = crate::dex::raydium::RaydiumPoolParser::get_program_id();
-    m.insert(
-        raydium_program_id,
-        crate::dex::raydium::RaydiumPoolParser::parse_pool_data as PoolParseFn,
-    );
-    log::info!("Registered Raydium pool parser for program ID: {}", raydium_program_id);
+    let orca_parser = Arc::new(OrcaPoolParser);
+    m.insert(orca_parser.get_program_id(), orca_parser.clone() as Arc<dyn UtilsPoolParser>);
+    log::info!("Registered Orca legacy pool parser for program ID: {}", orca_parser.get_program_id());
 
-    let lifinity_program_id = crate::dex::lifinity::LifinityPoolParser::get_program_id();
-    m.insert(
-        lifinity_program_id,
-        crate::dex::lifinity::LifinityPoolParser::parse_pool_data as PoolParseFn,
-    );
-    log::info!("Registered Lifinity pool parser for program ID: {}", lifinity_program_id);
+    let raydium_parser = Arc::new(RaydiumPoolParser);
+    m.insert(raydium_parser.get_program_id(), raydium_parser.clone() as Arc<dyn UtilsPoolParser>);
+    log::info!("Registered Raydium pool parser for program ID: {}", raydium_parser.get_program_id());
 
-    let whirlpool_program_id = crate::dex::whirlpool_parser::WhirlpoolPoolParser::get_program_id();
-    m.insert(
-        whirlpool_program_id,
-        crate::dex::whirlpool_parser::WhirlpoolPoolParser::parse_pool_data as PoolParseFn,
-    );
-    log::info!("Registered Whirlpool parser for program ID: {}", whirlpool_program_id);
+    // Assuming LifinityPoolParser exists and implements PoolParser
+    let lifinity_parser = Arc::new(LifinityPoolParser);
+    m.insert(lifinity_parser.get_program_id(), lifinity_parser.clone() as Arc<dyn UtilsPoolParser>);
+    log::info!("Registered Lifinity pool parser for program ID: {}", lifinity_parser.get_program_id());
+
+
+    let whirlpool_parser = Arc::new(WhirlpoolPoolParser);
+    m.insert(whirlpool_parser.get_program_id(), whirlpool_parser.clone() as Arc<dyn UtilsPoolParser>);
+    log::info!("Registered Whirlpool parser for program ID: {}", whirlpool_parser.get_program_id());
 
     if m.is_empty() {
         log::warn!("POOL_PARSER_REGISTRY is empty. No pool parsers were registered.");
@@ -57,11 +47,9 @@ pub static POOL_PARSER_REGISTRY: Lazy<HashMap<Pubkey, PoolParseFn>> = Lazy::new(
     m
 });
 
-/// Retrieves the pool parser function for a given DEX program ID.
-/// This function is the intended interface to the pool parser registry,
-/// and should be called by the WebSocket data processing logic to transform raw account data.
-pub fn get_pool_parser_fn_for_program(program_id: &Pubkey) -> Option<PoolParseFn> {
-    POOL_PARSER_REGISTRY.get(program_id).copied()
+/// Retrieves the pool parser for a given DEX program ID.
+pub fn get_pool_parser_for_program(program_id: &Pubkey) -> Option<Arc<dyn UtilsPoolParser>> {
+    POOL_PARSER_REGISTRY.get(program_id).cloned()
 }
 
 // --- PoolMap Definition ---
@@ -110,8 +98,8 @@ impl PoolMap {
             let pool1 = pool1_arc.as_ref();
             for pool2_arc in pool_vec.iter().skip(i + 1) {
                 let pool2 = pool2_arc.as_ref();
-                if (pool1.token_a.mint == pool2.token_a.mint && pool1.token_b.mint == pool2.token_b.mint) || 
-                   (pool1.token_a.mint == pool2.token_b.mint && pool1.token_b.mint == pool2.token_a.mint) || 
+                if (pool1.token_a.mint == pool2.token_a.mint && pool1.token_b.mint == pool2.token_b.mint) ||
+                   (pool1.token_a.mint == pool2.token_b.mint && pool1.token_b.mint == pool2.token_a.mint) ||
                    (pool1.token_a.mint == pool2.token_a.mint || pool1.token_a.mint == pool2.token_b.mint) ||
                    (pool1.token_b.mint == pool2.token_a.mint || pool1.token_b.mint == pool2.token_b.mint)
                 {

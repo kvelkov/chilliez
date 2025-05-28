@@ -1,7 +1,6 @@
 // src/dex/mod.rs
 
 // Module declarations for each DEX client and utility
-// dex_api_templates.rs and dexclient_stubs.rs are removed.
 pub mod http_utils;
 pub mod http_utils_shared;
 
@@ -10,39 +9,43 @@ pub mod integration_test;
 
 pub mod lifinity;
 pub mod meteora;
-pub mod orca;
+pub mod orca; // Ensures the orca.rs file is included as a module
 pub mod phoenix;
 pub mod pool;
 pub mod quote;
-pub mod raydium;
-pub mod whirlpool;       // This is for the Whirlpool DEX *API client*
-pub mod whirlpool_parser; // For parsing Whirlpool on-chain account data
+pub mod raydium; // Ensures the raydium.rs file is included as a module
+pub mod whirlpool;
+pub mod whirlpool_parser;
+pub mod banned_pairs;
+// Module declarations for each DEX client and utility
 
 // Re-export the main DexClient trait for easier access
 pub use quote::DexClient;
+pub use banned_pairs::{BannedPairsManager, BannedPairFilteringDexClientDecorator};
 
-use crate::cache::Cache; // Import the Redis Cache
-use crate::config::Config; // Import the application Config
 
+// --- Publicly re-export concrete client types ---
+// These lines make the client structs available directly under the `dex` module,
+// e.g., as `crate::dex::OrcaClient`
+pub use self::lifinity::LifinityClient; // Assuming LifinityClient is in lifinity.rs
+pub use self::meteora::MeteoraClient;   // Assuming MeteoraClient is in meteora.rs
+pub use self::orca::OrcaClient;          // Re-exports OrcaClient from the orca module
+pub use self::phoenix::PhoenixClient;  // Assuming PhoenixClient is in phoenix.rs
+pub use self::raydium::RaydiumClient;      // Re-exports RaydiumClient from the raydium module
+pub use self::whirlpool::WhirlpoolClient; // Assuming WhirlpoolClient is in whirlpool.rs
+
+
+// (Keep your existing imports for get_all_clients, etc.)
+use crate::cache::Cache;
+use crate::config::settings::Config;
 use log::info;
 use std::sync::Arc;
 
-// Import client implementations
-use crate::dex::{
-    lifinity::LifinityClient,
-    meteora::MeteoraClient,
-    orca::OrcaClient,
-    phoenix::PhoenixClient,
-    raydium::RaydiumClient,
-    whirlpool::WhirlpoolClient as WhirlpoolApiClient, // Alias if needed
-};
+// The get_all_clients function can remain as is,
+// as it internally uses the full paths to the clients.
 
 /// Initializes and returns all supported DEX API client instances.
 /// Each client is configured with shared cache and application configuration.
-///
-/// # Arguments
-/// * `cache` - An Arc-wrapped `Cache` instance for Redis caching.
-/// * `app_config` - An Arc-wrapped `Config` instance for application settings (e.g., cache TTLs).
 pub fn get_all_clients(
     cache: Arc<Cache>,
     app_config: Arc<Config>,
@@ -51,51 +54,46 @@ pub fn get_all_clients(
 
     info!("Initializing DEX API clients with Cache and Config integration...");
 
-    // Helper to get specific DEX quote TTL or default
     let get_dex_ttl = |dex_name: &str| -> Option<u64> {
         app_config.dex_quote_cache_ttl_secs
             .as_ref()
             .and_then(|map| map.get(dex_name).copied())
-            .or(Some(app_config.redis_default_ttl_secs)) // Fallback to default Redis TTL
+            .or(Some(app_config.redis_default_ttl_secs))
     };
 
-    // Orca Client
-    clients.push(Box::new(OrcaClient::new(
+    // These instantiations will work if OrcaClient, RaydiumClient etc. are correctly defined
+    // in their respective modules (e.g. orca.rs, raydium.rs)
+    clients.push(Box::new(orca::OrcaClient::new( // Using orca::OrcaClient path
         Arc::clone(&cache),
         get_dex_ttl("Orca"),
     )));
     info!("- Orca client initialized.");
 
-    // Raydium Client
-    clients.push(Box::new(RaydiumClient::new(
+    clients.push(Box::new(raydium::RaydiumClient::new( // Using raydium::RaydiumClient path
         Arc::clone(&cache),
         get_dex_ttl("Raydium"),
     )));
     info!("- Raydium client initialized.");
 
-    // Meteora Client
-    clients.push(Box::new(MeteoraClient::new(
+    clients.push(Box::new(meteora::MeteoraClient::new(
         Arc::clone(&cache),
         get_dex_ttl("Meteora"),
     )));
     info!("- Meteora client initialized.");
 
-    // Lifinity Client
-    clients.push(Box::new(LifinityClient::new(
+    clients.push(Box::new(lifinity::LifinityClient::new(
         Arc::clone(&cache),
         get_dex_ttl("Lifinity"),
     )));
     info!("- Lifinity client initialized.");
 
-    // Phoenix Client
-    clients.push(Box::new(PhoenixClient::new(
+    clients.push(Box::new(phoenix::PhoenixClient::new(
         Arc::clone(&cache),
         get_dex_ttl("Phoenix"),
     )));
     info!("- Phoenix client initialized.");
 
-    // Whirlpool API Client
-    clients.push(Box::new(WhirlpoolApiClient::new(
+    clients.push(Box::new(whirlpool::WhirlpoolClient::new(
         Arc::clone(&cache),
         get_dex_ttl("Whirlpool"),
     )));
@@ -109,17 +107,10 @@ pub fn get_all_clients(
 }
 
 /// Asynchronously initializes and returns all DEX client instances, wrapped in `Arc`.
-/// Suitable for concurrent usage.
-///
-/// # Arguments
-/// * `cache` - An Arc-wrapped `Cache` instance for Redis caching.
-/// * `app_config` - An Arc-wrapped `Config` instance for application settings.
 pub async fn get_all_clients_arc(
     cache: Arc<Cache>,
     app_config: Arc<Config>,
 ) -> Vec<Arc<dyn DexClient>> {
-    // If client initializations were async, they would be awaited here.
-    // For now, it wraps the synchronous get_all_clients.
     get_all_clients(cache, app_config)
         .into_iter()
         .map(Arc::from)

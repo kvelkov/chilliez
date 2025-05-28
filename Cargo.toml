@@ -21,12 +21,15 @@ spl-token-2022 = "1.0.0" # Keep if Token2022 support is planned/used, else remov
 # Async & runtime - Core: Keep these.
 tokio = { version = "1.36.0", features = ["full"] } # "full" is convenient but pulls in a lot. Could be slimmed if specific features are known.
 futures = "0.3.30"
+futures-util = "0.3.30" # Added for StreamExt
 async-trait = "0.1.74"
 toml = "0.8"
+bytemuck = { version = "1.15.0", features = ["derive"] }
 
 # Data & config - Core: Keep serde, serde_json, dotenv.
 serde = { version = "1.0.197", features = ["derive"] }
 serde_json = "1.0.114"
+csv = "1.1" # Ensure this line is present and not commented out
 config = { version = "0.13", features = ["toml"] } # Or your desired version, ensure 'toml' feature is enabled
 log = "0.4"
 # bincode: Is this used for binary serialization (e.g., on-chain data, file storage)?
@@ -41,6 +44,7 @@ anyhow = "1.0.75"
 thiserror = "1.0.57"
 env_logger = "0.11.2"
 fern = "0.6" 
+mockito = "1.4.0"      # Or the latest version
 # tracing: Is this actively used for distributed tracing, or is `log` sufficient?
 tracing = "0.1.37" # REVIEW: Candidate for removal if `log` crate is primary and tracing isn't integrated.
 

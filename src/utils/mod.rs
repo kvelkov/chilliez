@@ -1,13 +1,14 @@
 // src/utils/mod.rs
+use crate::solana::rpc::SolanaRpcClient;
 use solana_sdk::{
     pubkey::Pubkey,
     signature::{Keypair, read_keypair_file},
-    // signer::Signer, // Still marked as unused by compiler if not used locally
 };
-use std::error::Error as StdError; // Aliased to avoid conflict with local Error
+use std::error::Error as StdError;
 use log::{info, error};
 use async_trait::async_trait;
 use serde::{Serialize, Deserialize};
+use std::sync::Arc;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PoolInfo {
@@ -21,7 +22,6 @@ pub struct PoolInfo {
     pub dex_type: DexType,
 }
 
-// Default implementation for PoolInfo for easier testing or default states
 impl Default for PoolInfo {
     fn default() -> Self {
         Self {
@@ -45,7 +45,6 @@ pub struct PoolToken {
     pub reserve: u64,
 }
 
-// Default implementation for PoolToken
 impl Default for PoolToken {
     fn default() -> Self {
         Self {
@@ -61,21 +60,17 @@ impl Default for PoolToken {
 pub struct ProgramConfig {
     pub name: String,
     pub version: String,
-    // Add other fields for program configuration as they become necessary
 }
 
 impl ProgramConfig {
-    // Constructor for ProgramConfig
     pub fn new(name: String, version: String) -> Self {
         Self { name, version }
     }
 
-    // Method to log config, ensuring it's "used"
     pub fn log_details(&self) {
         info!("ProgramConfig Details: Name={}, Version={}", self.name, self.version);
     }
 }
-
 
 pub fn setup_logging() -> Result<(), fern::InitError> {
     fern::Dispatch::new()
@@ -103,7 +98,7 @@ pub fn load_keypair(path: &str) -> Result<Keypair, Box<dyn StdError>> {
             Ok(kp)
         }
         Err(e) => {
-            let error_msg = format!("Failed to load keypair from path '{}': {}", path, e.to_string());
+            let error_msg = format!("Failed to load keypair from path '{}': {}", path, e);
             error!("{}", error_msg);
             Err(error_msg.into())
         }
@@ -124,7 +119,7 @@ impl TokenAmount {
     pub fn to_float(&self) -> f64 {
         self.amount as f64 / 10f64.powi(self.decimals as i32)
     }
-     // Adding a from_float constructor for convenience
+
     pub fn from_float(float_amount: f64, decimals: u8) -> Self {
         Self {
             amount: (float_amount * 10f64.powi(decimals as i32)) as u64,
@@ -145,11 +140,17 @@ pub enum DexType {
 }
 
 #[async_trait]
-pub trait PoolParser {
-    fn parse_pool_data(address: Pubkey, data: &[u8]) -> anyhow::Result<PoolInfo>;
-    fn get_program_id() -> Pubkey;
-    fn get_dex_type() -> DexType;
+pub trait PoolParser: Send + Sync {
+    async fn parse_pool_data(
+        &self,
+        address: Pubkey,
+        data: &[u8],
+        rpc_client: &Arc<SolanaRpcClient>,
+    ) -> anyhow::Result<PoolInfo>;
+
+    fn get_program_id(&self) -> Pubkey;
 }
+
 
 pub fn calculate_output_amount(
     pool: &PoolInfo,
@@ -178,8 +179,3 @@ pub fn calculate_output_amount(
 
     TokenAmount::new(output_amount_precise.floor() as u64, output_decimals_val)
 }
-
-
-// calculate_multihop_profit_and_slippage and calculate_rebate were moved to arbitrage::calculator
-// as they are more specific to arbitrage calculations than general utilities.
-// This also helps resolve circular dependency issues if utils needs to be used by calculator.

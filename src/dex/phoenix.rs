@@ -33,7 +33,7 @@ struct PhoenixApiResponse {
     price_impact_percent: Option<String>,
 }
 
-pub const _PHOENIX_PROGRAM_ID: &str = "PhoeNiXZ8ByJGLkxNfZRnkUfjvmuYqLR89jjFHGqdXY"; // Prefixed
+pub const PHOENIX_PROGRAM_ID: &str = "PhoeNiXZ8ByJGLkxNfZRnkUfjvmuYqLR89jjFHGqdXY";
 
 #[derive(Debug, Clone)]
 pub struct PhoenixClient {

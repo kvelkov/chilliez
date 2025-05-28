@@ -4,22 +4,112 @@
 use crate::cache::Cache;
 use crate::dex::http_utils::HttpRateLimiter;
 use crate::dex::quote::{DexClient, Quote as CanonicalQuote};
+use crate::solana::rpc::SolanaRpcClient;
 use crate::utils::{DexType, PoolInfo, PoolParser as UtilsPoolParser, PoolToken};
 use anyhow::{anyhow, Result as AnyhowResult};
 use async_trait::async_trait;
+use bytemuck::{Pod, Zeroable};
 use log::{debug, error, info, warn};
 use once_cell::sync::Lazy;
 use reqwest::Client as ReqwestClient;
 use serde::{Deserialize, Serialize};
 use solana_sdk::pubkey::Pubkey;
+//use solana_sdk::program_pack::Pack; // Import the Pack trait
+//use spl_token::state::Mint;
 use std::env;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-static LIFINITY_RATE_LIMITER: Lazy<HttpRateLimiter> = Lazy::new(|| {
-    HttpRateLimiter::new(4, Duration::from_millis(250), 3, Duration::from_millis(500), vec![])
-});
+#[repr(C)]
+#[derive(Clone, Debug, Copy, Pod, Zeroable)]
+pub struct LifinityPoolState {
+    pub concentration: u64,
+    pub fee_bps: u64,
+    pub token_a_mint: Pubkey,
+    pub token_b_mint: Pubkey,
+    pub token_a_vault: Pubkey,
+    pub token_b_vault: Pubkey,
+    //... other fields
+}
+
+pub struct LifinityPoolParser;
+pub const LIFINITY_PROGRAM_ID: &str = "EewxydAPCCVuNEyrVN68PuSYdQ7wKn27V9GJEbpNcHcn";
+
+#[async_trait]
+impl UtilsPoolParser for LifinityPoolParser {
+    async fn parse_pool_data(
+        &self,
+        address: Pubkey,
+        data: &[u8],
+        rpc_client: &Arc<SolanaRpcClient>,
+    ) -> AnyhowResult<PoolInfo> {
+        let expected_size = std::mem::size_of::<LifinityPoolState>();
+        if data.len() < expected_size {
+            return Err(anyhow!(
+                "Data too short for Lifinity pool {}: expected at least {} bytes, got {}",
+                address,
+                expected_size,
+                data.len()
+            ));
+        }
+
+        let state: &LifinityPoolState = bytemuck::from_bytes(&data[..expected_size]);
+
+        info!("Parsing Lifinity pool data for address: {}", address);
+
+        // Fetch reserves and mint account data in parallel
+        // Use async blocks to convert errors to anyhow::Error for try_join!
+        let (reserve_a_bytes, reserve_b_bytes, decimals_a, decimals_b): (Vec<u8>, Vec<u8>, u8, u8) = tokio::try_join!(
+            async {
+                rpc_client.primary_client.get_account_data(&state.token_a_vault).await.map_err(anyhow::Error::from)
+            },
+            async {
+                rpc_client.primary_client.get_account_data(&state.token_b_vault).await.map_err(anyhow::Error::from)
+            },
+            async {
+                rpc_client.get_token_mint_decimals(&state.token_a_mint).await.map_err(anyhow::Error::from)
+            },
+            async {
+                rpc_client.get_token_mint_decimals(&state.token_b_mint).await.map_err(anyhow::Error::from)
+            }
+        )?;
+
+        // Convert Vec<u8> to u64 for reserves
+        let reserve_a = u64::from_le_bytes(reserve_a_bytes[..8].try_into().unwrap());
+        let reserve_b = u64::from_le_bytes(reserve_b_bytes[..8].try_into().unwrap());
+
+        Ok(PoolInfo {
+            address,
+            name: format!("Lifinity/{}", address),
+            token_a: PoolToken {
+                mint: state.token_a_mint,
+                symbol: "TKA".to_string(),
+                decimals: decimals_a,
+                reserve: reserve_a,
+            },
+            token_b: PoolToken {
+                mint: state.token_b_mint,
+                symbol: "TKB".to_string(),
+                decimals: decimals_b,
+                reserve: reserve_b,
+            },
+            fee_numerator: state.fee_bps,
+            fee_denominator: 10000,
+            last_update_timestamp: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs(),
+            dex_type: DexType::Lifinity,
+        })
+    }
+
+    fn get_program_id(&self) -> Pubkey {
+        Pubkey::from_str(LIFINITY_PROGRAM_ID).unwrap()
+    }
+}
+static LIFINITY_RATE_LIMITER: Lazy<HttpRateLimiter> =
+    Lazy::new(|| HttpRateLimiter::new(4, Duration::from_millis(250), 3, Duration::from_millis(500), vec![]));
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LifinityApiQuote {
@@ -33,6 +123,8 @@ pub struct LifinityApiQuote {
     pub output_amount: u64,
     pub dex: String,
 }
+
+
 
 #[derive(Debug, Clone)]
 pub struct LifinityClient {
@@ -55,7 +147,10 @@ impl LifinityClient {
                 .user_agent(format!("RhodesArbBot/{}", env!("CARGO_PKG_VERSION")))
                 .build()
                 .unwrap_or_else(|e| {
-                    warn!("Failed to build ReqwestClient for Lifinity, using default: {}", e);
+                    warn!(
+                        "Failed to build ReqwestClient for Lifinity, using default: {}",
+                        e
+                    );
                     ReqwestClient::new()
                 }),
             cache,
@@ -63,7 +158,6 @@ impl LifinityClient {
         }
     }
 
-    // Optional: Expose a getter for the API key.
     #[allow(dead_code)]
     pub fn get_api_key(&self) -> &str {
         &self.api_key
@@ -85,8 +179,10 @@ impl DexClient for LifinityClient {
         ];
         let cache_prefix = "quote:lifinity";
 
-        if let Ok(Some(cached_quote)) =
-            self.cache.get_json::<CanonicalQuote>(cache_prefix, &cache_key_params).await
+        if let Ok(Some(cached_quote)) = self
+            .cache
+            .get_json::<CanonicalQuote>(cache_prefix, &cache_key_params)
+            .await
         {
             debug!(
                 "Lifinity quote cache HIT for {}->{} amount {}",
@@ -129,7 +225,7 @@ impl DexClient for LifinityClient {
                         "Lifinity API response text for {}->{}: {}",
                         input_token_mint, output_token_mint, text
                     );
-                    
+
                     match serde_json::from_str::<LifinityApiQuote>(&text) {
                         Ok(api_quote) => {
                             let canonical_quote = CanonicalQuote {
@@ -138,19 +234,21 @@ impl DexClient for LifinityClient {
                                 input_amount: api_quote.input_amount,
                                 output_amount: api_quote.output_amount,
                                 dex: self.get_name().to_string(),
-                                route: vec![
-                                    api_quote.input_token,
-                                    api_quote.output_token,
-                                ],
+                                route: vec![api_quote.input_token, api_quote.output_token],
                                 latency_ms: Some(request_duration_ms),
                                 execution_score: None,
                                 route_path: None,
-                                slippage_estimate: None, // Populate if available.
+                                slippage_estimate: None,
                             };
 
                             if let Err(e) = self
                                 .cache
-                                .set_ex(cache_prefix, &cache_key_params, &canonical_quote, Some(self.quote_cache_ttl_secs))
+                                .set_ex(
+                                    cache_prefix,
+                                    &cache_key_params,
+                                    &canonical_quote,
+                                    Some(self.quote_cache_ttl_secs),
+                                )
                                 .await
                             {
                                 warn!(
@@ -161,8 +259,15 @@ impl DexClient for LifinityClient {
                             Ok(canonical_quote)
                         }
                         Err(e) => {
-                            error!("Failed to deserialize Lifinity quote: URL {}, Error: {:?}, Body: {}", url, e, text);
-                            Err(anyhow!("Deserialize Lifinity quote failed: {}. Body: {}", e, text))
+                            error!(
+                                "Failed to deserialize Lifinity quote: URL {}, Error: {:?}, Body: {}",
+                                url, e, text
+                            );
+                            Err(anyhow!(
+                                "Deserialize Lifinity quote failed: {}. Body: {}",
+                                e,
+                                text
+                            ))
                         }
                     }
                 } else {
@@ -174,7 +279,11 @@ impl DexClient for LifinityClient {
                         "Fetch Lifinity quote failed: Status {}, URL {}, Body: {}",
                         status, url, error_text
                     );
-                    Err(anyhow!("Fetch Lifinity quote: Status {}, Body: {}", status, error_text))
+                    Err(anyhow!(
+                        "Fetch Lifinity quote: Status {}, Body: {}",
+                        status,
+                        error_text
+                    ))
                 }
             }
             Err(e) => {
@@ -191,39 +300,5 @@ impl DexClient for LifinityClient {
 
     fn get_name(&self) -> &str {
         "Lifinity"
-    }
-}
-
-/// LifinityPoolParser implements a stub for the PoolParser trait.
-pub struct LifinityPoolParser;
-pub const LIFINITY_PROGRAM_ID: &str = "EewxydAPCCVuNEyrVN68PuSYdQ7wKn27V9GJEbpNcHcn";
-
-impl UtilsPoolParser for LifinityPoolParser {
-    fn parse_pool_data(address: Pubkey, data: &[u8]) -> AnyhowResult<PoolInfo> {
-        if data.len() < 100 {
-            error!("Lifinity pool parsing failed for {} - Insufficient data: {}", address, data.len());
-            return Err(anyhow!("Data too short for Lifinity pool: {}", address));
-        }
-        warn!("Using STUB LifinityPoolParser for address {}. Implement actual parsing.", address);
-        Ok(PoolInfo {
-            address,
-            name: format!("LifinityStub/{}", address.to_string().chars().take(6).collect::<String>()),
-            token_a: PoolToken { mint: Pubkey::new_unique(), symbol: "TKA".to_string(), decimals: 6, reserve: 1_000_000 },
-            token_b: PoolToken { mint: Pubkey::new_unique(), symbol: "TKB".to_string(), decimals: 6, reserve: 1_000_000 },
-            fee_numerator: 30,
-            fee_denominator: 10000,
-            last_update_timestamp: SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs(),
-            dex_type: DexType::Lifinity,
-        })
-    }
-
-    fn get_program_id() -> Pubkey {
-        Pubkey::from_str(LIFINITY_PROGRAM_ID)
-            .map_err(|e| anyhow!("Invalid Lifinity Program ID: {}", e))
-            .expect("Static Lifinity program ID should be valid")
-    }
-
-    fn get_dex_type() -> DexType {
-        DexType::Lifinity
     }
 }

@@ -224,26 +224,26 @@ impl MultiHopArbOpportunity {
 impl Default for MultiHopArbOpportunity {
     fn default() -> Self {
         // Create default PoolInfo instance used as a placeholder.
-        let default_pool = Arc::new(PoolInfo::default());
-        MultiHopArbOpportunity {
-            id: "default_opportunity_id".to_string(),
-            hops: vec![],
+        let default_pool_info = Arc::new(PoolInfo::default());
+        Self {
+            id: String::default(),
+            hops: Vec::new(),
             total_profit: 0.0,
             profit_pct: 0.0,
-            input_token: "UNKNOWN_IN".to_string(),
-            output_token: "UNKNOWN_OUT".to_string(),
+            input_token: String::default(),
+            output_token: String::default(),
             input_amount: 0.0,
             expected_output: 0.0,
-            dex_path: vec![],
-            pool_path: vec![],
+            dex_path: Vec::new(), // This should be Vec<DexType> as per struct definition
+            pool_path: Vec::new(),
             risk_score: None,
-            notes: Some("Default Opportunity".to_string()),
+            notes: None,
             estimated_profit_usd: None,
             input_amount_usd: None,
             output_amount_usd: None,
-            intermediate_tokens: vec![],
-            source_pool: Arc::clone(&default_pool),
-            target_pool: Arc::clone(&default_pool),
+            intermediate_tokens: Vec::new(),
+            source_pool: default_pool_info.clone(),
+            target_pool: default_pool_info,
             input_token_mint: Pubkey::default(),
             output_token_mint: Pubkey::default(),
             intermediate_token_mint: None,

@@ -1,233 +1,156 @@
-// This file can be used for Prometheus integration if desired.
-// For now, the simpler Metrics struct in src/metrics/mod.rs is prioritized.
-// To use this, you would need to:
-// 1. Add prometheus crate to Cargo.toml
-// 2. Uncomment and complete the implementation.
-// 3. Update main.rs and other modules to use this Metrics system.
-
-/*
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Mutex;
 use log::info;
-use prometheus::{register_counter, register_gauge, register_histogram, Counter, Gauge, Histogram, Opts};
-use serde_json::json;
-use std::fs::OpenOptions;
-use std::io::Write;
-use std::sync::Arc;
-use tokio::sync::Mutex;
-
-use crate::arbitrage::opportunity::MultiHopArbOpportunity; // Assuming this is the canonical one
-use crate::error::ArbError;
-
-
-lazy_static::lazy_static! {
-    static ref OPPORTUNITIES_DETECTED: Counter =
-        register_counter!(Opts::new("arb_opportunities_detected_total", "Total arbitrage opportunities detected")).unwrap();
-    static ref OPPORTUNITIES_EXECUTED: Counter =
-        register_counter!(Opts::new("arb_opportunities_executed_total", "Total arbitrage opportunities successfully executed")).unwrap();
-    static ref OPPORTUNITIES_FAILED: Counter =
-        register_counter!(Opts::new("arb_opportunities_failed_total", "Total arbitrage opportunities that failed execution")).unwrap();
-    static ref PROFIT_TOTAL_USD: Gauge =
-        register_gauge!(Opts::new("arb_profit_total_usd", "Total profit in USD")).unwrap();
-    static ref EXECUTION_TIME_MS: Histogram =
-        register_histogram!(Opts::new("arb_execution_time_ms", "Time to execute arbitrage in milliseconds")).unwrap();
-    static ref ACTIVE_POOLS: Gauge =
-        register_gauge!(Opts::new("arb_active_pools_count", "Number of active pools being monitored")).unwrap();
-}
-
 
 pub struct Metrics {
-    // If file logging is still desired alongside Prometheus
-    log_file: Option<Arc<Mutex<std::fs::File>>>,
+    // Atomic counters for thread-safe incrementing
+    pools_new: AtomicU64,
+    pools_updated: AtomicU64,
+    total_pools: AtomicU64,
+    opportunities_detected: AtomicU64,
+    opportunities_executed_success: AtomicU64,
+    opportunities_executed_failure: AtomicU64,
+    execution_count: AtomicU64,
+    total_execution_ms: AtomicU64,
+    dynamic_threshold_updates: AtomicU64,
+    // Mutex-protected values (no atomic f64 in Rust)
+    total_profit: Mutex<f64>,
 }
 
 impl Metrics {
-    pub fn new(log_path: Option<&str>) -> Result<Self, ArbError> {
-        let file_logger = if let Some(path) = log_path {
-            match OpenOptions::new().create(true).append(true).open(path) {
-                Ok(file) => Some(Arc::new(Mutex::new(file))),
-                Err(e) => {
-                    // Use log::error if logger is available, otherwise eprintln
-                    eprintln!("Failed to open metrics log file at {}: {}", path, e);
-                    return Err(ArbError::ConfigError(format!("Failed to open log file {}: {}", path, e)));
-                }
-            }
-        } else {
-            None
-        };
-
-        info!("Prometheus metrics registered.");
-        Ok(Self { log_file: file_logger })
-    }
-
-    pub async fn log_launch(&self) -> Result<(), ArbError> {
-        // Increment a counter for bot launches, log timestamp
-        // BOT_LAUNCHES_TOTAL.inc();
-        info!("Metrics: Bot launched at {}", chrono::Utc::now().to_rfc3339());
-        if let Some(log_file_mutex) = &self.log_file {
-            let mut file = log_file_mutex.lock().await;
-            if let Err(e) = std::io::writeln!(file, "LAUNCH: time={}\n", chrono::Utc::now().to_rfc3339()) {
-                 return Err(ArbError::Unknown(format!("Failed to write launch event to log: {}", e)));
-            }
+    /// Creates a new Metrics instance with all counters initialized.
+    pub fn new() -> Self {
+        Self {
+            pools_new: AtomicU64::new(0),
+            pools_updated: AtomicU64::new(0),
+            total_pools: AtomicU64::new(0),
+            opportunities_detected: AtomicU64::new(0),
+            opportunities_executed_success: AtomicU64::new(0),
+            opportunities_executed_failure: AtomicU64::new(0),
+            total_profit: Mutex::new(0.0),
+            execution_count: AtomicU64::new(0),
+            total_execution_ms: AtomicU64::new(0),
+            dynamic_threshold_updates: AtomicU64::new(0),
         }
-        Ok(())
     }
 
-    pub async fn log_pools_fetched(&self, count: usize) -> Result<(), ArbError> {
-        // Set a gauge for the number of pools
-        // POOLS_LOADED_GAUGE.set(count as f64);
-        info!("Metrics: {} pools fetched/loaded.", count);
-         if let Some(log_file_mutex) = &self.log_file {
-            let mut file = log_file_mutex.lock().await;
-            if let Err(e) = std::io::writeln!(file, "POOLS_FETCHED: time={}, count={}\n", chrono::Utc::now().to_rfc3339(), count) {
-                 return Err(ArbError::Unknown(format!("Failed to write pools fetched event to log: {}", e)));
-            }
-        }
-        Ok(())
+    /// Log pool updates.
+    ///
+    /// - `new`: The number of new pools added.
+    /// - `updated`: The number of existing pools updated.
+    /// - `total`: The total number of pools in the system.
+    pub fn log_pools_updated(&self, new: u64, updated: u64, total: usize) {
+        self.pools_new.fetch_add(new, Ordering::Relaxed);
+        self.pools_updated.fetch_add(updated, Ordering::Relaxed);
+        self.total_pools.store(total as u64, Ordering::Relaxed);
     }
 
-    pub async fn record_trade_attempt(&self, identifier: &str) -> Result<(), ArbError> {
-        // Increment a counter for trade attempts
-        // TRADE_ATTEMPTS_TOTAL.inc();
-        info!("Metrics: Trade attempt for opportunity: {}", identifier);
-        if let Some(log_file_mutex) = &self.log_file {
-            let mut file = log_file_mutex.lock().await;
-            if let Err(e) = std::io::writeln!(file, "TRADE_ATTEMPT: time={}, id={}\n", chrono::Utc::now().to_rfc3339(), identifier) {
-                 return Err(ArbError::Unknown(format!("Failed to write trade attempt to log: {}", e)));
-            }
-        }
-        Ok(())
+    /// Logs the number of opportunities detected during a detection scan.
+    pub fn log_opportunities_detected(&self, count: u64) {
+        self.opportunities_detected.fetch_add(count, Ordering::Relaxed);
     }
 
-    pub async fn summary(&self) -> Result<(), ArbError> {
-        // Log a final summary of metrics, e.g., total profit, number of trades
-        info!("Metrics: Generating final summary...");
-        // Example: let total_profit = TOTAL_PROFIT_USD.get();
-        // info!("Total profit during session: ${}", total_profit);
-        if let Some(log_file_mutex) = &self.log_file {
-            let mut file = log_file_mutex.lock().await;
-            if let Err(e) = std::io::writeln!(file, "SUMMARY: time={}\n", chrono::Utc::now().to_rfc3339()) { // Add more details to summary
-                 return Err(ArbError::Unknown(format!("Failed to write summary to log: {}", e)));
-            }
-        }
-        Ok(())
+    /// Call this method immediately after a successful execution.
+    pub fn log_opportunity_executed_success(&self) {
+        self.opportunities_executed_success.fetch_add(1, Ordering::Relaxed);
+        info!("Metrics: Successful execution recorded");
     }
 
-    // Methods based on commented-out calls in engine.rs
-    pub async fn log_min_profit_threshold_updated(&self, threshold: f64) -> Result<(), ArbError> {
-        // MIN_PROFIT_THRESHOLD_GAUGE.set(threshold);
-        info!("Metrics: Min profit threshold updated to {:.4}%", threshold * 100.0);
-        if let Some(log_file_mutex) = &self.log_file {
-            let mut file = log_file_mutex.lock().await;
-            if let Err(e) = std::io::writeln!(file, "THRESHOLD_UPDATE: time={}, new_threshold={:.6}\n", chrono::Utc::now().to_rfc3339(), threshold) {
-                 return Err(ArbError::Unknown(format!("Failed to write threshold update to log: {}", e)));
-            }
-        }
-        Ok(())
+    /// Call this method immediately after a failed execution.
+    pub fn log_opportunity_executed_failure(&self) {
+        self.opportunities_executed_failure.fetch_add(1, Ordering::Relaxed);
+        info!("Metrics: Failed execution recorded");
     }
 
-    pub async fn log_direct_opportunities_found(&self, count: usize) -> Result<(), ArbError> {
-        info!("Metrics: Found {} direct opportunities in cycle.", count);
-         if let Some(log_file_mutex) = &self.log_file {
-            let mut file = log_file_mutex.lock().await;
-            if let Err(e) = std::io::writeln!(file, "DIRECT_OPPS_FOUND: time={}, count={}\n", chrono::Utc::now().to_rfc3339(), count) {
-                 return Err(ArbError::Unknown(format!("Failed to write direct opps found to log: {}", e)));
-            }
-        }
-        Ok(())
+    /// Updates the total profit, handling both positive and negative values.
+    pub fn update_profit(&self, profit: f64) {
+        let mut total = self.total_profit.lock().unwrap();
+        *total += profit;
     }
 
-    pub async fn log_multihop_opportunities_found(&self, count: usize) -> Result<(), ArbError> {
-        info!("Metrics: Found {} multi-hop opportunities in cycle.", count);
-        if let Some(log_file_mutex) = &self.log_file {
-            let mut file = log_file_mutex.lock().await;
-            if let Err(e) = std::io::writeln!(file, "MULTIHOP_OPPS_FOUND: time={}, count={}\n", chrono::Utc::now().to_rfc3339(), count) {
-                 return Err(ArbError::Unknown(format!("Failed to write multi-hop opps found to log: {}", e)));
-            }
-        }
-        Ok(())
+    /// Records the execution time of an operation.
+    pub fn record_execution_time(&self, duration_ms: u64) {
+        self.execution_count.fetch_add(1, Ordering::Relaxed);
+        self.total_execution_ms.fetch_add(duration_ms, Ordering::Relaxed);
     }
 
-    pub async fn log_degradation_mode_change(&self, enabled: bool, new_threshold: Option<f64>) -> Result<(), ArbError> {
-        // DEGRADATION_MODE_GAUGE.set(if enabled { 1.0 } else { 0.0 });
-        info!("Metrics: Degradation mode {}. New threshold: {:?}", if enabled { "entered" } else { "exited" }, new_threshold);
-        if let Some(log_file_mutex) = &self.log_file {
-            let mut file = log_file_mutex.lock().await;
-            if let Err(e) = std::io::writeln!(file, "DEGRADATION_MODE: time={}, enabled={}, new_threshold={:?}\n", chrono::Utc::now().to_rfc3339(), enabled, new_threshold) {
-                 return Err(ArbError::Unknown(format!("Failed to write degradation mode change to log: {}", e)));
-            }
-        }
-        Ok(())
+    /// Logs dynamic threshold updates.
+    pub fn log_dynamic_threshold_update(&self, new_threshold: f64) {
+        self.dynamic_threshold_updates.fetch_add(1, Ordering::Relaxed);
+        info!("Dynamic threshold updated to: {:.4}%", new_threshold);
     }
 
-    pub async fn log_pools_updated(&self, new_count: usize, updated_count: usize, total_count: usize) -> Result<(), ArbError> {
-        info!("Metrics: Pools updated - New: {}, Updated: {}, Total: {}", new_count, updated_count, total_count);
-        if let Some(log_file_mutex) = &self.log_file {
-            let mut file = log_file_mutex.lock().await;
-            if let Err(e) = std::io::writeln!(file, "POOLS_UPDATED: time={}, new={}, updated={}, total={}\n", chrono::Utc::now().to_rfc3339(), new_count, updated_count, total_count) {
-                 return Err(ArbError::Unknown(format!("Failed to write pools updated event to log: {}", e)));
-            }
-        }
-        Ok(())
+    /// Records the duration of a main cycle.
+    pub fn record_main_cycle_duration(&self, duration_ms: u64) {
+        self.record_execution_time(duration_ms);
     }
 
-    pub async fn log_execution_result(
+    /// Increments the main cycles counter.
+    pub fn increment_main_cycles(&self) {
+        self.execution_count.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Logs the launch of the application.
+    pub fn log_launch(&self) {
+        info!("Application launched. Metrics tracking started.");
+    }
+
+    /// Logs the number of pools fetched.
+    pub fn log_pools_fetched(&self, count: usize) {
+        self.total_pools.store(count as u64, Ordering::Relaxed);
+        info!("Fetched {} pools", count);
+    }
+
+    /// Generates a report of all metrics.
+    pub fn summary(&self) -> String {
+        let report = format!(
+            "Metrics Summary:\n\
+             - Pool Statistics: {} new, {} updated, {} total\n\
+             - Opportunity Statistics: {} detected, {} executed successfully, {} failed\n\
+             - Total Profit: ${:.2}\n\
+             - Execution Statistics: {} operations, {:.2}ms average execution time\n\
+             - Dynamic Threshold Updates: {}",
+            self.pools_new.load(Ordering::Relaxed),
+            self.pools_updated.load(Ordering::Relaxed),
+            self.total_pools.load(Ordering::Relaxed),
+            self.opportunities_detected.load(Ordering::Relaxed),
+            self.opportunities_executed_success.load(Ordering::Relaxed),
+            self.opportunities_executed_failure.load(Ordering::Relaxed),
+            *self.total_profit.lock().unwrap(),
+            self.execution_count.load(Ordering::Relaxed),
+            if self.execution_count.load(Ordering::Relaxed) > 0 {
+                self.total_execution_ms.load(Ordering::Relaxed) as f64
+                    / self.execution_count.load(Ordering::Relaxed) as f64
+            } else {
+                0.0
+            },
+            self.dynamic_threshold_updates.load(Ordering::Relaxed)
+        );
+        info!("{}", report);
+        report
+    }
+
+    /// Records an opportunity detection.
+    pub fn record_opportunity_detected(
         &self,
-        opportunity_identifier: &str,
-        success: bool,
-        execution_time_ms: u64,
-        actual_profit_usd: Option<f64>,
-        tx_cost_sol: f64,
-        fees_paid_usd: Option<f64>,
-        transaction_signature: Option<String>,
-        error_message: Option<String>,
-    ) -> Result<(), ArbError> {
-        EXECUTION_TIME_MS.observe(execution_time_ms as f64);
-        if success {
-            TRADES_EXECUTED_SUCCESSFUL_TOTAL.inc();
-            if let Some(profit) = actual_profit_usd {
-                TOTAL_PROFIT_USD.inc_by(profit);
-            }
-        } else {
-            TRADES_EXECUTED_FAILED_TOTAL.inc();
-        }
-
-        if let Some(log_file_mutex) = &self.log_file {
-            let log_entry_str = format!(
-                "EXECUTION_RESULT: time={}, id={}, success={}, exec_ms={}, profit_usd={:.2}, tx_cost_sol={:.9}, fees_usd={:.2}, sig={:?}, err={:?}\n",
-                chrono::Utc::now().to_rfc3339(),
-                opportunity_identifier,
-                success,
-                execution_time_ms,
-                actual_profit_usd.unwrap_or(0.0),
-                tx_cost_sol,
-                fees_paid_usd.unwrap_or(0.0),
-                transaction_signature,
-                error_message
-            );
-            let mut file = log_file_mutex.lock().await;
-            if let Err(e) = writeln!(file, "{}", log_entry_str) {
-                return Err(ArbError::Unknown(format!("Failed to write to log file: {}", e)));
-            }
-        }
+        input_token: &str,
+        intermediate_token: &str,
+        profit_pct: f64,
+        estimated_profit_usd: Option<f64>,
+        input_amount_usd: Option<f64>,
+        dex_path: Vec<String>,
+    ) -> Result<(), String> {
+        self.opportunities_detected.fetch_add(1, Ordering::Relaxed);
+        info!(
+            "Detected opportunity: {} -> {} -> {}, Profit: {:.4}%, Est. USD: {:?}, Input USD: {:?}, Path: {:?}",
+            input_token, intermediate_token, input_token, profit_pct, estimated_profit_usd, input_amount_usd, dex_path
+        );
         Ok(())
     }
-
-    pub fn update_active_pools(&self, count: usize) {
-        ACTIVE_POOLS.set(count as f64);
-    }
-
-    // Add other methods as needed, e.g., for exposing metrics via an HTTP endpoint
-    // pub fn gather_metrics_text() -> String {
-    //     use prometheus::Encoder;
-    //     let encoder = prometheus::TextEncoder::new();
-    //     let mut buffer = vec![];
-    //     encoder.encode(&prometheus::gather(), &mut buffer).unwrap();
-    //     String::from_utf8(buffer).unwrap()
-    // }
 }
 
 impl Default for Metrics {
     fn default() -> Self {
-        Metrics::new(None).expect("Failed to initialize default Prometheus metrics")
+        Self::new()
     }
 }
-*/

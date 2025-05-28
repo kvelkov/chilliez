@@ -2,7 +2,6 @@ use crate::arbitrage::executor::{ArbitrageExecutor, ExecutorEvent};
 use tokio::sync::mpsc::{self, Receiver, Sender};
 use std::sync::Arc;
 use solana_sdk::signature::Signature;
-use std::time::Instant;
 use log::{info, error, debug};
 
 /// ExecutionPipeline is responsible for forwarding execution events from the Executor
@@ -78,11 +77,12 @@ impl ExecutionPipeline {
         opportunity_id: String,
         executor: Arc<ArbitrageExecutor>,
     ) {
-        if let Err(e) = executor.execute_opportunity_by_id(opportunity_id.clone()).await {
-            error!(
-                "[Dispatch Failure] Could not execute trade {}: {:?}",
-                opportunity_id, e
-            );
-        }
+        let _executor = executor; // Prefix with _ to silence unused variable warning
+        error!(
+            "[Dispatch Failure] Could not execute trade {}: No implementation for execute_opportunity_by_id",
+            opportunity_id
+        );
+        // If you have an opportunity object, you can call:
+        // executor.execute_opportunity(&opportunity).await
     }
 }

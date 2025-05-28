@@ -63,12 +63,12 @@ impl Metrics {
         self.opportunities_detected.fetch_add(count, Ordering::Relaxed);
     }
 
-    /// Call this method immediately after a successful execution.
+    /// Call this method immediately after a successful execution. (Method Added)
     pub fn log_opportunity_executed_success(&self) {
         self.opportunities_executed_success.fetch_add(1, Ordering::Relaxed);
     }
 
-    /// Call this method after a failed execution attempt.
+    /// Call this method after a failed execution attempt. (Method Added)
     pub fn log_opportunity_executed_failure(&self) {
         self.opportunities_executed_failure.fetch_add(1, Ordering::Relaxed);
     }

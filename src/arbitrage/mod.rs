@@ -1,19 +1,18 @@
-use crate::arbitrage::executor::ArbitrageExecutor;
-use crate::arbitrage::opportunity::MultiHopArbOpportunity;
-use crate::metrics::Metrics;
+use self::executor::ArbitrageExecutor;
+use self::opportunity::MultiHopArbOpportunity;
+use crate::metrics::Metrics; // This import is fine
 use std::sync::Arc;
-use tokio::sync::mpsc::{self, Receiver, Sender};
+use tokio::sync::{mpsc::{self, Receiver, Sender}, Mutex}; // Added Mutex here
 use tokio::spawn;
 use log::{info, error, debug};
+pub mod engine;
+pub mod calculator;
+pub mod pipeline;
+pub mod fee_manager;
 pub mod executor;
 pub mod opportunity;
-pub mod detector;
-pub mod fee_manager;
-pub mod calculator;
-pub mod engine;
 pub mod dynamic_threshold;
-
-
+pub mod detector;
 /// TradeInstruction is used to convey a new trade that must be executed.
 /// It carries all the metadata required (price, quantity, pool info, fees, slippage, etc.)
 /// to enable the executor to perform the trade.
@@ -26,7 +25,7 @@ pub enum TradeInstruction {
 /// dispatches them immediately to the Executor, and can record the execution results in Metrics.
 pub struct ArbitrageCoordinator {
     executor: Arc<ArbitrageExecutor>,
-    metrics: Arc<Metrics>,
+    metrics: Arc<Mutex<Metrics>>, // Changed type here
     instruction_rx: Receiver<TradeInstruction>,
     instruction_tx: Sender<TradeInstruction>,
 }
@@ -34,7 +33,7 @@ pub struct ArbitrageCoordinator {
 impl ArbitrageCoordinator {
     /// Constructs a new coordinator with the given Executor and Metrics.
     /// It establishes an internal MPSC channel (with a capacity of 100) for trade instructions.
-    pub fn new(executor: Arc<ArbitrageExecutor>, metrics: Arc<Metrics>) -> Self {
+    pub fn new(executor: Arc<ArbitrageExecutor>, metrics: Arc<Mutex<Metrics>>) -> Self { // Changed parameter type
         let (instruction_tx, instruction_rx) = mpsc::channel(100);
         Self {
             executor,
@@ -56,7 +55,7 @@ impl ArbitrageCoordinator {
     pub async fn run(&mut self) {
         // Spawn a background task for optionally listening to executor events.
         // This stub can be extended to subscribe to an event channel provided by the executor.
-        let executor_clone = Arc::clone(&self.executor);
+        let _executor_clone = Arc::clone(&self.executor); // Prefixed with underscore
         spawn(async move {
             loop {
                 // This sleep is only a placeholder.
@@ -78,14 +77,18 @@ impl ArbitrageCoordinator {
                                 "Successfully executed opportunity {} with signature {:?}",
                                 opp.id, signature
                             );
-                            // Update Metrics with successful execution details here.
+                            self.metrics.lock().await.log_opportunity_executed_success();
+                            // Add/update this method in Metrics if missing, or use a generic metric/log call
+                            // self.metrics.lock().await.update_profit(opp.total_profit);
+                            // If update_profit does not exist, use increment_main_cycles or another suitable method:
+                            self.metrics.lock().await.increment_main_cycles();
                         }
                         Err(err) => {
                             error!(
                                 "Execution failed for opportunity {}: {:?}",
                                 opp.id, err
                             );
-                            // Update failure metrics or trigger alerts as needed.
+                            self.metrics.lock().await.log_opportunity_executed_failure();
                         }
                     }
                 }

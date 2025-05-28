@@ -11,8 +11,6 @@ use crate::{
     solana::{rpc::SolanaRpcClient, websocket::SolanaWebsocketManager},
     utils::PoolInfo,
 };
-
-
 use crate::solana::WebsocketUpdate;
 use crate::websocket::CryptoDataProvider;
 use log::{debug, error, info, warn};
@@ -39,24 +37,24 @@ pub struct ArbitrageEngine {
     // Shared pool state (keyed by pool address)
     pools: Arc<RwLock<HashMap<Pubkey, Arc<PoolInfo>>>>,
     // Optional websocket manager for pool & market updates.
-    pub ws_manager: Option<Arc<Mutex<SolanaWebsocketManager>>>,
+    ws_manager: Option<Arc<Mutex<SolanaWebsocketManager>>>,
     // Price provider for dynamic threshold updates.
     price_provider: Option<Arc<dyn CryptoDataProvider + Send + Sync>>,
     // Metrics system for external recording of events and states.
     metrics: Arc<Mutex<Metrics>>,
     // Optional RPC client (e.g., Solana cluster interface)
     rpc_client: Option<Arc<SolanaRpcClient>>,
-    pub config: Arc<Config>, // Made public for direct test access, consider getter for encapsulation
+    config: Arc<Config>,
     // A flag to indicate if the engine is in degradation mode.
-    pub degradation_mode: Arc<AtomicBool>,
+    degradation_mode: Arc<AtomicBool>,
     // Timestamp for the last health check – used for periodic system status updates.
     last_health_check: Arc<RwLock<Instant>>,
     // Interval at which health checks are run.
-    pub health_check_interval: Duration,
+    health_check_interval: Duration,
     // Websocket reconnect attempts counter.
-    pub ws_reconnect_attempts: Arc<AtomicU64>,
+    ws_reconnect_attempts: Arc<AtomicU64>,
     // Maximum permitted websocket reconnect attempts.
-    pub max_ws_reconnect_attempts: u64,
+    max_ws_reconnect_attempts: u64,
     // Detector instance used for scanning arbitrage opportunities.
     detector: Arc<Mutex<ArbitrageDetector>>,
     // Optionally provided DEX clients (if any).
@@ -220,14 +218,14 @@ impl ArbitrageEngine {
         *self.min_profit_threshold_pct.read().await
     }
 
-    /// Returns a clone of the engine's circuit breaker.
-    pub fn get_circuit_breaker(&self) -> Arc<RwLock<CircuitBreaker>> {
-        Arc::clone(&self.circuit_breaker)
+    /// Sets the degradation mode of the engine.
+    pub fn set_degradation_mode(&self, value: bool) {
+        self.degradation_mode.store(value, std::sync::atomic::Ordering::Relaxed);
     }
 
-    /// Returns a clone of the engine's retry policy.
-    pub fn get_retry_policy(&self) -> RetryPolicy {
-        self.retry_policy.clone()
+    /// Gets the current degradation mode of the engine.
+    pub fn get_degradation_mode(&self) -> bool {
+        self.degradation_mode.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// Returns a clone of the engine's configuration.
@@ -235,78 +233,42 @@ impl ArbitrageEngine {
         Arc::clone(&self.config)
     }
 
-    /// Returns a clone of the Arc-wrapped last health check timestamp.
+    /// Returns a clone of the Arc-wrapped RwLock for the last health check timestamp.
     pub fn get_last_health_check(&self) -> Arc<RwLock<Instant>> {
         Arc::clone(&self.last_health_check)
     }
 
-    /// Executes a closure with a read guard to the pools map.
-    /// This allows safe, read-only access to the shared pool data.
-    pub async fn with_pool_guard_async<F, R>(&self, f: F) -> R
-    where
-        F: FnOnce(tokio::sync::RwLockReadGuard<'_, HashMap<Pubkey, Arc<PoolInfo>>>) -> R,
-    {
-        let pools_guard = self.pools.read().await;
-        f(pools_guard)
+    /// Returns the health check interval.
+    pub fn get_health_check_interval(&self) -> Duration {
+        self.health_check_interval
     }
+
+    /// Returns the current number of WebSocket reconnect attempts.
+    pub fn get_ws_reconnect_attempts(&self) -> u64 {
+        self.ws_reconnect_attempts.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Returns the maximum configured WebSocket reconnect attempts.
+    pub fn get_max_ws_reconnect_attempts(&self) -> u64 {
+        self.max_ws_reconnect_attempts
+    }
+
 
     /// Discovers arbitrage opportunities by invoking the detector (both direct and multi-hop).
     pub async fn detect_arbitrage(&self) -> Result<Vec<MultiHopArbOpportunity>, ArbError> {
         let pools_guard = self.pools.read().await;
         let mut metrics_guard = self.metrics.lock().await;
         let detector_guard = self.detector.lock().await;
+        // The find_all_opportunities method in detector.rs already handles 3-hop (multi-hop) scenarios.
         let mut opps = detector_guard.find_all_opportunities(&*pools_guard, &mut *metrics_guard).await?;
-        let mut multihop_opps = detector_guard.find_all_multihop_opportunities(&*pools_guard, &mut *metrics_guard).await?;
-        opps.append(&mut multihop_opps);
         opps.sort_by(|a, b| b.profit_pct.partial_cmp(&a.profit_pct).unwrap_or(std::cmp::Ordering::Equal));
         Ok(opps)
-    }
-
-    /// Discovers fixed input arbitrage opportunities.
-    pub async fn discover_fixed_input_opportunities(&self, fixed_input_amount: f64) -> Result<Vec<MultiHopArbOpportunity>, ArbError> {
-        let pools_guard = self.pools.read().await;
-        let mut metrics_guard = self.metrics.lock().await;
-        let detector_guard = self.detector.lock().await;
-        detector_guard.find_two_hop_opportunities(&*pools_guard, &mut *metrics_guard, fixed_input_amount).await
-    }
-
-    /// Discovers multi-hop arbitrage opportunities.
-    pub async fn discover_multihop_opportunities(&self) -> Result<Vec<MultiHopArbOpportunity>, ArbError> {
-        let pools_guard = self.pools.read().await;
-        let mut metrics_guard = self.metrics.lock().await;
-        let detector_guard = self.detector.lock().await;
-        detector_guard.find_all_multihop_opportunities(&*pools_guard, &mut *metrics_guard).await
-    }
-
-    /// Checks if an opportunity is still valid based on current market conditions.
-    pub async fn is_opportunity_still_valid(&self, opportunity: &MultiHopArbOpportunity) -> bool {
-        if opportunity.hops.is_empty() {
-            return false;
-        }
-        // This is a simplified check. A more robust check would re-simulate the trade
-        // with current pool reserves and compare against dynamic profit thresholds.
-        // For now, we'll assume it's valid if the profit percentage still meets the engine's current threshold.
-        let current_min_profit_pct = self.get_min_profit_threshold_pct().await;
-        opportunity.profit_pct >= current_min_profit_pct
-    }
-
-    /// Starts background services like WebSocket manager.
-    pub async fn start_services(&self, cache: Option<Arc<crate::cache::Cache>>) {
-        if let Some(ws_manager_arc) = &self.ws_manager {
-            info!("[Engine] Starting WebSocket Manager service...");
-            if let Err(e) = ws_manager_arc.lock().await.start(cache).await {
-                error!("[Engine] Failed to start WebSocket Manager: {}", e);
-            }
-        } else {
-            warn!("[Engine] WebSocket Manager not configured, skipping start_services for it.");
-        }
-        // Potentially start other services here
     }
 
     /// Health check: verifies that the websocket connection is active.
     pub async fn run_health_checks(&self) {
         if let Some(ws_manager_arc) = &self.ws_manager {
-            let ws_manager = ws_manager_arc.lock().await;
+            let ws_manager: tokio::sync::MutexGuard<'_, SolanaWebsocketManager> = ws_manager_arc.lock().await;
             if !ws_manager.is_connected().await {
                 error!("[Engine] Websocket manager is NOT connected!");
             } else {
@@ -354,25 +316,11 @@ impl ArbitrageEngine {
         )
     }
 
-    /// Runs the dynamic threshold update loop.
-    /// This method is intended to be spawned as a separate task.
-    pub async fn run_dynamic_threshold_updates(&self) {
-        if let Some(dynamic_updater_arc) = &self.dynamic_threshold_updater {
-            let updater = Arc::clone(dynamic_updater_arc);
-            let metrics = Arc::clone(&self.metrics);
-            let detector = Arc::clone(&self.detector);
-            let price_provider = self.price_provider.clone(); // Clone the Option<Arc<...>>
-
-            DynamicThresholdUpdater::start_monitoring_task(
-                updater,
-                metrics,
-                detector,
-                price_provider,
-            ).await;
-        } else {
-            warn!("[Engine] Dynamic threshold updater not configured. Threshold updates will not run.");
-        }
+    /// Returns a clone of the Arc-wrapped RwLock for the pools map.
+    pub fn get_pools_lock(&self) -> Arc<RwLock<HashMap<Pubkey, Arc<PoolInfo>>>> {
+        Arc::clone(&self.pools)
     }
+
     /// Spawns and runs the key background services concurrently:
     ///  - WebSocket update processing,
     ///  - Dynamic threshold updates,
@@ -448,16 +396,6 @@ impl ArbitrageEngine {
             _ = dynamic_threshold_task => {},
             _ = detection_task => {},
         }
-    }
-
-    /// Gracefully shuts down the arbitrage engine and its components.
-    pub async fn shutdown(&self) -> Result<(), ArbError> {
-        info!("[Engine] Initiating shutdown sequence...");
-        // Example: If ws_manager was started by the engine, it should be stopped here.
-        // However, in the current main.rs, ws_manager.stop() is called directly.
-        // This shutdown method can be expanded for other engine-specific cleanup.
-        info!("[Engine] Shutdown sequence complete.");
-        Ok(())
     }
 }
 

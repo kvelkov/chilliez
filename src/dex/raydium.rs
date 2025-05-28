@@ -16,7 +16,7 @@ use serde::Deserialize;
 use solana_sdk::pubkey::Pubkey;
 use std::env;
 use std::str::FromStr;
-use reqwest::header::{HeaderMap, HeaderName};
+use reqwest::header::{HeaderName};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -84,8 +84,6 @@ struct RaydiumApiResponse {
     out_amount: String,
     #[serde(rename = "priceImpactPct")]
     price_impact_pct: Option<f64>,
-    #[serde(rename = "fee")]
-    fee_amount: Option<String>,
 }
 
 #[derive(Debug, Clone)] 
@@ -115,17 +113,6 @@ impl RaydiumClient {
             cache,
             quote_cache_ttl_secs: quote_cache_ttl_secs.unwrap_or(30), 
         }
-    }
-
-    pub fn get_api_key(&self) -> &str {
-        &self.api_key
-    }
-    
-    // Example placeholder for an authenticated request.
-    pub fn make_authenticated_request(&self) -> Result<(), Box<dyn std::error::Error>> {
-        let _key = self.get_api_key();
-        // ... implementation here
-        Ok(())
     }
 }
 

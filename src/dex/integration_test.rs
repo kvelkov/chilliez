@@ -64,9 +64,9 @@ pub async fn _exercise_dex_clients() {
     let phoenix =
         log_timed_request("Initialize Phoenix Client", async { PhoenixClient::new(cache.clone(), None) }).await;
 
-    let _ = raydium.get_api_key(); // Fixed: use get_api_key, not _get_api_key
-    let _ = whirlpool.get_api_key(); // Fixed: use get_api_key, not _get_api_key
-    let _ = lifinity.get_api_key(); // Assuming this one might be used or was missed for prefixing
+    // let _ = raydium.get_api_key(); // Removed: RaydiumClient no longer has get_api_key
+    // let _ = whirlpool.get_api_key(); // Removed: WhirlpoolClient no longer has get_api_key
+    let _ = lifinity.get_api_key();
     
     let _ = orca.get_supported_pairs();
     let _ = raydium.get_supported_pairs();

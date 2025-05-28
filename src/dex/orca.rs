@@ -6,7 +6,6 @@ use crate::dex::quote::{DexClient, Quote};
 use crate::utils::{DexType, PoolInfo, PoolParser as UtilsPoolParser, PoolToken};
 use crate::cache::Cache;
 use crate::dex::http_utils_shared::{build_auth_headers, log_timed_request};
-use crate::error::{ArbError, ArbResult};
 use anyhow::{anyhow, Result as AnyhowResult};
 use async_trait::async_trait;
 use log::{debug, error, warn};

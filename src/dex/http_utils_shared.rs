@@ -1,7 +1,7 @@
 //! Centralized HTTP and logging utilities for DEX API access.
 
-use reqwest::header::{HeaderMap, HeaderName, HeaderValue, CONTENT_TYPE};
 use log::{error, info};
+use reqwest::header::{HeaderMap, HeaderName, HeaderValue, CONTENT_TYPE};
 
 /// Builds a HeaderMap, including an authorization header if an API key is provided,
 /// and sets the Content-Type to application/json.

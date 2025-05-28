@@ -62,7 +62,7 @@ pub fn get_all_clients(
     // Orca Client
     clients.push(Box::new(OrcaClient::new(
         Arc::clone(&cache),
-        get_dex_ttl("Orca"), // Pass specific or default TTL
+        get_dex_ttl("Orca"),
     )));
     info!("- Orca client initialized.");
 

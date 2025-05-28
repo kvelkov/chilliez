@@ -68,10 +68,6 @@ impl WhirlpoolClient {
             quote_cache_ttl_secs: quote_cache_ttl_secs.unwrap_or(30),
         }
     }
-
-    pub fn get_api_key(&self) -> &str {
-        &self.api_key
-    }
 }
 
 #[async_trait]

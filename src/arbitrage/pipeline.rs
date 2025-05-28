@@ -23,24 +23,13 @@ impl ExecutionPipeline {
     /// Starts listening for executor events and processes them continuously.
     /// This function runs as an asynchronous background task.
     pub async fn start_listener(&mut self) {
-        while let Some(raw_event) = self.receiver.recv().await {
-            // Transitional/Conversion logic: transform the event if needed.
-            let event = self.transform_event(raw_event);
+        while let Some(event) = self.receiver.recv().await {
+            // Directly process the event, no transform step needed.
             self.process_event(event).await;
         }
     }
 
-    /// A placeholder transformation function.
-    /// Here you can convert or enrich the incoming ExecutorEvent if needed before processing.
-    fn transform_event(&self, event: ExecutorEvent) -> ExecutorEvent {
-        // Insert any transitional logic or conversion here.
-        // For example, you might convert units, filter out certain events, or batch them.
-        debug!("Transforming event: {:?}", event);
-        event // Currently, it passes through unchanged.
-    }
-
     /// Processes an executor event asynchronously.
-    /// Currently, it logs success or failure details for each execution.
     async fn process_event(&self, event: ExecutorEvent) {
         match event {
             ExecutorEvent::OpportunityExecuted {
@@ -63,26 +52,8 @@ impl ExecutionPipeline {
         }
     }
 
-    /// (Optional) Exposes the sender side of the pipeline in case upstream components
-    /// want to push ExecutorEvents directly into the pipeline.
+    /// Exposes the sender side of the pipeline for upstream components.
     pub fn get_sender(&self) -> Sender<ExecutorEvent> {
         self.sender.clone()
-    }
-
-    /// As an example of how to dispatch an execution request, we include a stub method.
-    /// It calls the executor's method to execute an opportunity by its ID.
-    /// This method shows how to initiate an execution via the pipeline.
-    pub async fn dispatch_execution(
-        &self,
-        opportunity_id: String,
-        executor: Arc<ArbitrageExecutor>,
-    ) {
-        let _executor = executor; // Prefix with _ to silence unused variable warning
-        error!(
-            "[Dispatch Failure] Could not execute trade {}: No implementation for execute_opportunity_by_id",
-            opportunity_id
-        );
-        // If you have an opportunity object, you can call:
-        // executor.execute_opportunity(&opportunity).await
     }
 }

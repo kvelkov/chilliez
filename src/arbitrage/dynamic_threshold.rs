@@ -8,7 +8,6 @@ use crate::websocket::CryptoDataProvider; // Added for price_provider
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::time::Duration;
-use std::time::Instant; // Added import
 
 const DEFAULT_VOLATILITY_WINDOW: usize = 20;
 const MIN_THRESHOLD_PCT: f64 = 0.01; // Minimum 0.01%
@@ -69,23 +68,14 @@ impl VolatilityTracker {
 pub struct DynamicThresholdUpdater {
     volatility_tracker: VolatilityTracker,
     config: Arc<Config>,
-    _current_threshold: Arc<Mutex<f64>>,
-    _update_interval: Duration, // Prefixed
-    _last_update_time: Arc<Mutex<Instant>>, // Prefixed
 }
 
 impl DynamicThresholdUpdater {
     pub fn new(config: Arc<Config>) -> Self {
         let window_size = config.volatility_tracker_window.unwrap_or(DEFAULT_VOLATILITY_WINDOW);
-        let initial_threshold_pct = config.min_profit_pct * 100.0;
-        let update_interval_secs = config.dynamic_threshold_update_interval_secs.unwrap_or(300);
-
         Self {
             volatility_tracker: VolatilityTracker::new(window_size),
             config: Arc::clone(&config),
-            _current_threshold: Arc::new(Mutex::new(initial_threshold_pct)),
-            _update_interval: Duration::from_secs(update_interval_secs), // Prefixed
-            _last_update_time: Arc::new(Mutex::new(Instant::now())), // Prefixed
         }
     }
 
@@ -223,6 +213,7 @@ mod tests {
             max_pools_per_hop: Some(5),
             max_concurrent_executions: Some(10),
             execution_timeout_secs: Some(30),
+            transaction_cu_limit: Some(400_000), // Add missing field
             simulation_mode: Some(false).unwrap_or(true),
             paper_trading: Some(false).unwrap_or(false),
             metrics_log_path: None,

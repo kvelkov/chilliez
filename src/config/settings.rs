@@ -2,7 +2,7 @@ use serde::Deserialize;
 use std::{collections::HashMap, env};
 use std::path::Path;
 #[derive(Debug, Deserialize, Clone)]
-#[serde(rename_all = "kebab-case")] // Allows TOML keys like rpc-url-secondary
+#[serde(rename_all = "kebab-case")]
 pub struct Config {
     pub rpc_url: String,
     pub rpc_url_secondary: Option<String>,
@@ -32,6 +32,7 @@ pub struct Config {
     pub max_pools_per_hop: Option<usize>,
     pub max_concurrent_executions: Option<usize>,
     pub execution_timeout_secs: Option<u64>,
+    pub transaction_cu_limit: Option<u32>, // Added field for Compute Unit Limit
     pub simulation_mode: bool,
     pub paper_trading: bool,
     pub metrics_log_path: Option<String>,
@@ -108,6 +109,7 @@ impl Config {
             max_pools_per_hop: env::var("MAX_POOLS_PER_HOP").ok().and_then(|s| s.parse().ok()),
             max_concurrent_executions: env::var("MAX_CONCURRENT_EXECUTIONS").ok().and_then(|s| s.parse().ok()),
             execution_timeout_secs: env::var("EXECUTION_TIMEOUT_SECS").ok().and_then(|s| s.parse().ok()),
+            transaction_cu_limit: env::var("TRANSACTION_CU_LIMIT").ok().and_then(|s| s.parse().ok()), // Load from env
             simulation_mode: env::var("SIMULATION_MODE").unwrap_or_else(|_| "false".to_string()).parse().unwrap_or(false),
             paper_trading: env::var("PAPER_TRADING").unwrap_or_else(|_| "false".to_string()).parse().unwrap_or(false),
             metrics_log_path: env::var("METRICS_LOG_PATH").ok(),
@@ -159,6 +161,7 @@ impl Config {
             max_pools_per_hop: Some(5),
             max_concurrent_executions: Some(10),
             execution_timeout_secs: Some(30),
+            transaction_cu_limit: Some(400_000), // Add default for test config
             simulation_mode: false,
             paper_trading: false,
             metrics_log_path: None,
@@ -227,6 +230,12 @@ impl Config {
         }
         if self.simulation_mode {
             log::info!("Simulation mode is ENABLED.");
+        }
+        if let Some(val) = &self.congestion_update_interval_secs {
+            log::info!("  Congestion Update Interval Secs: {}", val);
+        }
+        if let Some(val) = &self.transaction_cu_limit {
+            log::info!("  Transaction CU Limit: {}", val);
         }
     }
 }

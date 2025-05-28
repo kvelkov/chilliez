@@ -53,18 +53,6 @@ impl ArbitrageCoordinator {
     /// For each received instruction, it dispatches the execution call to the Executor.
     /// Execution events (successes or failures) are logged and can be further recorded in Metrics.
     pub async fn run(&mut self) {
-        // Spawn a background task for optionally listening to executor events.
-        // This stub can be extended to subscribe to an event channel provided by the executor.
-        let _executor_clone = Arc::clone(&self.executor); // Prefixed with underscore
-        spawn(async move {
-            loop {
-                // This sleep is only a placeholder.
-                // In a full production system, subscribe to an event channel to capture and log executor events.
-                tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
-                debug!("ArbitrageCoordinator: Checking for executor events (stub)...");
-            }
-        });
-
         // Main loop: process incoming trade instructions immediately.
         while let Some(instruction) = self.instruction_rx.recv().await {
             match instruction {

@@ -1,5 +1,6 @@
 use tokio::sync::mpsc;
 type EventSender = mpsc::Sender<ExecutorEvent>;
+use crate::config::settings::Config; // Added for config access
 use crate::arbitrage::opportunity::MultiHopArbOpportunity;
 use tokio::sync::Mutex;
 use crate::metrics::Metrics;
@@ -20,6 +21,7 @@ pub struct ArbitrageExecutor {
     wallet: Arc<Keypair>,
     rpc_client: Arc<NonBlockingRpcClient>,
     event_sender: Option<EventSender>, // Add this
+    config: Arc<Config>,               // Added for CU limit/price
     metrics: Arc<Mutex<Metrics>>,      // Add this
 }
 
@@ -42,10 +44,11 @@ impl ArbitrageExecutor {
     pub fn new(
         wallet: Arc<Keypair>, 
         rpc_client: Arc<NonBlockingRpcClient>, 
-        event_sender: Option<EventSender>, 
+        event_sender: Option<EventSender>,
+        config: Arc<Config>, 
         metrics: Arc<Mutex<Metrics>>
     ) -> Self {
-        Self { wallet, rpc_client, event_sender, metrics }
+        Self { wallet, rpc_client, event_sender, config, metrics }
     }
 
     pub async fn execute_opportunity(
@@ -59,10 +62,17 @@ impl ArbitrageExecutor {
             return Err("No swap instructions generated".to_string());
         }
 
+        // Get CU limit and price from config, with defaults
+        // Use the new optional transaction_cu_limit field from config
+        let cu_limit = self.config.transaction_cu_limit.unwrap_or(400_000); 
+        // Use the existing transaction_priority_fee_lamports for the price.
+        // This field is likely a u64 in your Config struct after loading.
+        let cu_price = self.config.transaction_priority_fee_lamports;
+
         let recent_blockhash = self.get_latest_blockhash().await?;
         let all_instructions: Vec<Instruction> = [
-            ComputeBudgetInstruction::set_compute_unit_limit(400_000), // Example: Set CU limit
-            ComputeBudgetInstruction::set_compute_unit_price(10_000),   // Example: Set priority fee per CU
+            ComputeBudgetInstruction::set_compute_unit_limit(cu_limit),
+            ComputeBudgetInstruction::set_compute_unit_price(cu_price),
         ].into_iter().chain(instructions.into_iter()).collect();
 
         let transaction = Transaction::new_signed_with_payer(
@@ -96,7 +106,17 @@ impl ArbitrageExecutor {
             }
             Err(e) => {
                 self.metrics.lock().await.log_opportunity_executed_failure();
-                // Potentially send failure event via self.event_sender as well
+                if let Some(sender) = &self.event_sender {
+                    let event = ExecutorEvent::OpportunityExecuted {
+                        opportunity_id: opportunity.id.clone(),
+                        signature: None, // No signature on failure to confirm
+                        timestamp: std::time::SystemTime::now(),
+                        result: Err(format!("Transaction failed: {}", e)),
+                    };
+                    if let Err(send_err) = sender.send(event).await {
+                        log::error!("Failed to send execution failure event: {}", send_err);
+                    }
+                }
                 Err(format!("Transaction failed: {}", e))
             }
         }

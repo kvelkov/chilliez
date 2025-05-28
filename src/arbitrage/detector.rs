@@ -100,7 +100,7 @@ impl ArbitrageDetector {
         let input_amount = 100.0; 
         let last_fee_data = vec![(None, None, None); pools_path.len()];
 
-        let (profit, slippage, _fee) =
+        let (profit, slippage, calculated_fee_usd) =
             calculate_multihop_profit_and_slippage(&pools_path, input_amount, p1.token_a.decimals, &directions, &last_fee_data);
 
         let opp_calc_result = OpportunityCalculationResult {
@@ -108,12 +108,11 @@ impl ArbitrageDetector {
             output_amount: input_amount + profit,
             profit,
             profit_percentage: profit / input_amount,
-            price_impact: slippage,
         };
 
         let input_token_price_usd = if p1.token_a.symbol == "USDC" || p1.token_a.symbol == "USDT" { 1.0 } else { self.sol_price_usd };
 
-        if self.is_profitable(&opp_calc_result, input_token_price_usd, pools_path.len()) {
+        if self.is_profitable(&opp_calc_result, input_token_price_usd, calculated_fee_usd) {
             let opp_id = format!("multi-hop-{}-{}-{}", p1.address, p2.address, p3.address);
             let opportunity = MultiHopArbOpportunity { // opp_id is moved here
                 id: opp_id,
@@ -167,8 +166,7 @@ impl ArbitrageDetector {
 
             info!("Found profitable arbitrage opportunity: {}", opportunity.id); // Use the id from the struct
             opportunities.push(opportunity);
-            // Use the metrics instance to log that an opportunity was detected at this stage
-            // metrics.log_opportunities_detected(1); // Old call
+            // The old call `metrics.log_opportunities_detected(1)` is replaced by the more detailed call below.
             let last_opportunity = opportunities.last().unwrap(); // Get the opportunity we just pushed
             if let Err(e) = metrics.record_opportunity_detected(
                 &last_opportunity.input_token,
@@ -183,15 +181,11 @@ impl ArbitrageDetector {
         }
     }
 
-    pub fn is_profitable(&self, opp_calc_result: &OpportunityCalculationResult, input_token_price_usd: f64, num_hops: usize) -> bool {
-        // Assuming num_hops is the number of swaps.
-        // For a 3-hop path, num_hops would be 3.
-        let num_swaps = num_hops;
-        let transaction_cost_usd = calculate_transaction_cost(
-            num_swaps,
-            self.default_priority_fee_lamports,
-            self.sol_price_usd
-        );
+    pub fn is_profitable(
+        &self,
+        opp_calc_result: &OpportunityCalculationResult,
+        input_token_price_usd: f64,
+        transaction_cost_usd: f64) -> bool {
 
         // Convert profit to USD before comparing with USD threshold
         let gross_profit_usd = opp_calc_result.profit * input_token_price_usd;

@@ -12,14 +12,8 @@ pub struct OpportunityCalculationResult {
     pub output_amount: f64,
     pub profit: f64,
     pub profit_percentage: f64,
-    pub price_impact: f64,
 }
 
-
-static CALCULATION_CACHE: Lazy<DashMap<(Pubkey, Pubkey, u64, bool), OpportunityCalculationResult>> =
-    Lazy::new(DashMap::new);
-static OPTIMAL_INPUT_CACHE: Lazy<DashMap<(Pubkey, Pubkey, bool, u64), TokenAmount>> =
-    Lazy::new(DashMap::new);
 static MULTI_HOP_CACHE: Lazy<DashMap<String, (f64, f64, f64)>> = Lazy::new(DashMap::new);
 
 /// Calculates the transaction cost in USD.

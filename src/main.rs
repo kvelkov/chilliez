@@ -145,6 +145,7 @@ async fn main() -> MainResult<()> {
         wallet.clone(),
         ha_solana_rpc_client.primary_client.clone(), 
         Some(event_sender_for_executor),
+        app_config.clone(), // Pass the application config
         metrics.clone(),
     ));
     info!("ArbitrageExecutor initialized.");

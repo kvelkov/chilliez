@@ -478,7 +478,11 @@ impl SolanaWebsocketManager {
             warn!("[WebSocket] Subscription task for {} (ID: {}) stopped.", pubkey, subscription_id);
             let timestamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
             let _ = raw_sender.send(RawAccountUpdate::Disconnected { pubkey, timestamp });
-            unsubscribe_fn();
+            // The future returned by unsubscribe_fn must be awaited.
+            // Assuming it's an async fn that might perform I/O for unsubscription.
+            // If it's a simple closure returning (), this await might not be strictly necessary
+            // but the compiler warning `unused_must_use` suggests it returns a Future.
+            unsubscribe_fn().await;
             info!("[WebSocket] Unsubscribe function called for {} (ID: {})", pubkey, subscription_id);
         });
 

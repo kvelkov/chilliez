@@ -7,6 +7,7 @@ use tokio::sync::RwLock;
 
 /// A cache for token metadata to reduce RPC calls.
 /// Primed for future UI/metrics/analytics integrations.
+#[allow(dead_code)] // Struct and its methods are not yet used
 pub struct TokenMetadataCache {
     cache: Arc<RwLock<HashMap<Pubkey, TokenMetadata>>>,
 }
@@ -32,6 +33,7 @@ impl TokenMetadata {
     }
 }
 
+#[allow(dead_code)] // Impl block and its methods are not yet used
 impl TokenMetadataCache {
     /// Create a new token metadata cache
     pub fn new() -> Self {

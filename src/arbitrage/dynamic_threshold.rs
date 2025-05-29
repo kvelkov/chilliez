@@ -1,5 +1,4 @@
 // src/arbitrage/dynamic_threshold.rs
-use crate::arbitrage::detector::ArbitrageDetector;
 // For engine_detector type
 use crate::config::settings::Config;
 use crate::metrics::Metrics;
@@ -124,7 +123,7 @@ impl DynamicThresholdUpdater {
             loop {
                 interval.tick().await;
                 
-                let mut metrics_guard = metrics.lock().await;
+                let metrics_guard = metrics.lock().await;
                 // We need to clone the updater to get a mutable reference
                 // This is a limitation of the current design - in practice, you might want to refactor this
                 warn!("Dynamic threshold update skipped - requires mutable reference to updater");
@@ -144,7 +143,7 @@ mod tests {
     use tokio;
     use std::collections::HashMap;
 
-    fn create_test_config(vol_window: Option<usize>, base_profit_pct: f64) -> Arc<Config> {
+    fn _create_test_config(vol_window: Option<usize>, base_profit_pct: f64) -> Arc<Config> {
         Arc::new(Config {
             min_profit_pct: base_profit_pct / 100.0,
             dynamic_threshold_update_interval_secs: Some(60),

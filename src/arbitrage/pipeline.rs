@@ -1,8 +1,7 @@
-use crate::arbitrage::executor::{ArbitrageExecutor, ExecutorEvent};
+use crate::arbitrage::executor::{ExecutorEvent};
 use tokio::sync::mpsc::{self, Receiver, Sender};
-use std::sync::Arc;
 use solana_sdk::signature::Signature;
-use log::{info, error, debug};
+use log::{info, error};
 
 /// ExecutionPipeline is responsible for forwarding execution events from the Executor
 /// to any external monitoring or logging components. Additionally, it provides a hook

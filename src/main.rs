@@ -11,7 +11,6 @@ pub mod websocket; // This was already here, good.
 
 use crate::{
     arbitrage::{
-        calculator,
         engine::ArbitrageEngine,
         executor::ArbitrageExecutor,
         pipeline::ExecutionPipeline, // <-- Add this import
@@ -208,7 +207,7 @@ async fn main() -> MainResult<()> {
     });
 
     // Network congestion monitoring - handle internally without calling non-existent methods
-    let ha_rpc_for_congestion = Arc::clone(&ha_solana_rpc_client);
+    let _ha_rpc_for_congestion = Arc::clone(&ha_solana_rpc_client);
     let congestion_update_interval_secs = app_config.congestion_update_interval_secs.unwrap_or(30);
     let congestion_task_handle = tokio::spawn(async move {
         info!("Starting congestion monitoring task (interval: {}s).", congestion_update_interval_secs);

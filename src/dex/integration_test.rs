@@ -177,7 +177,7 @@ mod tests {
     #[tokio::test]
     async fn test_dex_client_creation() {
         let config = Arc::new(Config::from_env());
-        let rpc_client = Arc::new(SolanaRpcClient::new(
+        let _rpc_client = Arc::new(SolanaRpcClient::new(
             &config.rpc_url, // Pass as &str
             config.rpc_url_backup
                 .as_ref()

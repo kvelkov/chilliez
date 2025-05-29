@@ -21,19 +21,22 @@ pub mod banned_pairs;
 
 // Re-export the main DexClient trait for easier access
 pub use quote::DexClient;
-pub use banned_pairs::{BannedPairsManager, BannedPairFilteringDexClientDecorator};
+// pub use banned_pairs::{BannedPairsManager, BannedPairFilteringDexClientDecorator}; // These are unused as top-level exports
 
 
 // --- Publicly re-export concrete client types ---
 // These lines make the client structs available directly under the `dex` module,
 // e.g., as `crate::dex::OrcaClient`
-pub use self::lifinity::LifinityClient; // Assuming LifinityClient is in lifinity.rs
-pub use self::meteora::MeteoraClient;   // Assuming MeteoraClient is in meteora.rs
-pub use self::orca::OrcaClient;          // Re-exports OrcaClient from the orca module
-pub use self::phoenix::PhoenixClient;  // Assuming PhoenixClient is in phoenix.rs
-pub use self::raydium::RaydiumClient;      // Re-exports RaydiumClient from the raydium module
-pub use self::whirlpool::WhirlpoolClient; // Assuming WhirlpoolClient is in whirlpool.rs
-
+// The following re-exports are marked as unused by the compiler.
+// They are not strictly necessary if `get_all_clients` is the primary way clients are obtained,
+// or if external modules use the full path like `crate::dex::orca::OrcaClient`.
+// Removing them to satisfy the compiler warning.
+// pub use self::lifinity::LifinityClient;
+// pub use self::meteora::MeteoraClient;
+// pub use self::orca::OrcaClient;
+// pub use self::phoenix::PhoenixClient;
+// pub use self::raydium::RaydiumClient;
+// pub use self::whirlpool::WhirlpoolClient;
 
 // (Keep your existing imports for get_all_clients, etc.)
 use crate::cache::Cache;

@@ -16,13 +16,14 @@ pub struct OpportunityDetail {
     input_token: String,
     output_token: String,
     profit_percentage: f64,
-    input_amount: f64,
-    expected_output: f64,
-    dex_path: Option<Vec<String>>,
-    timestamp: chrono::DateTime<chrono::Utc>,
+    input_amount: f64, // Used in log
+    // expected_output: f64, // This field is not read from the struct instance
+    // dex_path: Option<Vec<String>>, // This field is not read from the struct instance; param is used
+    // timestamp: chrono::DateTime<chrono::Utc>, // This field is not read from the struct instance
 }
 
 #[derive(Debug)]
+#[allow(dead_code)] // Struct and its fields are not yet used
 pub struct ExecutionRecord {
     opportunity_id: String,
     success: bool,
@@ -34,6 +35,7 @@ pub struct ExecutionRecord {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[allow(dead_code)] // Enum and its variants are not yet used
 pub enum TradeOutcome {
     Attempted,
     Success,
@@ -42,6 +44,7 @@ pub enum TradeOutcome {
 }
 
 #[derive(Debug)]
+#[allow(dead_code)] // Several fields are initialized but not read yet
 pub struct Metrics {
     pub launch_time: u64,
     pub pools_fetched: usize,
@@ -60,8 +63,8 @@ pub struct Metrics {
     log_path: Option<String>,
     launch_time_utc: Option<chrono::DateTime<chrono::Utc>>,
     main_cycles_executed: u64,
-    last_opportunity_timestamp: Option<chrono::DateTime<chrono::Utc>>,
-    last_successful_trade_timestamp: Option<chrono::DateTime<chrono::Utc>>,
+    pub last_opportunity_timestamp: Option<chrono::DateTime<chrono::Utc>>, // Made public for consistency
+    pub last_successful_trade_timestamp: Option<chrono::DateTime<chrono::Utc>>, // Made public
     current_min_profit_threshold: f64,
     system_healthy: bool,
     // Added missing fields for execution metrics
@@ -116,10 +119,10 @@ impl Metrics {
             input_token: input_token_symbol.to_string(),
             output_token: intermediate_token_symbol.to_string(),
             profit_percentage,
-            input_amount: input_amount_usd.unwrap_or(0.0),
-            expected_output: input_amount_usd.unwrap_or(0.0) * (1.0 + profit_percentage / 100.0),
-            dex_path: Some(dex_path.clone()),
-            timestamp: Utc::now(),
+            input_amount: input_amount_usd.unwrap_or(0.0), // Used
+        // expected_output: input_amount_usd.unwrap_or(0.0) * (1.0 + profit_percentage / 100.0), // Was not read
+        // dex_path: Some(dex_path.clone()), // Was not read
+        // timestamp: Utc::now(), // Was not read
         };
 
         info!( // Using estimated_profit_usd here

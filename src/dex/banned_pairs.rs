@@ -3,7 +3,7 @@
 use crate::dex::quote::{DexClient, Quote};
 use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
-use csv::{ReaderBuilder, WriterBuilder as CsvWriterBuilder, StringRecord};
+use csv::{ReaderBuilder, WriterBuilder as CsvWriterBuilder};
 use log;
 use std::collections::HashSet;
 use std::fs::{File, OpenOptions};
@@ -39,14 +39,14 @@ impl BannedPairKey {
 /// Manages the set of banned trading pairs.
 #[derive(Debug)]
 pub struct BannedPairsManager {
-    banned_pairs: HashSet<BannedPairKey>,
-    csv_file_path: Box<Path>, // Store the path for persisting new bans
+    _banned_pairs: HashSet<BannedPairKey>,
+    _csv_file_path: Box<Path>, // Store the path for persisting new bans
 }
 
 impl BannedPairsManager {
     /// Creates a new BannedPairsManager by loading banned pairs from a CSV file.
     /// The CSV file is expected to have headers "TokenA" and "TokenB".
-    pub fn new(csv_file_path: &Path) -> Result<Self> {
+    pub fn _new(csv_file_path: &Path) -> Result<Self> {
         log::info!("Loading banned pairs from: {:?}", csv_file_path);
         let file = File::open(csv_file_path)
             .with_context(|| format!("Failed to open banned pairs CSV file: {:?}", csv_file_path))?;
@@ -69,44 +69,44 @@ impl BannedPairsManager {
         }
         log::info!("Loaded {} unique banned pairs.", banned_pairs_set.len());
         Ok(Self {
-            banned_pairs: banned_pairs_set,
-            csv_file_path: csv_file_path.into(),
+            _banned_pairs: banned_pairs_set,
+            _csv_file_path: csv_file_path.into(),
         })
     }
 
     /// Checks if a given token pair is banned.
     pub fn is_banned(&self, token_a: &str, token_b: &str) -> bool {
         let key = BannedPairKey::new(token_a, token_b);
-        self.banned_pairs.contains(&key)
+        self._banned_pairs.contains(&key)
     }
 
     /// Adds a pair to the banned list and persists it to the CSV file.
     /// Returns `Ok(true)` if the pair was newly banned, `Ok(false)` if it was already banned.
-    pub fn ban_pair_and_persist(
+    pub fn _ban_pair_and_persist(
         &mut self,
         token_a: &str,
         token_b: &str,
         ban_type: &str,
         details: &str,
     ) -> Result<bool> {
-        let key = BannedPairKey::new(token_a, token_b);
-        if self.banned_pairs.contains(&key) {
+        let _key = BannedPairKey::new(token_a, token_b);
+        if self._banned_pairs.contains(&_key) {
             log::debug!("Pair {}/{} is already banned in memory. No CSV update needed.", token_a, token_b);
             return Ok(false); // Already banned
         }
 
         // Add to in-memory set
-        self.banned_pairs.insert(key);
+        self._banned_pairs.insert(_key);
 
         // Append to CSV
         // Check if file exists to determine if headers are needed
-        let file_exists_and_not_empty = self.csv_file_path.exists() && self.csv_file_path.metadata().map(|m| m.len() > 0).unwrap_or(false);
+        let file_exists_and_not_empty = self._csv_file_path.exists() && self._csv_file_path.metadata().map(|m| m.len() > 0).unwrap_or(false);
 
         let file = OpenOptions::new()
             .append(true)
             .create(true)
-            .open(&self.csv_file_path)
-            .with_context(|| format!("Failed to open/create banned pairs CSV for appending: {:?}", self.csv_file_path))?;
+            .open(&self._csv_file_path)
+            .with_context(|| format!("Failed to open/create banned pairs CSV for appending: {:?}", self._csv_file_path))?;
 
         let mut wtr = CsvWriterBuilder::new()
             .has_headers(!file_exists_and_not_empty) // Write headers only if file is new/empty
@@ -114,12 +114,12 @@ impl BannedPairsManager {
 
         if !file_exists_and_not_empty {
             wtr.write_record(&["TokenA", "TokenB", "BanType", "Details"])
-                .with_context(|| format!("Failed to write headers to banned pairs CSV: {:?}", self.csv_file_path))?;
+                .with_context(|| format!("Failed to write headers to banned pairs CSV: {:?}", self._csv_file_path))?;
         }
 
         wtr.write_record(&[token_a, token_b, ban_type, details])
-            .with_context(|| format!("Failed to write record to banned pairs CSV: {:?}", self.csv_file_path))?;
-        wtr.flush().with_context(|| format!("Failed to flush banned pairs CSV writer for: {:?}", self.csv_file_path))?;
+            .with_context(|| format!("Failed to write record to banned pairs CSV: {:?}", self._csv_file_path))?;
+        wtr.flush().with_context(|| format!("Failed to flush banned pairs CSV writer for: {:?}", self._csv_file_path))?;
 
         log::info!("Newly banned pair {}/{} and persisted to CSV.", token_a, token_b);
         Ok(true) // Newly banned
@@ -133,7 +133,7 @@ pub struct BannedPairFilteringDexClientDecorator {
 }
 
 impl BannedPairFilteringDexClientDecorator {
-    pub fn new(
+    pub fn _new(
         inner_client: Box<dyn DexClient>,
         banned_pairs_manager: Arc<tokio::sync::RwLock<BannedPairsManager>>,
     ) -> Self {

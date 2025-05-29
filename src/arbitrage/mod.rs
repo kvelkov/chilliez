@@ -3,8 +3,7 @@ use self::opportunity::MultiHopArbOpportunity;
 use crate::metrics::Metrics; // This import is fine
 use std::sync::Arc;
 use tokio::sync::{mpsc::{self, Receiver, Sender}, Mutex}; // Added Mutex here
-use tokio::spawn;
-use log::{info, error, debug};
+use log::{info, error};
 pub mod engine;
 pub mod calculator;
 pub mod pipeline;
@@ -13,6 +12,15 @@ pub mod executor;
 pub mod opportunity;
 pub mod dynamic_threshold;
 pub mod detector;
+
+// Re-export key types for easier access
+pub use self::engine::ArbitrageEngine;
+pub use self::detector::ArbitrageDetector;
+pub use self::executor::ExecutorEvent;
+pub use self::opportunity::ArbHop;
+pub use self::pipeline::ExecutionPipeline;
+pub use self::dynamic_threshold::DynamicThresholdUpdater;
+// pub use self::fee_manager::FeeManager; // Uncomment if FeeManager is a key export
 /// TradeInstruction is used to convey a new trade that must be executed.
 /// It carries all the metadata required (price, quantity, pool info, fees, slippage, etc.)
 /// to enable the executor to perform the trade.
@@ -65,11 +73,14 @@ impl ArbitrageCoordinator {
                                 "Successfully executed opportunity {} with signature {:?}",
                                 opp.id, signature
                             );
-                            self.metrics.lock().await.log_opportunity_executed_success();
-                            // Add/update this method in Metrics if missing, or use a generic metric/log call
-                            // self.metrics.lock().await.update_profit(opp.total_profit);
-                            // If update_profit does not exist, use increment_main_cycles or another suitable method:
-                            self.metrics.lock().await.increment_main_cycles();
+                            // Refined metrics update for successful trade
+                            let mut metrics_guard = self.metrics.lock().await;
+                            metrics_guard.log_opportunity_executed_success();
+                            if let Some(profit_usd) = opp.estimated_profit_usd {
+                                metrics_guard.total_profit_usd += profit_usd;
+                            }
+                            metrics_guard.successful_trades_count += 1; // Explicitly increment successful trades
+                            metrics_guard.last_successful_trade_timestamp = Some(chrono::Utc::now());
                         }
                         Err(err) => {
                             error!(

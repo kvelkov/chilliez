@@ -145,7 +145,7 @@ impl ArbitrageEngine {
     }
 
     /// ACTIVATED: Discover fixed input opportunities
-    pub async fn discover_fixed_input_opportunities(&self, fixed_input_amount: f64) -> Result<Vec<MultiHopArbOpportunity>, ArbError> {
+    pub async fn discover_fixed_input_opportunities(&self, _fixed_input_amount: f64) -> Result<Vec<MultiHopArbOpportunity>, ArbError> {
         self.discover_opportunities_internal("fixed_input", false, move |pools, detector, metrics| {
             Box::pin(async move {
                 let mut metrics_guard = metrics.lock().await;
@@ -155,8 +155,8 @@ impl ArbitrageEngine {
     }
 
     async fn _discover_multihop_opportunities_with_risk(&self) -> Result<Vec<MultiHopArbOpportunity>, ArbError> {
-        let max_slippage = self.config.max_slippage_pct;
-        let max_tx_fee = self.config.max_tx_fee_lamports_for_acceptance.unwrap_or(50000);
+        let _max_slippage = self.config.max_slippage_pct;
+        let _max_tx_fee = self.config.max_tx_fee_lamports_for_acceptance.unwrap_or(50000);
         
         self.discover_opportunities_internal("multihop_risk", false, move |pools, detector, metrics| {
             Box::pin(async move {

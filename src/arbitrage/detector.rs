@@ -2,7 +2,7 @@
 
 use crate::{
     arbitrage::{
-        calculator::{calculate_multihop_profit_and_slippage, OpportunityCalculationResult, calculate_transaction_cost },
+        calculator::{calculate_multihop_profit_and_slippage, OpportunityCalculationResult },
         opportunity::{ArbHop, MultiHopArbOpportunity},
     },
     error::ArbError,
@@ -18,7 +18,7 @@ pub struct ArbitrageDetector {
     min_profit_threshold_pct: f64,
     min_profit_threshold_usd: f64,
     sol_price_usd: f64,
-    default_priority_fee_lamports: u64,
+    _default_priority_fee_lamports: u64,
 }
 
 impl ArbitrageDetector {
@@ -31,7 +31,7 @@ impl ArbitrageDetector {
             min_profit_threshold_pct: min_profit_pct,
             min_profit_threshold_usd: min_profit_usd,
             sol_price_usd,
-            default_priority_fee_lamports: priority_fee,
+            _default_priority_fee_lamports: priority_fee,
         }
     }
 

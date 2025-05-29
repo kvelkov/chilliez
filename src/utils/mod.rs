@@ -91,6 +91,7 @@ pub fn setup_logging() -> Result<(), fern::InitError> {
     Ok(())
 }
 
+#[allow(dead_code)]
 pub fn load_keypair(path: &str) -> Result<Keypair, Box<dyn StdError>> {
     match read_keypair_file(path) {
         Ok(kp) => {

@@ -179,6 +179,7 @@ pub enum ErrorCategory {
 
 /// Circuit breaker for protecting against cascading failures
 #[derive(Debug, Clone)]
+#[allow(dead_code)] // Struct and its fields/methods are not yet fully integrated
 pub struct CircuitBreaker {
     failure_threshold: u32,
     recovery_timeout: Duration,
@@ -188,6 +189,7 @@ pub struct CircuitBreaker {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+#[allow(dead_code)] // Enum and its variants are not yet fully integrated
 enum CircuitBreakerState {
     Closed,  // Normal operation
     Open,    // Blocking all requests
@@ -195,6 +197,7 @@ enum CircuitBreakerState {
 }
 
 impl CircuitBreaker {
+    #[allow(dead_code)]
     pub fn new(failure_threshold: u32, recovery_timeout: Duration) -> Self {
         Self {
             failure_threshold,
@@ -205,6 +208,7 @@ impl CircuitBreaker {
         }
     }
 
+    #[allow(dead_code)]
     pub fn is_open(&self) -> bool {
         match self.state {
             CircuitBreakerState::Open => {
@@ -223,12 +227,14 @@ impl CircuitBreaker {
         }
     }
 
+    #[allow(dead_code)]
     pub fn record_success(&mut self) {
         self.failure_count = 0;
         self.state = CircuitBreakerState::Closed;
         debug!("Circuit breaker: Success recorded, state reset to Closed");
     }
 
+    #[allow(dead_code)]
     pub fn record_failure(&mut self) {
         self.failure_count += 1;
         self.last_failure_time = Some(Instant::now());
@@ -241,6 +247,7 @@ impl CircuitBreaker {
         }
     }
 
+    #[allow(dead_code)]
     pub async fn execute<F, T, E>(&mut self, operation: F) -> Result<T, ArbError>
     where
         F: std::future::Future<Output = Result<T, E>>,
@@ -277,6 +284,7 @@ impl CircuitBreaker {
         }
     }
 
+    #[allow(dead_code)]
     pub fn reset(&mut self) {
         self.failure_count = 0;
         self.last_failure_time = None;
@@ -287,6 +295,7 @@ impl CircuitBreaker {
 
 /// Retry policy with exponential backoff
 #[derive(Debug, Clone)]
+#[allow(dead_code)] // Struct and its fields/methods are not yet fully integrated
 pub struct RetryPolicy {
     pub max_attempts: u32,     // Made public
     pub base_delay: Duration,      // Made public
@@ -294,6 +303,7 @@ pub struct RetryPolicy {
 }
 
 impl RetryPolicy {
+    #[allow(dead_code)]
     pub fn new(max_attempts: u32, base_delay: Duration, max_delay: Duration) -> Self {
         Self {
             max_attempts,
@@ -303,6 +313,7 @@ impl RetryPolicy {
     }
 
     /// Calculate delay for a given attempt (exponential backoff)
+    #[allow(dead_code)]
     pub fn delay_for_attempt(&self, attempt: u32) -> Duration {
         if attempt == 0 {
             return Duration::from_millis(0);
@@ -316,6 +327,7 @@ impl RetryPolicy {
     }
 
     /// Execute operation with retry logic
+    #[allow(dead_code)]
     pub async fn execute<F, T, E, Fut>(&self, mut operation: F) -> Result<T, ArbError>
     where
         F: FnMut() -> Fut,
@@ -359,6 +371,7 @@ impl RetryPolicy {
 }
 
 // Convenience type aliases
+#[allow(dead_code)] // Type alias is not yet used
 pub type ArbResult<T> = Result<T, ArbError>;
 
 // Default configurations

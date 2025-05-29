@@ -91,17 +91,6 @@ pub struct LiquidityStateV4 {
 // Statically assert that the size of LiquidityStateV4 is 625 bytes.
 const _: [(); std::mem::size_of::<LiquidityStateV4>()] = [(); 640];
 
-// Minimal Serum Market State to extract mints
-#[derive(Clone, Copy, Debug)] // Removed Pod and Zeroable derives
-#[repr(C)]
-struct SerumMarketStateMinimal {
-    // Other fields before base_mint are skipped by using a byte array for padding
-    _padding0: [u8; 53], // Account flags (5) + Own Address (32) + Vault Signer Nonce (8) + Coin Mint (32) -> We need Coin Mint
-    pub base_mint: Pubkey, // Offset 53
-    _padding1: [u8; 0], // PC Mint is next
-    pub quote_mint: Pubkey, // Offset 53 + 32 = 85
-    // ... other fields
-}
 const SERUM_MARKET_BASE_MINT_OFFSET: usize = 53;
 const SERUM_MARKET_QUOTE_MINT_OFFSET: usize = 85;
 

@@ -8,8 +8,7 @@ use crate::dex::{
     raydium::RaydiumPoolParser,
     lifinity::LifinityPoolParser, // Assuming you have this parser defined
     whirlpool_parser::WhirlpoolPoolParser,
-};
-use anyhow::Result as AnyhowResult; // Kept for PoolInfo if it uses it, though PoolParseFn is removed
+}; // Removed unused import: anyhow::Result as AnyhowResult
 use once_cell::sync::Lazy;
 use solana_sdk::pubkey::Pubkey;
 use std::collections::HashMap;

@@ -8,7 +8,7 @@ use anyhow::{anyhow, Result as AnyhowResult};
 use bytemuck::{Pod, Zeroable};
 use log::info;
 use solana_sdk::{
-    instruction::Instruction,
+    instruction::{AccountMeta, Instruction},
     program_pack::Pack,
     pubkey::Pubkey,
 };
@@ -101,6 +101,7 @@ impl UtilsPoolParser for RaydiumPoolParser {
         Ok(PoolInfo {
             address,
             name: format!("Raydium AMM V4/{}", address),
+            dex_type: DexType::Raydium,
             token_a: PoolToken {
                 mint: pool_state.base_mint,
                 symbol: "BASE".to_string(), // Placeholder
@@ -113,10 +114,16 @@ impl UtilsPoolParser for RaydiumPoolParser {
                 decimals: pool_state.quote_decimal as u8,
                 reserve: quote_reserve,
             },
-            fee_numerator: pool_state.swap_fee_numerator,
-            fee_denominator: pool_state.swap_fee_denominator,
+            token_a_vault: pool_state.base_vault,
+            token_b_vault: pool_state.quote_vault,
+            fee_numerator: Some(pool_state.swap_fee_numerator),
+            fee_denominator: Some(pool_state.swap_fee_denominator),
+            fee_rate_bips: None, // Not used by Raydium
             last_update_timestamp: pool_state.pool_open_time,
-            dex_type: DexType::Raydium,
+            liquidity: None, // Not applicable for AMMs
+            sqrt_price: None, // Not applicable for AMMs
+            tick_current_index: None, // Not applicable for AMMs
+            tick_spacing: None, // Not applicable for AMMs
         })
     }
 
@@ -148,13 +155,16 @@ impl DexClient for RaydiumClient {
         input_amount: u64,
     ) -> AnyhowResult<Quote> {
         if pool.token_a.reserve == 0 || pool.token_b.reserve == 0 {
-            return Err(anyhow!("Pool has zero reserves."));
-        }
-        if pool.fee_denominator == 0 {
-            return Err(anyhow!("Fee denominator cannot be zero."));
+            return Err(anyhow!("Raydium pool {} has zero reserves.", pool.address));
         }
 
-        let fee = (input_amount as u128 * pool.fee_numerator as u128 / pool.fee_denominator as u128) as u64;
+        let fee_num = pool.fee_numerator.ok_or_else(|| anyhow!("Raydium pool {} fee_numerator is None", pool.address))?;
+        let fee_den = pool.fee_denominator.ok_or_else(|| anyhow!("Raydium pool {} fee_denominator is None", pool.address))?;
+
+        if fee_den == 0 {
+            return Err(anyhow!("Raydium pool {} fee denominator cannot be zero.", pool.address));
+        }
+        let fee = (input_amount as u128 * fee_num as u128 / fee_den as u128) as u64;
         let input_amount_after_fee = input_amount.saturating_sub(fee);
 
         let k = pool.token_a.reserve as u128 * pool.token_b.reserve as u128;
@@ -178,15 +188,34 @@ impl DexClient for RaydiumClient {
 
     fn get_swap_instruction(
         &self,
-        _swap_info: &SwapInfo,
+        swap_info: &SwapInfo,
     ) -> AnyhowResult<Instruction> {
-        // TODO: Implement the instruction building logic for a Raydium AMM V4 swap.
-        let data = vec![];
-        let accounts = vec![];
+        let instruction_data = RaydiumSwapInstruction {
+            instruction: 9, // Swap instruction index for Raydium AMM V4
+            amount_in: swap_info.amount_in, // fixed field name
+            min_amount_out: swap_info.min_output_amount, // fixed field name
+        };
 
-        if data.is_empty() || accounts.is_empty() {
-            return Err(anyhow!("Raydium AMM V4 swap instruction is not yet implemented."));
-        }
+        let data = instruction_data_to_bytes(&instruction_data)?;
+
+        let accounts = vec![
+            AccountMeta::new(swap_info.user_source_token_account, false),
+            AccountMeta::new(swap_info.user_destination_token_account, false),
+            AccountMeta::new(swap_info.pool_account, false),
+            AccountMeta::new(swap_info.pool_authority, false),
+            AccountMeta::new(swap_info.pool_open_orders, false),
+            AccountMeta::new(swap_info.pool_target_orders, false),
+            AccountMeta::new(swap_info.pool_base_vault, false),
+            AccountMeta::new(swap_info.pool_quote_vault, false),
+            AccountMeta::new_readonly(swap_info.market_id, false),
+            AccountMeta::new_readonly(swap_info.market_bids, false),
+            AccountMeta::new_readonly(swap_info.market_asks, false),
+            AccountMeta::new_readonly(swap_info.market_event_queue, false),
+            AccountMeta::new_readonly(swap_info.market_program_id, false),
+            AccountMeta::new_readonly(swap_info.market_authority, false),
+            AccountMeta::new_readonly(swap_info.user_owner, true),
+            AccountMeta::new_readonly(spl_token::id(), false),
+        ];
 
         Ok(Instruction {
             program_id: Pubkey::from_str(RAYDIUM_LIQUIDITY_POOL_V4_PROGRAM_ID).unwrap(),
@@ -194,4 +223,22 @@ impl DexClient for RaydiumClient {
             data,
         })
     }
+}
+
+// Define RaydiumSwapInstruction explicitly
+#[repr(C)]
+#[derive(Clone, Debug)]
+pub struct RaydiumSwapInstruction {
+    pub instruction: u8, // 9 for swap instruction in Raydium AMM V4
+    pub amount_in: u64,
+    pub min_amount_out: u64,
+}
+
+// Helper function to serialize instruction data
+fn instruction_data_to_bytes(instruction: &RaydiumSwapInstruction) -> AnyhowResult<Vec<u8>> {
+    let mut data = Vec::with_capacity(17);
+    data.push(instruction.instruction);
+    data.extend_from_slice(&instruction.amount_in.to_le_bytes());
+    data.extend_from_slice(&instruction.min_amount_out.to_le_bytes());
+    Ok(data)
 }

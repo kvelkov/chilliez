@@ -16,10 +16,20 @@ pub struct PoolInfo {
     pub name: String,
     pub token_a: PoolToken,
     pub token_b: PoolToken,
-    pub fee_numerator: u64,
-    pub fee_denominator: u64,
+    // Vaults are relevant for many DEXs, including Orca
+    pub token_a_vault: Pubkey,
+    pub token_b_vault: Pubkey,
+    // Fee structure: AMMs might use numerator/denominator, CLMMs like Orca use bips
+    pub fee_numerator: Option<u64>,
+    pub fee_denominator: Option<u64>,
+    pub fee_rate_bips: Option<u16>, // Basis points (0.01%)
     pub last_update_timestamp: u64,
     pub dex_type: DexType,
+    // CLMM specific fields (like Orca Whirlpools)
+    pub liquidity: Option<u128>,
+    pub sqrt_price: Option<u128>,
+    pub tick_current_index: Option<i32>,
+    pub tick_spacing: Option<u16>,
 }
 
 impl Default for PoolInfo {
@@ -29,10 +39,17 @@ impl Default for PoolInfo {
             name: "Default Pool".to_string(),
             token_a: PoolToken::default(),
             token_b: PoolToken::default(),
-            fee_numerator: 0,
-            fee_denominator: 10000,
+            token_a_vault: Pubkey::default(),
+            token_b_vault: Pubkey::default(),
+            fee_numerator: Some(0), // Default for AMMs
+            fee_denominator: Some(10000), // Default for AMMs, non-zero
+            fee_rate_bips: None,
             last_update_timestamp: 0,
             dex_type: DexType::Unknown("Default".to_string()),
+            liquidity: None,
+            sqrt_price: None,
+            tick_current_index: None,
+            tick_spacing: None,
         }
     }
 }
@@ -158,24 +175,62 @@ pub fn calculate_output_amount(
     is_a_to_b: bool,
 ) -> TokenAmount {
     let (input_reserve_val, output_reserve_val, output_decimals_val) = if is_a_to_b {
-        (pool.token_a.reserve, pool.token_b.reserve, pool.token_b.decimals)
+        (
+            pool.token_a.reserve,
+            pool.token_b.reserve,
+            pool.token_b.decimals,
+        )
     } else {
-        (pool.token_b.reserve, pool.token_a.reserve, pool.token_a.decimals)
+        (
+            pool.token_b.reserve,
+            pool.token_a.reserve,
+            pool.token_a.decimals,
+        )
     };
 
-    if input_reserve_val == 0 || output_reserve_val == 0 || input_amount.amount == 0 || pool.fee_denominator == 0 {
+    // Use fee_numerator and fee_denominator for AMM-style calculation
+    // For CLMMs, this function might need to be adapted or a different one used.
+    let fee_num = pool.fee_numerator.unwrap_or(0); // Default to 0 if not present
+    let fee_den = pool.fee_denominator.unwrap_or(1); // Default to 1 to avoid div by zero if not present
+
+    if input_reserve_val == 0
+        || output_reserve_val == 0
+        || input_amount.amount == 0
+        || fee_den == 0
+    {
         return TokenAmount::new(0, output_decimals_val);
     }
-    
-    let fee_rate = pool.fee_numerator as f64 / pool.fee_denominator as f64;
+
+    let fee_rate = fee_num as f64 / fee_den as f64;
     let input_amount_after_fee = input_amount.amount as f64 * (1.0 - fee_rate);
 
     if input_reserve_val as f64 + input_amount_after_fee == 0.0 {
         return TokenAmount::new(0, output_decimals_val);
     }
-
     let output_amount_precise = (output_reserve_val as f64 * input_amount_after_fee)
         / (input_reserve_val as f64 + input_amount_after_fee);
 
     TokenAmount::new(output_amount_precise.floor() as u64, output_decimals_val)
 }
+
+// Test struct to check if field definitions work
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TestPoolInfo {
+    pub address: Pubkey,
+    pub name: String,
+    pub token_a: PoolToken,
+    pub token_b: PoolToken,
+    pub token_a_vault: Pubkey,
+    pub token_b_vault: Pubkey,
+    pub fee_numerator: Option<u64>,
+    pub fee_denominator: Option<u64>,
+    pub fee_rate_bips: Option<u16>,
+    pub last_update_timestamp: u64,
+    pub dex_type: DexType,
+    pub liquidity: Option<u128>,
+    pub sqrt_price: Option<u128>,
+    pub tick_current_index: Option<i32>,
+    pub tick_spacing: Option<u16>,
+}
+
+// ---- Original PoolInfo for comparison ----

@@ -75,10 +75,17 @@ impl UtilsPoolParser for LifinityPoolParser {
                 decimals: decimals_b,
                 reserve: reserve_b,
             },
-            fee_numerator: state.fee_bps,
-            fee_denominator: 10000,
+            token_a_vault: state.token_a_vault,
+            token_b_vault: state.token_b_vault,
+            fee_numerator: Some(state.fee_bps),
+            fee_denominator: Some(10000),
+            fee_rate_bips: None,
             last_update_timestamp: 0,
             dex_type: DexType::Lifinity,
+            liquidity: None,
+            sqrt_price: None,
+            tick_current_index: None,
+            tick_spacing: None,
         })
     }
 

@@ -58,12 +58,24 @@ pub trait DexClient: Send + Sync {
 pub struct SwapInfo<'a> {
     pub dex_name: &'a str,
     pub pool: &'a PoolInfo,
-    pub user_wallet: &'a Pubkey,
-    pub user_source_token_account: &'a Pubkey,
-    pub user_destination_token_account: &'a Pubkey,
+    pub user_wallet: Pubkey,
+    pub user_source_token_account: Pubkey,
+    pub user_destination_token_account: Pubkey,
     pub amount_in: u64,
-    // Add any other fields that might be universally required, like slippage settings.
-    // pub slippage_bps: u16,
+    pub min_output_amount: u64, // added
+    pub pool_account: Pubkey, // added
+    pub pool_authority: Pubkey, // added
+    pub pool_open_orders: Pubkey, // added
+    pub pool_target_orders: Pubkey, // added
+    pub pool_base_vault: Pubkey, // added
+    pub pool_quote_vault: Pubkey, // added
+    pub market_id: Pubkey, // added
+    pub market_bids: Pubkey, // added
+    pub market_asks: Pubkey, // added
+    pub market_event_queue: Pubkey, // added
+    pub market_program_id: Pubkey, // added
+    pub market_authority: Pubkey, // added
+    pub user_owner: Pubkey, // added
 }
 
 
@@ -92,5 +104,34 @@ impl Quote {
     /// Returns the input amount converted to a float, given the token's decimal precision.
     pub fn input_as_float(&self, decimals: u8) -> f64 {
         self.input_amount as f64 / 10f64.powi(decimals as i32)
+    }
+}
+
+// ---- Helper methods for PoolInfo ----
+
+impl PoolInfo {
+    /// Helper method to get sqrt_price with default value
+    pub fn get_sqrt_price(&self) -> u128 {
+        self.sqrt_price.unwrap_or(0)
+    }
+
+    /// Helper method to get liquidity with default value
+    pub fn get_liquidity(&self) -> u128 {
+        self.liquidity.unwrap_or(0)
+    }
+
+    /// Helper method to get tick_current_index with default value
+    pub fn get_tick_current_index(&self) -> i32 {
+        self.tick_current_index.unwrap_or(0)
+    }
+
+    /// Helper method to get tick_spacing with default value
+    pub fn get_tick_spacing(&self) -> u16 {
+        self.tick_spacing.unwrap_or(1)
+    }
+
+    /// Helper method to get fee_rate_bips with default value
+    pub fn get_fee_rate_bips(&self) -> u16 {
+        self.fee_rate_bips.unwrap_or(30)  // Default 0.3%
     }
 }

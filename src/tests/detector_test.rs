@@ -39,10 +39,17 @@ mod tests {
             name: format!("Pool-{}", address_str),
             token_a,
             token_b,
-            fee_numerator: 25,
-            fee_denominator: 10000,
+            token_a_vault: Pubkey::default(),
+            token_b_vault: Pubkey::default(),
+            fee_numerator: Some(25),
+            fee_denominator: Some(10000),
+            fee_rate_bips: None,
             last_update_timestamp: 0,
             dex_type,
+            liquidity: None,
+            sqrt_price: None,
+            tick_current_index: None,
+            tick_spacing: None,
         })
     }
 

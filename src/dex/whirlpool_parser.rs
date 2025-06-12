@@ -92,13 +92,20 @@ impl PoolParser for WhirlpoolPoolParser {
                 decimals: decimals_b,
                 reserve: reserve_b,
             },
-            fee_numerator: fee_rate as u64, // Fee rate in basis points
-            fee_denominator: 10000,      // Basis points denominator
+            token_a_vault: token_vault_a,
+            token_b_vault: token_vault_b,
+            fee_numerator: Some(fee_rate as u64), // Fee rate in basis points
+            fee_denominator: Some(10000),      // Basis points denominator
+            fee_rate_bips: Some(fee_rate),
             last_update_timestamp: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()
                 .as_secs(),
             dex_type: DexType::Whirlpool,
+            liquidity: None, // Would need to parse from bytes if needed
+            sqrt_price: None, // Would need to parse from bytes if needed
+            tick_current_index: None, // Would need to parse from bytes if needed
+            tick_spacing: None, // Would need to parse from bytes if needed
         })
     }
     fn get_program_id(&self) -> Pubkey {

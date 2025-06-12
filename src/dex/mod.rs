@@ -1,12 +1,17 @@
 // src/dex/mod.rs
 
 
+// src/dex/mod.rs
+
+
 #[cfg(any(test, debug_assertions))]
 pub mod integration_test;
 
 pub mod lifinity;
 pub mod meteora;
 pub mod orca; // Ensures the orca.rs file is included as a module
+#[cfg(test)]
+pub mod orca_test;
 // pub mod phoenix;
 pub mod pool;
 pub mod quote;

@@ -77,8 +77,8 @@ fn build_explanation(
         "Pool: {}, Fee: {:.4}% ({}/{}), Slippage Est: {:.4}%, Gas: {}",
         pool.name,
         fee_fraction * 100.0,
-        pool.fee_numerator,
-        pool.fee_denominator,
+        pool.fee_numerator.unwrap_or(0),
+        pool.fee_denominator.unwrap_or(10000),
         slippage * 100.0,
         gas_cost,
     );
@@ -132,7 +132,7 @@ impl FeeManager {
         last_update: Option<u64>,
         slippage_model: &dyn SlippageModel,
     ) -> FeeBreakdown {
-        let fee_fraction = pool.fee_numerator as f64 / pool.fee_denominator.max(1) as f64;
+        let fee_fraction = pool.fee_numerator.unwrap_or(0) as f64 / pool.fee_denominator.unwrap_or(10000).max(1) as f64;
         let expected_fee_native = input_amount.to_float() * fee_fraction;
 
         let input_token_symbol = if is_a_to_b {
@@ -154,7 +154,13 @@ impl FeeManager {
         let slippage = slippage_model.estimate_slippage(pool, input_amount, is_a_to_b);
         let gas_cost = get_gas_cost_for_dex(pool.dex_type.clone());
         let fee_spike = if let (Some(last_num), Some(last_den)) = (last_known_fee_numerator, last_known_fee_denominator) {
-            Self::is_fee_abnormal(pool.fee_numerator, pool.fee_denominator, last_num, last_den, 1.5)
+            Self::is_fee_abnormal(
+                pool.fee_numerator.unwrap_or(0), 
+                pool.fee_denominator.unwrap_or(10000), 
+                last_num, 
+                last_den, 
+                1.5
+            )
         } else {
             false
         };
@@ -276,13 +282,20 @@ mod tests {
                 decimals: 6,
                 reserve: 100_000 * 10u64.pow(6),
             },
-            fee_numerator: 25,
-            fee_denominator: 10000,
+            token_a_vault: Pubkey::new_unique(),
+            token_b_vault: Pubkey::new_unique(),
+            fee_numerator: Some(25),
+            fee_denominator: Some(10000),
+            fee_rate_bips: None,
             last_update_timestamp: SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap_or_default()
                 .as_secs(),
             dex_type: DexType::Raydium,
+            liquidity: None,
+            sqrt_price: None,
+            tick_current_index: None,
+            tick_spacing: None,
         }
     }
 
@@ -302,14 +315,14 @@ mod tests {
         let in_amt = TokenAmount::new(1 * 10u64.pow(9), 9); // 1 SOL
 
         let mut pool_spiked_fee = pool.clone();
-        pool_spiked_fee.fee_numerator = 50;
+        pool_spiked_fee.fee_numerator = Some(50);
 
         let breakdown = FeeManager::estimate_pool_swap_with_model(
             &pool_spiked_fee,
             &in_amt,
             true,
-            Some(pool.fee_numerator),
-            Some(pool.fee_denominator),
+            pool.fee_numerator,
+            pool.fee_denominator,
             Some(pool_spiked_fee.last_update_timestamp),
             &XYKSlippageModel::default(),
         );
@@ -317,13 +330,13 @@ mod tests {
         assert!(breakdown.explanation.contains("[FEE SPIKE DETECTED!]"));
 
         let mut pool_normal_fee_increase = pool.clone();
-        pool_normal_fee_increase.fee_numerator = 30;
+        pool_normal_fee_increase.fee_numerator = Some(30);
         let breakdown_normal = FeeManager::estimate_pool_swap_with_model(
             &pool_normal_fee_increase,
             &in_amt,
             true,
-            Some(pool.fee_numerator),
-            Some(pool.fee_denominator),
+            pool.fee_numerator,
+            pool.fee_denominator,
             Some(pool_normal_fee_increase.last_update_timestamp),
             &XYKSlippageModel::default(),
         );

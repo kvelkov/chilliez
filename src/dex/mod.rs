@@ -1,8 +1,5 @@
 // src/dex/mod.rs
 
-// Module declarations for each DEX client and utility
-pub mod http_utils;
-pub mod http_utils_shared;
 
 #[cfg(any(test, debug_assertions))]
 pub mod integration_test;
@@ -10,7 +7,7 @@ pub mod integration_test;
 pub mod lifinity;
 pub mod meteora;
 pub mod orca; // Ensures the orca.rs file is included as a module
-pub mod phoenix;
+// pub mod phoenix;
 pub mod pool;
 pub mod quote;
 pub mod raydium; // Ensures the raydium.rs file is included as a module
@@ -66,35 +63,23 @@ pub fn get_all_clients(
 
     // These instantiations will work if OrcaClient, RaydiumClient etc. are correctly defined
     // in their respective modules (e.g. orca.rs, raydium.rs)
-    clients.push(Box::new(orca::OrcaClient::new( // Using orca::OrcaClient path
-        Arc::clone(&cache),
-        get_dex_ttl("Orca"),
-    )));
+    clients.push(Box::new(orca::OrcaClient::new()));
     info!("- Orca client initialized.");
 
-    clients.push(Box::new(raydium::RaydiumClient::new( // Using raydium::RaydiumClient path
-        Arc::clone(&cache),
-        get_dex_ttl("Raydium"),
-    )));
+    clients.push(Box::new(raydium::RaydiumClient::new()));
     info!("- Raydium client initialized.");
 
-    clients.push(Box::new(meteora::MeteoraClient::new(
-        Arc::clone(&cache),
-        get_dex_ttl("Meteora"),
-    )));
+    clients.push(Box::new(meteora::MeteoraClient::new()));
     info!("- Meteora client initialized.");
 
-    clients.push(Box::new(lifinity::LifinityClient::new(
-        Arc::clone(&cache),
-        get_dex_ttl("Lifinity"),
-    )));
+    clients.push(Box::new(lifinity::LifinityClient::new()));
     info!("- Lifinity client initialized.");
 
-    clients.push(Box::new(phoenix::PhoenixClient::new(
-        Arc::clone(&cache),
-        get_dex_ttl("Phoenix"),
-    )));
-    info!("- Phoenix client initialized.");
+    // clients.push(Box::new(phoenix::PhoenixClient::new(
+    //     Arc::clone(&cache),
+    //     get_dex_ttl("Phoenix"),
+    // )));
+    // info!("- Phoenix client initialized.");
 
     clients.push(Box::new(whirlpool::WhirlpoolClient::new(
         Arc::clone(&cache),

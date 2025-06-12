@@ -9,72 +9,46 @@ edition = "2021"
 # print-config = [] # Candidate for removal if the associated function is gone.
 
 [dependencies]
-# Solana - Core: Keep these. Consider updating to latest 1.18.x or newer stable.
+# === Solana Core ===
 solana-client = "1.18.3"
 solana-sdk = "1.18.3"
 solana-account-decoder = "1.18.3"
-solana-transaction-status = "1.18.3" # Added this line
+solana-transaction-status = "1.18.3"
 spl-token = "4.0.0"
 spl-associated-token-account = "2.3.0"
-spl-token-2022 = "1.0.0" # Keep if Token2022 support is planned/used, else remove.
+solana-program = "1.18.3"
 
-# Async & runtime - Core: Keep these.
-tokio = { version = "1.36.0", features = ["full"] } # "full" is convenient but pulls in a lot. Could be slimmed if specific features are known.
+# === Async & Runtime ===
+tokio = { version = "1.36.0", features = ["full"] }
 futures = "0.3.30"
-futures-util = "0.3.30" # Added for StreamExt
 async-trait = "0.1.74"
-toml = "0.8"
-bytemuck = { version = "1.15.0", features = ["derive"] }
 
-# Data & config - Core: Keep serde, serde_json, dotenv.
+# === Data & Config ===
 serde = { version = "1.0.197", features = ["derive"] }
 serde_json = "1.0.114"
-csv = "1.1" # Ensure this line is present and not commented out
-config = { version = "0.13", features = ["toml"] } # Or your desired version, ensure 'toml' feature is enabled
-log = "0.4"
-# bincode: Is this used for binary serialization (e.g., on-chain data, file storage)?
-# If only JSON is used (APIs, Redis cache), this might be unused.
-bincode = "1.3.3" # REVIEW: Candidate for removal if not used.
-dotenv = "0.15.0"
-# clap: Used for CLI argument parsing. Is your bot taking CLI args?
-clap = { version = "4.5.3", features = ["derive"] } # REVIEW: Candidate for removal if no CLI args.
-
-# Logging & errors - Core: Keep these.
+bytemuck = { version = "1.15.0", features = ["derive"] }
 anyhow = "1.0.75"
-thiserror = "1.0.57"
+log = "0.4.20"
 env_logger = "0.11.2"
-fern = "0.6" 
-mockito = "1.4.0"      # Or the latest version
-# tracing: Is this actively used for distributed tracing, or is `log` sufficient?
-tracing = "0.1.37" # REVIEW: Candidate for removal if `log` crate is primary and tracing isn't integrated.
+dotenv = "0.15.0"
+config = { version = "0.13", features = ["toml"] }
+csv = "1.1"
 
-# Networking - Core: Keep reqwest, url.
-reqwest = { version = "0.11.27", features = ["json", "rustls-tls"], default-features = false } # Updated to a later 0.11.x, added rustls-tls for common setup. Consider 0.12.x.
-# tungstenite: solana-client's PubsubClient handles websockets. Is this direct dependency needed?
-tungstenite = "0.20.1" # REVIEW: Candidate for removal if solana-client's WS is sufficient.
-url = "2.5.0"
+# === Networking ===
+reqwest = { version = "0.11.27", features = ["json", "rustls-tls"], default-features = false }
 
-# Utilities - Core: Keep once_cell, lazy_static, dashmap, chrono, rand, base64.
+# === Utilities ===
 once_cell = "1.18.0"
-lazy_static = "1.4.0"
-dashmap = "5.4.0"
-chrono = "0.4.38" # Updated to a more recent version (was 0.4.26)
+chrono = "0.4.38"
 rand = "0.8.5"
 base64 = "0.22.0"
-# hex: Used for hex encoding/decoding. Verify usage.
-hex = "0.4.3" # REVIEW: Candidate for removal if not used.
-# rayon: For data parallelism. Verify if any CPU-bound tasks are parallelized with it.
-rayon = "1.7.0" # REVIEW: Candidate for removal if not used.
+itertools = "0.12.0"
 
-# Redis cache - Core: Keep this.
-redis = { version = "0.25.0", features = ["aio", "tokio-comp", "connection-manager"] } # Updated to 0.25.x, added connection-manager explicitly
+# === Redis Cache ===
+redis = { version = "0.25.0", features = ["aio", "tokio-comp", "connection-manager"] }
 
-# Optional ML layer (commented out until activated) - Fine as is.
-# smartcore = "0.3"
-# ndarray = "0.15"
-
-# Optional helpers (low-cost)
-# itertools: Provides extra iterator adaptors. Verify usage.
-itertools = "0.12.0" # REVIEW: Candidate for removal if not significantly used.
-# uuid: For generating UUIDs. Verify usage.
-uuid = { version = "1.8.0", features = ["v4"] } # REVIEW: Candidate for removal if not used
+dashmap = "5.4.0"
+tungstenite = "0.20.1"
+futures-util = "0.3.30"
+thiserror = "1.0.57"
+fern = "0.6"

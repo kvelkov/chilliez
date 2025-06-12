@@ -201,10 +201,10 @@ mod tests {
         ).await.unwrap());
 
         let dex_clients: Vec<Box<dyn DexClient>> = vec![
-            Box::new(OrcaClient::new(cache.clone(), None)),
-            Box::new(RaydiumClient::new(cache.clone(), None)),
-            Box::new(WhirlpoolClient::new(cache.clone(), None)),
-            Box::new(LifinityClient::new(cache.clone(), None)),
+            Box::new(OrcaClient::new()),
+            Box::new(RaydiumClient::new()),
+            Box::new(WhirlpoolClient::new(Arc::clone(&cache), Some(30))),
+            Box::new(LifinityClient::new()),
         ];
 
         for client in dex_clients {
@@ -212,5 +212,41 @@ mod tests {
         }
 
         assert_eq!(4, 4); // Updated assertion to match the number of clients
+    }
+}
+
+#[cfg(test)]
+mod banned_pairs_tests {
+    use super::*;
+    use std::sync::Arc;
+    use std::path::PathBuf;
+    use crate::dex::banned_pairs::{BannedPairsManager, BannedPairFilteringDexClientDecorator};
+    use crate::dex::quote::DexClient;
+
+    struct DummyDexClient;
+    impl DexClient for DummyDexClient {
+        fn get_name(&self) -> &str { "Dummy" }
+        fn calculate_onchain_quote(&self, _pool: &crate::utils::PoolInfo, _input_amount: u64) -> anyhow::Result<crate::dex::quote::Quote> {
+            Err(anyhow::anyhow!("not implemented"))
+        }
+        fn get_swap_instruction(&self, _swap_info: &crate::dex::quote::SwapInfo) -> anyhow::Result<solana_sdk::instruction::Instruction> {
+            Err(anyhow::anyhow!("not implemented"))
+        }
+    }
+
+    #[test]
+    fn test_banned_pairs_manager_and_decorator_usage() {
+        let csv_path = PathBuf::from("banned_pairs_log.csv");
+        let mut manager = BannedPairsManager::new(&csv_path).expect("should load or create");
+        assert!(!manager.is_banned("A", "B"));
+        let _ = manager.ban_pair_and_persist("A", "B", "manual", "test").unwrap();
+        assert!(manager.is_banned("A", "B"));
+        let arc_manager = Arc::new(tokio::sync::RwLock::new(manager));
+        let dummy = Box::new(DummyDexClient);
+        let decorator = BannedPairFilteringDexClientDecorator::new(dummy, arc_manager.clone());
+        let _ = decorator.get_name();
+        // The following lines are just to ensure the fields are read
+        let _ = &decorator.inner_client;
+        let _ = &decorator.banned_pairs_manager;
     }
 }

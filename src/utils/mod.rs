@@ -135,7 +135,6 @@ pub enum DexType {
     Raydium,
     Lifinity,
     Meteora,
-    Phoenix,
     Whirlpool,
     Unknown(String),
 }

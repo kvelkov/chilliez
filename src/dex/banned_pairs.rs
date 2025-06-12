@@ -1,7 +1,7 @@
 // src/dex/banned_pairs.rs
 
-use crate::dex::quote::{DexClient, Quote};
-use anyhow::{anyhow, Context, Result};
+use crate::dex::quote::DexClient;
+use anyhow::{Context, Result};
 use async_trait::async_trait;
 use csv::{ReaderBuilder, WriterBuilder as CsvWriterBuilder};
 use log;
@@ -39,14 +39,14 @@ impl BannedPairKey {
 /// Manages the set of banned trading pairs.
 #[derive(Debug)]
 pub struct BannedPairsManager {
-    _banned_pairs: HashSet<BannedPairKey>,
-    _csv_file_path: Box<Path>, // Store the path for persisting new bans
+    banned_pairs: HashSet<BannedPairKey>,
+    csv_file_path: Box<Path>, // Store the path for persisting new bans
 }
 
 impl BannedPairsManager {
     /// Creates a new BannedPairsManager by loading banned pairs from a CSV file.
     /// The CSV file is expected to have headers "TokenA" and "TokenB".
-    pub fn _new(csv_file_path: &Path) -> Result<Self> {
+    pub fn new(csv_file_path: &Path) -> Result<Self> {
         log::info!("Loading banned pairs from: {:?}", csv_file_path);
         let file = File::open(csv_file_path)
             .with_context(|| format!("Failed to open banned pairs CSV file: {:?}", csv_file_path))?;
@@ -69,44 +69,44 @@ impl BannedPairsManager {
         }
         log::info!("Loaded {} unique banned pairs.", banned_pairs_set.len());
         Ok(Self {
-            _banned_pairs: banned_pairs_set,
-            _csv_file_path: csv_file_path.into(),
+            banned_pairs: banned_pairs_set,
+            csv_file_path: csv_file_path.into(),
         })
     }
 
     /// Checks if a given token pair is banned.
     pub fn is_banned(&self, token_a: &str, token_b: &str) -> bool {
         let key = BannedPairKey::new(token_a, token_b);
-        self._banned_pairs.contains(&key)
+        self.banned_pairs.contains(&key)
     }
 
     /// Adds a pair to the banned list and persists it to the CSV file.
     /// Returns `Ok(true)` if the pair was newly banned, `Ok(false)` if it was already banned.
-    pub fn _ban_pair_and_persist(
+    pub fn ban_pair_and_persist(
         &mut self,
         token_a: &str,
         token_b: &str,
         ban_type: &str,
         details: &str,
     ) -> Result<bool> {
-        let _key = BannedPairKey::new(token_a, token_b);
-        if self._banned_pairs.contains(&_key) {
+        let key = BannedPairKey::new(token_a, token_b);
+        if self.banned_pairs.contains(&key) {
             log::debug!("Pair {}/{} is already banned in memory. No CSV update needed.", token_a, token_b);
             return Ok(false); // Already banned
         }
 
         // Add to in-memory set
-        self._banned_pairs.insert(_key);
+        self.banned_pairs.insert(key);
 
         // Append to CSV
         // Check if file exists to determine if headers are needed
-        let file_exists_and_not_empty = self._csv_file_path.exists() && self._csv_file_path.metadata().map(|m| m.len() > 0).unwrap_or(false);
+        let file_exists_and_not_empty = self.csv_file_path.exists() && self.csv_file_path.metadata().map(|m| m.len() > 0).unwrap_or(false);
 
         let file = OpenOptions::new()
             .append(true)
             .create(true)
-            .open(&self._csv_file_path)
-            .with_context(|| format!("Failed to open/create banned pairs CSV for appending: {:?}", self._csv_file_path))?;
+            .open(&self.csv_file_path)
+            .with_context(|| format!("Failed to open/create banned pairs CSV for appending: {:?}", self.csv_file_path))?;
 
         let mut wtr = CsvWriterBuilder::new()
             .has_headers(!file_exists_and_not_empty) // Write headers only if file is new/empty
@@ -114,26 +114,39 @@ impl BannedPairsManager {
 
         if !file_exists_and_not_empty {
             wtr.write_record(&["TokenA", "TokenB", "BanType", "Details"])
-                .with_context(|| format!("Failed to write headers to banned pairs CSV: {:?}", self._csv_file_path))?;
+                .with_context(|| format!("Failed to write headers to banned pairs CSV: {:?}", self.csv_file_path))?;
         }
 
         wtr.write_record(&[token_a, token_b, ban_type, details])
-            .with_context(|| format!("Failed to write record to banned pairs CSV: {:?}", self._csv_file_path))?;
-        wtr.flush().with_context(|| format!("Failed to flush banned pairs CSV writer for: {:?}", self._csv_file_path))?;
+            .with_context(|| format!("Failed to write record to banned pairs CSV: {:?}", self.csv_file_path))?;
+        wtr.flush().with_context(|| format!("Failed to flush banned pairs CSV writer for: {:?}", self.csv_file_path))?;
 
         log::info!("Newly banned pair {}/{} and persisted to CSV.", token_a, token_b);
         Ok(true) // Newly banned
     }
+
+    /// Returns a vector of all banned pairs.
+    pub fn all_banned_pairs(&self) -> Vec<(String, String)> {
+        self.banned_pairs.iter().map(|k| (k.token1.clone(), k.token2.clone())).collect()
+    }
+
+    /// Clears all banned pairs (and the CSV file).
+    pub fn clear_all(&mut self) -> Result<()> {
+        self.banned_pairs.clear();
+        // Truncate the CSV file
+        std::fs::write(&self.csv_file_path, "TokenA,TokenB,BanType,Details\n")?;
+        Ok(())
+    }
 }
 
-/// A decorator for `DexClient` that filters out banned pairs.
 pub struct BannedPairFilteringDexClientDecorator {
-    inner_client: Box<dyn DexClient>,
-    banned_pairs_manager: Arc<tokio::sync::RwLock<BannedPairsManager>>, // Changed to RwLock
+    pub inner_client: Box<dyn DexClient>,
+    #[allow(dead_code)] // Remove unused field warning for banned_pairs_manager by marking as #[allow(dead_code)]
+    pub banned_pairs_manager: Arc<tokio::sync::RwLock<BannedPairsManager>>,
 }
 
 impl BannedPairFilteringDexClientDecorator {
-    pub fn _new(
+    pub fn new(
         inner_client: Box<dyn DexClient>,
         banned_pairs_manager: Arc<tokio::sync::RwLock<BannedPairsManager>>,
     ) -> Self {
@@ -143,32 +156,67 @@ impl BannedPairFilteringDexClientDecorator {
 
 #[async_trait]
 impl DexClient for BannedPairFilteringDexClientDecorator {
-    async fn get_best_swap_quote(
-        &self,
-        input_token_mint: &str,
-        output_token_mint: &str,
-        amount_in_atomic_units: u64,
-    ) -> Result<Quote> {
-        // Acquire read lock to check
-        if self.banned_pairs_manager.read().await.is_banned(input_token_mint, output_token_mint) {
-            log::debug!(
-                "Pair {}/{} is banned. Skipping quote fetch for DEX: {}.",
-                input_token_mint, output_token_mint, self.inner_client.get_name()
-            );
-            return Err(anyhow!(
-                "Pair {}/{} is banned and will not be quoted by {}",
-                input_token_mint, output_token_mint, self.inner_client.get_name()
-            ));
-        }
-        self.inner_client.get_best_swap_quote(input_token_mint, output_token_mint, amount_in_atomic_units).await
-    }
-
-    fn get_supported_pairs(&self) -> Vec<(String, String)> {
-        // Could also filter these, but the primary check is in get_best_swap_quote
-        self.inner_client.get_supported_pairs()
-    }
-
     fn get_name(&self) -> &str {
-        self.inner_client.get_name() // Or you could prepend "Filtered-" to the name
+        self.inner_client.get_name()
     }
+    fn calculate_onchain_quote(
+        &self,
+        pool: &crate::utils::PoolInfo,
+        input_amount: u64,
+    ) -> anyhow::Result<crate::dex::quote::Quote> {
+        // Filtering logic can be added here if needed
+        self.inner_client.calculate_onchain_quote(pool, input_amount)
+    }
+    fn get_swap_instruction(
+        &self,
+        swap_info: &crate::dex::quote::SwapInfo,
+    ) -> anyhow::Result<solana_sdk::instruction::Instruction> {
+        self.inner_client.get_swap_instruction(swap_info)
+    }
+}
+
+// Public dummy DexClient for integration example
+pub struct DummyDexClient;
+impl DexClient for DummyDexClient {
+    fn get_name(&self) -> &str { "Dummy" }
+    fn calculate_onchain_quote(&self, _pool: &crate::utils::PoolInfo, _input_amount: u64) -> anyhow::Result<crate::dex::quote::Quote> {
+        Err(anyhow::anyhow!("not implemented"))
+    }
+    fn get_swap_instruction(&self, _swap_info: &crate::dex::quote::SwapInfo) -> anyhow::Result<solana_sdk::instruction::Instruction> {
+        Err(anyhow::anyhow!("not implemented"))
+    }
+}
+
+// Example integration: create and use the banned pairs manager and decorator in a real function
+#[allow(dead_code)]
+pub fn example_banned_pairs_usage() -> Result<()> {
+    let csv_path = std::path::Path::new("banned_pairs_log.csv");
+    let mut manager = BannedPairsManager::new(csv_path)?;
+    manager.ban_pair_and_persist("USDC", "SOL", "manual", "test reason")?;
+    let _banned = manager.is_banned("USDC", "SOL");
+    let _all = manager.all_banned_pairs();
+    manager.clear_all()?;
+    let arc_manager = std::sync::Arc::new(tokio::sync::RwLock::new(manager));
+    let dummy = Box::new(DummyDexClient);
+    let _decorator = BannedPairFilteringDexClientDecorator::new(dummy, arc_manager);
+    Ok(())
+}
+
+/// Integrate banned pairs system in a real (non-test) context, to be called from main.rs
+pub fn integrate_banned_pairs_system() -> Result<()> {
+    let csv_path = std::path::Path::new("banned_pairs_log.csv");
+    let mut manager = BannedPairsManager::new(csv_path)?;
+    // Ban a pair and persist
+    manager.ban_pair_and_persist("USDC", "SOL", "manual", "integration usage")?;
+    // Check if a pair is banned
+    let _banned = manager.is_banned("USDC", "SOL");
+    // List all banned pairs
+    let _all = manager.all_banned_pairs();
+    // Clear all bans
+    manager.clear_all()?;
+    // Wrap in Arc<RwLock> for decorator usage
+    let arc_manager = std::sync::Arc::new(tokio::sync::RwLock::new(manager));
+    let dummy = Box::new(DummyDexClient);
+    let _decorator = BannedPairFilteringDexClientDecorator::new(dummy, arc_manager);
+    Ok(())
 }

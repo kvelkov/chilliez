@@ -1,2 +1,3 @@
 TokenA,TokenB,BanType,Details
 A,USDC,permanent,test permanent ban from test_multihop
+A,B,manual,test

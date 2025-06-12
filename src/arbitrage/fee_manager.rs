@@ -47,7 +47,8 @@ impl Default for XYKSlippageModel {
 pub fn get_gas_cost_for_dex(dex: DexType) -> u64 {
     match dex {
         DexType::Raydium | DexType::Orca => 500_000,
-        DexType::Whirlpool | DexType::Lifinity | DexType::Phoenix => 700_000,
+        DexType::Whirlpool | DexType::Lifinity => 700_000,
+        // DexType::Phoenix => 700_000, // Disabled
         DexType::Meteora => 600_000,
         DexType::Unknown(_) => 500_000,
     }

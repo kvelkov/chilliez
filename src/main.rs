@@ -25,6 +25,7 @@ use crate::{
         websocket::{RawAccountUpdate, SolanaWebsocketManager},
     },
     utils::{setup_logging, ProgramConfig, PoolInfo},
+    dex::banned_pairs::integrate_banned_pairs_system, // <-- Import banned pairs system
 };
 use log::{error, info, warn};
 use solana_sdk::{pubkey::Pubkey, signature::read_keypair_file, signer::Signer};
@@ -52,6 +53,11 @@ fn init_and_get_config() -> Arc<Config> {
 async fn main() -> MainResult<()> {
     setup_logging().expect("Failed to initialize logging");
     info!("Solana Arbitrage Bot starting...");
+
+    // Integrate banned pairs system at startup (for demonstration/production use)
+    if let Err(e) = integrate_banned_pairs_system() {
+        warn!("Banned pairs system integration failed: {e}");
+    }
 
     let app_config = init_and_get_config();
     info!("Application configuration loaded and validated successfully.");
@@ -114,7 +120,7 @@ async fn main() -> MainResult<()> {
         );
         let manager_arc = Arc::new(Mutex::new(manager));
         {
-            let mut mgr = manager_arc.lock().await;
+            let mgr = manager_arc.lock().await;
             let _ = mgr.start().await; // FIX: start() takes no arguments
         }
         Some((manager_arc, raw_updates_rx_for_main))

@@ -1,187 +1,151 @@
 // src/dex/meteora.rs
-//! Meteora API client for obtaining token swap quotes.
+//! Meteora client and parser for on-chain data and instruction building.
 
-use crate::cache::Cache;
-use crate::dex::http_utils::HttpRateLimiter;
-use crate::dex::quote::{DexClient, Quote as CanonicalQuote};
+use crate::dex::quote::{DexClient, Quote, SwapInfo};
+use crate::solana::rpc::SolanaRpcClient;
+use crate::utils::{DexType, PoolInfo, PoolParser as UtilsPoolParser, PoolToken};
 use anyhow::{anyhow, Result as AnyhowResult};
-use async_trait::async_trait;
-use log::{debug, error, info, warn};
-use once_cell::sync::Lazy;
-use reqwest::Client as ReqwestClient;
-use serde::{Deserialize, Serialize};
-use std::env;
+use bytemuck::{Pod, Zeroable};
+use log::info;
+use solana_sdk::{
+    instruction::Instruction,
+    program_pack::Pack,
+    pubkey::Pubkey,
+};
+use spl_token::state::Account as TokenAccount;
+use std::str::FromStr;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
 
-static METEORA_RATE_LIMITER: Lazy<HttpRateLimiter> = Lazy::new(|| {
-    HttpRateLimiter::new(
-        5,
-        Duration::from_millis(200),
-        3,
-        Duration::from_millis(500),
-        vec![],
-    )
-});
+// NOTE: Meteora has MULTIPLE pool types and program IDs.
+// This is a significant complexity we must handle.
+// This example uses a generic placeholder ID.
+// We will need to identify which program ID corresponds to which pool.
+pub const METEORA_DYNAMIC_AMM_PROGRAM_ID: &str = "MERt85kncMvv62gIe9GgAb6y2vR81Ltmvj3rD1wB36H";
 
-#[derive(Deserialize, Serialize, Debug, Clone)]
-struct MeteoraApiResponse {
-    #[serde(rename = "inputMint")]
-    input_mint: String,
-    #[serde(rename = "outputMint")]
-    output_mint: String,
-    #[serde(rename = "inAmount")]
-    in_amount: String,
-    #[serde(rename = "outAmount")]
-    out_amount: String,
-    #[serde(rename = "priceImpactPct")]
-    price_impact_pct: Option<String>,
+// --- On-Chain Data Parser ---
+
+// Placeholder struct. The actual on-chain state for Meteora pools is complex and varies by pool type.
+// This needs to be replaced with the correct struct definition from Meteora's SDKs.
+#[repr(C)]
+#[derive(Clone, Debug, Copy, Pod, Zeroable)]
+pub struct MeteoraPoolState {
+    // This is a generic example and is NOT CORRECT for Meteora.
+    pub token_a_mint: Pubkey,
+    pub token_b_mint: Pubkey,
+    pub token_a_vault: Pubkey,
+    pub token_b_vault: Pubkey,
+    pub fee_bps: u64,
 }
 
-#[derive(Debug, Clone)]
-pub struct MeteoraClient {
-    api_key: String,
-    http_client: ReqwestClient,
-    cache: Arc<Cache>,
-    quote_cache_ttl_secs: u64,
+pub struct MeteoraPoolParser;
+
+#[async_trait::async_trait]
+impl UtilsPoolParser for MeteoraPoolParser {
+    async fn parse_pool_data(
+        &self,
+        address: Pubkey,
+        data: &[u8],
+        rpc_client: &Arc<SolanaRpcClient>,
+    ) -> AnyhowResult<PoolInfo> {
+        // TODO: The parsing logic must be conditional based on the pool's program ID.
+        let state: &MeteoraPoolState = bytemuck::try_from_bytes(data)
+            .map_err(|e| anyhow!("Failed to parse Meteora pool state for {}: {}", address, e))?;
+
+        info!("Parsing Meteora pool data for address: {}", address);
+
+        let (token_a_vault_data, token_b_vault_data, decimals_a, decimals_b) = tokio::try_join!(
+            async { rpc_client.primary_client.get_account_data(&state.token_a_vault).await.map_err(anyhow::Error::from) },
+            async { rpc_client.primary_client.get_account_data(&state.token_b_vault).await.map_err(anyhow::Error::from) },
+            async { rpc_client.get_token_mint_decimals(&state.token_a_mint).await },
+            async { rpc_client.get_token_mint_decimals(&state.token_b_mint).await }
+        )?;
+
+        let reserve_a = TokenAccount::unpack(&token_a_vault_data)?.amount;
+        let reserve_b = TokenAccount::unpack(&token_b_vault_data)?.amount;
+
+        Ok(PoolInfo {
+            address,
+            name: format!("Meteora/{}", address),
+            token_a: PoolToken {
+                mint: state.token_a_mint,
+                symbol: "TKA".to_string(), // Placeholder
+                decimals: decimals_a,
+                reserve: reserve_a,
+            },
+            token_b: PoolToken {
+                mint: state.token_b_mint,
+                symbol: "TKB".to_string(), // Placeholder
+                decimals: decimals_b,
+                reserve: reserve_b,
+            },
+            fee_numerator: state.fee_bps,
+            fee_denominator: 10000,
+            last_update_timestamp: 0,
+            dex_type: DexType::Meteora,
+        })
+    }
+
+    fn get_program_id(&self) -> Pubkey {
+        Pubkey::from_str(METEORA_DYNAMIC_AMM_PROGRAM_ID).unwrap()
+    }
 }
+
+// --- DEX Client Implementation ---
+
+#[derive(Debug, Clone, Default)]
+pub struct MeteoraClient;
 
 impl MeteoraClient {
-    pub fn new(cache: Arc<Cache>, quote_cache_ttl_secs: Option<u64>) -> Self {
-        let api_key = env::var("METEORA_API_KEY").unwrap_or_else(|_| {
-            warn!("METEORA_API_KEY not set. API calls might be limited.");
-            String::new()
-        });
-        Self {
-            api_key,
-            http_client: ReqwestClient::builder()
-                .timeout(Duration::from_secs(10))
-                .user_agent(format!("RhodesArbBot/{}", env!("CARGO_PKG_VERSION")))
-                .build()
-                .unwrap_or_else(|e| {
-                    warn!("Failed to build ReqwestClient for Meteora, using default: {}", e);
-                    ReqwestClient::new()
-                }),
-            cache,
-            quote_cache_ttl_secs: quote_cache_ttl_secs.unwrap_or(45),
-        }
+    pub fn new() -> Self {
+        Self::default()
     }
 }
 
-#[async_trait]
 impl DexClient for MeteoraClient {
-    async fn get_best_swap_quote(
-        &self,
-        input_token_mint: &str,
-        output_token_mint: &str,
-        amount_in_atomic_units: u64,
-    ) -> AnyhowResult<CanonicalQuote> {
-        let cache_key_params = [
-            input_token_mint,
-            output_token_mint,
-            &amount_in_atomic_units.to_string(),
-        ];
-        let cache_prefix = "quote:meteora";
-
-        if let Ok(Some(cached_quote)) = self.cache.get_json::<CanonicalQuote>(cache_prefix, &cache_key_params).await {
-            debug!(
-                "Meteora quote cache HIT for {}->{} amount {}",
-                input_token_mint, output_token_mint, amount_in_atomic_units
-            );
-            return Ok(cached_quote);
-        }
-        debug!(
-            "Meteora quote cache MISS for {}->{} amount {}",
-            input_token_mint, output_token_mint, amount_in_atomic_units
-        );
-
-        let url = format!(
-            "https://api.meteora.ag/v1/quote?inputMint={}&outputMint={}&amount={}",
-            input_token_mint, output_token_mint, amount_in_atomic_units
-        );
-        info!("Requesting Meteora quote from URL: {}", url);
-
-        let request_start_time = Instant::now();
-        let response_result = METEORA_RATE_LIMITER
-            .get_with_backoff(&url, |request_url| {
-                let mut req_builder = self.http_client.get(request_url);
-                if !self.api_key.is_empty() {
-                    req_builder = req_builder.header("X-API-KEY", &self.api_key);
-                }
-                req_builder
-            })
-            .await;
-        let request_duration_ms = request_start_time.elapsed().as_millis() as u64;
-
-        match response_result {
-            Ok(response) => {
-                let status = response.status();
-                if status.is_success() {
-                    let text = response
-                        .text()
-                        .await
-                        .map_err(|e| anyhow!("Failed to read Meteora response text: {}", e))?;
-                    debug!(
-                        "Meteora API response text for {}->{}: {}",
-                        input_token_mint, output_token_mint, text
-                    );
-
-                    match serde_json::from_str::<MeteoraApiResponse>(&text) {
-                        Ok(api_response) => {
-                            let input_amount_u64 = api_response.in_amount.parse::<u64>()
-                                .map_err(|e| anyhow!("Parse Meteora in_amount: {}", e))?;
-                            let output_amount_u64 = api_response.out_amount.parse::<u64>()
-                                .map_err(|e| anyhow!("Parse Meteora out_amount: {}", e))?;
-                            
-                            let slippage_estimate = api_response.price_impact_pct
-                                .as_ref()
-                                .and_then(|s| s.trim_end_matches('%').parse::<f64>().ok().map(|val| val / 100.0));
-
-                            let canonical_quote = CanonicalQuote {
-                                input_token: api_response.input_mint,
-                                output_token: api_response.output_mint,
-                                input_amount: input_amount_u64,
-                                output_amount: output_amount_u64,
-                                dex: self.get_name().to_string(),
-                                route: vec![input_token_mint.to_string(), output_token_mint.to_string()],
-                                latency_ms: Some(request_duration_ms),
-                                execution_score: None,
-                                route_path: None,
-                                slippage_estimate,
-                            };
-
-                            if let Err(e) = self.cache.set_ex(cache_prefix, &cache_key_params, &canonical_quote, Some(self.quote_cache_ttl_secs)).await {
-                                warn!("Failed to cache Meteora quote for {}->{}: {}", input_token_mint, output_token_mint, e);
-                            }
-                            Ok(canonical_quote)
-                        }
-                        Err(e) => {
-                            error!("Deserialize Meteora quote: URL {}, Error: {:?}, Body: {}", url, e, text);
-                            Err(anyhow!("Deserialize Meteora quote error: {}. Body: {}", e, text))
-                        }
-                    }
-                } else {
-                    let error_text = response.text().await.unwrap_or_else(|_| "No error body".to_string());
-                    error!(
-                        "Fetch Meteora quote failed: Status {}, URL {}, Body: {}",
-                        status, url, error_text
-                    );
-                    Err(anyhow!("Fetch Meteora quote: Status {}, Body: {}", status, error_text))
-                }
-            }
-            Err(e) => {
-                error!("HTTP request to Meteora failed for URL {}: {}", url, e);
-                Err(e)
-            }
-        }
-    }
-
-    fn get_supported_pairs(&self) -> Vec<(String, String)> {
-        warn!("MeteoraClient::get_supported_pairs returning empty list.");
-        vec![]
-    }
-
     fn get_name(&self) -> &str {
         "Meteora"
+    }
+
+    fn calculate_onchain_quote(
+        &self,
+        pool: &PoolInfo,
+        input_amount: u64,
+    ) -> AnyhowResult<Quote> {
+        // TODO: Implement precise quote calculation for Meteora. This is highly complex.
+        if pool.token_a.reserve == 0 {
+            return Err(anyhow!("Pool has zero reserves for token A"));
+        }
+        let output_amount = (input_amount as u128 * pool.token_b.reserve as u128 / pool.token_a.reserve as u128) as u64;
+
+        Ok(Quote {
+            input_token: pool.token_a.symbol.clone(),
+            output_token: pool.token_b.symbol.clone(),
+            input_amount,
+            output_amount,
+            dex: self.get_name().to_string(),
+            route: vec![pool.address],
+            slippage_estimate: None,
+        })
+    }
+
+    fn get_swap_instruction(
+        &self,
+        _swap_info: &SwapInfo,
+    ) -> AnyhowResult<Instruction> {
+        // TODO: Implement the instruction building logic for Meteora.
+        let data = vec![];
+        let accounts = vec![];
+
+        if data.is_empty() || accounts.is_empty() {
+            return Err(anyhow!("Meteora swap instruction is not yet implemented."));
+        }
+
+        Ok(Instruction {
+            // FIX: Use the constant directly. This will need to be dynamic later
+            // to support different Meteora pool types.
+            program_id: Pubkey::from_str(METEORA_DYNAMIC_AMM_PROGRAM_ID).unwrap(),
+            accounts,
+            data,
+        })
     }
 }

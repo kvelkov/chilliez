@@ -1,29 +1,47 @@
 // src/dex/raydium.rs
-use crate::cache::Cache;
-use crate::dex::http_utils::HttpRateLimiter;
-use crate::dex::http_utils_shared::build_auth_headers;
-use crate::dex::quote::{DexClient, Quote};
+//! Raydium client and parser for on-chain data and instruction building.
+
+use crate::dex::quote::{DexClient, Quote, SwapInfo};
 use crate::solana::rpc::SolanaRpcClient;
 use crate::utils::{DexType, PoolInfo, PoolParser as UtilsPoolParser, PoolToken};
-use anyhow::{anyhow, Result as AnyhowResult, Context};
-use async_trait::async_trait;
+use anyhow::{anyhow, Result as AnyhowResult};
 use bytemuck::{Pod, Zeroable};
-use log::{debug, error, warn};
-use once_cell::sync::Lazy;
-use reqwest::header::HeaderName;
-use reqwest::Client as ReqwestClient;
-use serde::Deserialize;
-use solana_sdk::pubkey::Pubkey;
-use std::env;
+use log::info;
+use solana_sdk::{
+    instruction::Instruction,
+    program_pack::Pack,
+    pubkey::Pubkey,
+};
+use spl_token::state::Account as TokenAccount;
 use std::str::FromStr;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
 
-pub const RAYDIUM_LIQUIDITY_PROGRAM_V4: &str = "675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8";
+// Official Program IDs from Raydium's documentation.
+pub const RAYDIUM_LIQUIDITY_POOL_V4_PROGRAM_ID: &str = "675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8";
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Pod, Zeroable)]
+// --- On-Chain Data Structures ---
+
+// Layout for a Raydium Liquidity Pool V4 state account.
 #[repr(C)]
-pub struct FeesLayout {
+#[derive(Clone, Debug, Copy, Pod, Zeroable)]
+pub struct LiquidityStateV4 {
+    pub status: u64,
+    pub nonce: u64,
+    pub max_order: u64,
+    pub depth: u64,
+    pub base_decimal: u64,
+    pub quote_decimal: u64,
+    pub state: u64,
+    pub reset_flag: u64,
+    pub min_size: u64,
+    pub vol_max_cut_ratio: u64,
+    pub amount_wave_ratio: u64,
+    pub base_lot_size: u64,
+    pub quote_lot_size: u64,
+    // FIX: Removed stray 's' character from the beginning of the next line.
+    pub min_price_multiplier: u64,
+    pub max_price_multiplier: u64,
+    pub system_decimal_value: u64,
     pub min_separate_numerator: u64,
     pub min_separate_denominator: u64,
     pub trade_fee_numerator: u64,
@@ -32,72 +50,34 @@ pub struct FeesLayout {
     pub pnl_denominator: u64,
     pub swap_fee_numerator: u64,
     pub swap_fee_denominator: u64,
-}
-
-// This struct is taken directly from the Raydium SDK (simplified names for clarity)
-// It is 625 bytes in size and designed to be Pod.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Pod, Zeroable)]
-#[repr(C)]
-pub struct LiquidityStateV4 {
-    pub status: u64,
-    pub nonce: u64,
-    pub order_num: u64,
-    pub depth: u64,
-    pub base_decimal: u64,
-    pub quote_decimal: u64,
-    pub state: u64,
-    pub reset_flag: u64,
-    pub min_size: u64,
-    pub vol_max_cut_ratio: u64,
-    pub amount_wave: u64,
-    pub base_lot_size: u64,
-    pub quote_lot_size: u64,
-    pub min_price_multiplier: u64,
-    pub max_price_multiplier: u64,
-    pub system_decimal_value: u64, // 16 * 8 = 128 bytes
-
-    pub fees: FeesLayout, // 64 bytes. Total = 192 bytes
-
-    pub base_need_take_pnl: u64,    // For OutputData part
+    pub base_need_take_pnl: u64,
     pub quote_need_take_pnl: u64,
-    pub surplus_base_token: u64,
-    pub surplus_quote_token: u64,   // +32 bytes. Total = 224 bytes
-    pub base_total_pnl: u128,
-    pub quote_total_pnl: u128,      // +32 bytes. Total = 256 bytes
+    pub quote_total_pnl: u64,
+    pub base_total_pnl: u64,
     pub pool_open_time: u64,
     pub punishment_numerator: u64,
-    pub punishment_denominator: u64, // +24 bytes. Total = 280 bytes
-    pub amm_owner: Pubkey,          // +32 bytes. Total = 312 bytes
-
-    pub base_reserve_amount: u64,
-    pub quote_reserve_amount: u64,
-    pub evaluate_base_amount: u64,
-    pub evaluate_quote_amount: u64, // +32 bytes. Total = 344 bytes
-    pub target_orders: Pubkey,      // +32 bytes. Total = 376 bytes
-    pub lp_mint: Pubkey,            // +32 bytes. Total = 408 bytes
-
+    pub punishment_denominator: u64,
+    pub amod: u64,
+    pub padding: [u64; 1],
+    pub base_mint: Pubkey,
+    pub quote_mint: Pubkey,
+    pub lp_mint: Pubkey,
+    pub open_orders: Pubkey,
+    pub target_orders: Pubkey,
     pub base_vault: Pubkey,
     pub quote_vault: Pubkey,
+    pub withdraw_queue: Pubkey,
+    pub lp_vault: Pubkey,
     pub market_id: Pubkey,
-    pub market_program_id: Pubkey,  // +128 bytes. Total = 536 bytes
-    
-    // Final padding to make the struct exactly 625 bytes.
-    // Original explicit padding was 89 bytes (padding0: [u64;11] + padding1: u8).
-    // Compiler makes struct 640 bytes. Implicit padding = 640 - (536 + 89) = 15 bytes.
-    // New total explicit padding = 89 + 15 = 104 bytes.
-    // Use types that are Pod. [u64; N] and u8 are Pod.
-    pub padding: [u64; 13], // 13 * 8 = 104 bytes. Total size: 536 + 104 = 640 bytes.
+    pub market_program_id: Pubkey,
+    pub market_authority: Pubkey,
 }
-// Statically assert that the size of LiquidityStateV4 is 625 bytes.
-const _: [(); std::mem::size_of::<LiquidityStateV4>()] = [(); 640];
 
-const SERUM_MARKET_BASE_MINT_OFFSET: usize = 53;
-const SERUM_MARKET_QUOTE_MINT_OFFSET: usize = 85;
-
+// --- On-Chain Data Parser ---
 
 pub struct RaydiumPoolParser;
 
-#[async_trait]
+#[async_trait::async_trait]
 impl UtilsPoolParser for RaydiumPoolParser {
     async fn parse_pool_data(
         &self,
@@ -105,268 +85,113 @@ impl UtilsPoolParser for RaydiumPoolParser {
         data: &[u8],
         rpc_client: &Arc<SolanaRpcClient>,
     ) -> AnyhowResult<PoolInfo> {
-        const EXPECTED_ON_CHAIN_SIZE: usize = std::mem::size_of::<LiquidityStateV4>(); // Should be 625
+        let pool_state: &LiquidityStateV4 = bytemuck::try_from_bytes(data)
+            .map_err(|e| anyhow!("Failed to parse Raydium pool state for {}: {}", address, e))?;
 
-        if data.len() < EXPECTED_ON_CHAIN_SIZE {
-            return Err(anyhow!(
-                "Data too short for Raydium V4 pool {}: expected {} bytes, got {}. Data prefix: {:?}",
-                address,
-                EXPECTED_ON_CHAIN_SIZE,
-                data.len(),
-                &data[..std::cmp::min(data.len(), 64)]
-            ));
-        }
+        info!("Parsing Raydium AMM V4 pool data for address: {}", address);
 
-        let state: &LiquidityStateV4 = bytemuck::from_bytes(&data[..EXPECTED_ON_CHAIN_SIZE]);
+        let (base_vault_data, quote_vault_data) = tokio::try_join!(
+            async { rpc_client.primary_client.get_account_data(&pool_state.base_vault).await.map_err(anyhow::Error::from) },
+            async { rpc_client.primary_client.get_account_data(&pool_state.quote_vault).await.map_err(anyhow::Error::from) }
+        )?;
 
-        // Fetch Serum market account data
-        let market_account_data = rpc_client.get_account_data(&state.market_id).await
-            .with_context(|| format!("Failed to fetch Serum market account data for Raydium pool {}, market ID {}", address, state.market_id))?;
-
-        // Ensure market data is long enough
-        if market_account_data.len() < SERUM_MARKET_QUOTE_MINT_OFFSET + 32 {
-            return Err(anyhow!(
-                "Serum market account data for market {} is too short. Expected at least {} bytes, got {}.",
-                state.market_id, SERUM_MARKET_QUOTE_MINT_OFFSET + 32, market_account_data.len()
-            ));
-        }
-
-        // Extract base_mint and quote_mint using bytemuck::from_bytes_with_offsets or direct slicing
-        // It's safer to slice and then cast to Pubkey to avoid misalignments if the struct isn't perfectly matching.
-        let base_mint_bytes: &[u8; 32] = market_account_data[SERUM_MARKET_BASE_MINT_OFFSET..SERUM_MARKET_BASE_MINT_OFFSET + 32]
-            .try_into()
-            .map_err(|_| anyhow!("Failed to slice base_mint from market {}", state.market_id))?;
-        let base_mint = Pubkey::new_from_array(*base_mint_bytes);
-
-        let quote_mint_bytes: &[u8; 32] = market_account_data[SERUM_MARKET_QUOTE_MINT_OFFSET..SERUM_MARKET_QUOTE_MINT_OFFSET + 32]
-            .try_into()
-            .map_err(|_| anyhow!("Failed to slice quote_mint from market {}", state.market_id))?;
-        let quote_mint = Pubkey::new_from_array(*quote_mint_bytes);
-
-        // Fetch decimals for the actual mints
-        let (base_decimals, quote_decimals) = tokio::try_join!(
-            rpc_client.get_token_mint_decimals(&base_mint),
-            rpc_client.get_token_mint_decimals(&quote_mint)
-        ).with_context(|| format!("Failed to fetch token decimals for Raydium pool {}, market {}", address, state.market_id))?;
+        let base_reserve = TokenAccount::unpack_from_slice(&base_vault_data)?.amount;
+        let quote_reserve = TokenAccount::unpack_from_slice(&quote_vault_data)?.amount;
 
         Ok(PoolInfo {
             address,
-            name: format!("RaydiumV4-{}", address.to_string().chars().take(4).collect::<String>()),
+            name: format!("Raydium AMM V4/{}", address),
             token_a: PoolToken {
-                mint: base_mint,
-                symbol: format!("BASE-{}", base_mint.to_string().chars().take(4).collect::<String>()), // Placeholder symbol
-                decimals: base_decimals,
-                reserve: state.base_reserve_amount,
+                mint: pool_state.base_mint,
+                symbol: "BASE".to_string(), // Placeholder
+                decimals: pool_state.base_decimal as u8,
+                reserve: base_reserve,
             },
             token_b: PoolToken {
-                mint: quote_mint,
-                symbol: format!("QUOTE-{}", quote_mint.to_string().chars().take(4).collect::<String>()), // Placeholder symbol
-                decimals: quote_decimals,
-                reserve: state.quote_reserve_amount,
+                mint: pool_state.quote_mint,
+                symbol: "QUOTE".to_string(), // Placeholder
+                decimals: pool_state.quote_decimal as u8,
+                reserve: quote_reserve,
             },
-            fee_numerator: state.fees.swap_fee_numerator,
-            fee_denominator: state.fees.swap_fee_denominator,
-            last_update_timestamp: state.pool_open_time,
+            fee_numerator: pool_state.swap_fee_numerator,
+            fee_denominator: pool_state.swap_fee_denominator,
+            last_update_timestamp: pool_state.pool_open_time,
             dex_type: DexType::Raydium,
         })
     }
 
     fn get_program_id(&self) -> Pubkey {
-        Pubkey::from_str(RAYDIUM_LIQUIDITY_PROGRAM_V4).unwrap()
+        Pubkey::from_str(RAYDIUM_LIQUIDITY_POOL_V4_PROGRAM_ID).unwrap()
     }
 }
 
-// --- Client implementation (RaydiumClient) ---
-#[derive(Deserialize, Debug)]
-struct RaydiumApiResponse {
-    #[serde(rename = "inputMint")]
-    input_mint: String,
-    #[serde(rename = "outputMint")]
-    output_mint: String,
-    #[serde(rename = "inAmount")]
-    in_amount: String,
-    #[serde(rename = "outAmount")]
-    out_amount: String,
-    #[serde(rename = "priceImpactPct")]
-    price_impact_pct: Option<f64>,
-}
+// --- DEX Client Implementation ---
 
-#[derive(Debug, Clone)]
-pub struct RaydiumClient {
-    api_key: String,
-    http_client: ReqwestClient,
-    cache: Arc<Cache>,
-    quote_cache_ttl_secs: u64,
-}
+#[derive(Debug, Clone, Default)]
+pub struct RaydiumClient;
 
 impl RaydiumClient {
-    pub fn new(cache: Arc<Cache>, quote_cache_ttl_secs: Option<u64>) -> Self {
-        let api_key = env::var("RAYDIUM_API_KEY").unwrap_or_else(|_| {
-            debug!("RAYDIUM_API_KEY not set (usually not required for public quotes).");
-            String::new()
-        });
-        Self {
-            api_key,
-            http_client: ReqwestClient::builder()
-                .timeout(Duration::from_secs(10))
-                .user_agent(format!("RhodesArbBot/{}", env!("CARGO_PKG_VERSION")))
-                .build()
-                .unwrap_or_else(|e| {
-                    warn!("Failed to build ReqwestClient for Raydium, using default: {}", e);
-                    ReqwestClient::new()
-                }),
-            cache,
-            quote_cache_ttl_secs: quote_cache_ttl_secs.unwrap_or(30),
-        }
+    pub fn new() -> Self {
+        Self::default()
     }
 }
 
-static RAYDIUM_RATE_LIMITER: Lazy<HttpRateLimiter> = Lazy::new(|| {
-    HttpRateLimiter::new(
-        5,
-        Duration::from_millis(200),
-        3,
-        Duration::from_millis(500),
-        vec![],
-    )
-});
-
-#[async_trait]
 impl DexClient for RaydiumClient {
-    async fn get_best_swap_quote(
-        &self,
-        input_token_mint: &str,
-        output_token_mint: &str,
-        amount_in_atomic_units: u64,
-    ) -> AnyhowResult<Quote> {
-        let cache_key_params = [
-            input_token_mint,
-            output_token_mint,
-            &amount_in_atomic_units.to_string(),
-        ];
-        let cache_prefix = "quote:raydium";
-
-        if let Ok(Some(cached_quote)) = self
-            .cache
-            .get_json::<Quote>(cache_prefix, &cache_key_params)
-            .await
-        {
-            debug!(
-                "Raydium quote cache HIT for {}->{} amount {}",
-                input_token_mint, output_token_mint, amount_in_atomic_units
-            );
-            return Ok(cached_quote);
-        }
-        debug!(
-            "Raydium quote cache MISS for {}->{} amount {}",
-            input_token_mint, output_token_mint, amount_in_atomic_units
-        );
-
-        let url = format!(
-            "https://api.raydium.io/v2/sdk/token/quote?inputMint={}&outputMint={}&amount={}&slippage=0",
-            input_token_mint, output_token_mint, amount_in_atomic_units
-        );
-
-        let api_key_option = if self.api_key.is_empty() {
-            None
-        } else {
-            Some(self.api_key.as_str())
-        };
-
-        let headers = build_auth_headers(api_key_option, HeaderName::from_static("x-api-key"), None);
-
-        let request_start_time = Instant::now();
-        let response_result = RAYDIUM_RATE_LIMITER
-            .get_with_backoff(&url, |request_url| {
-                self.http_client.get(request_url).headers(headers.clone())
-            })
-            .await;
-        
-        let request_duration_ms = request_start_time.elapsed().as_millis() as u64;
-
-        match response_result {
-            Ok(response) => {
-                let status = response.status();
-                if status.is_success() {
-                    let text = response
-                        .text()
-                        .await
-                        .map_err(|e| anyhow!("Failed to read Raydium response text: {}", e))?;
-                    debug!(
-                        "Raydium API response text for {}->{}: {}",
-                        input_token_mint, output_token_mint, text
-                    );
-
-                    match serde_json::from_str::<RaydiumApiResponse>(&text) {
-                        Ok(api_response) => {
-                            let input_amount_u64 = api_response.in_amount.parse::<u64>().map_err(|e| {
-                                anyhow!("Failed to parse Raydium in_amount '{}': {}", api_response.in_amount, e)
-                            })?;
-                            let output_amount_u64 = api_response.out_amount.parse::<u64>().map_err(|e| {
-                                anyhow!("Failed to parse Raydium out_amount '{}': {}", api_response.out_amount, e)
-                            })?;
-
-                            let quote_obj = Quote {
-                                input_token: api_response.input_mint,
-                                output_token: api_response.output_mint,
-                                input_amount: input_amount_u64,
-                                output_amount: output_amount_u64,
-                                dex: self.get_name().to_string(),
-                                route: vec![input_token_mint.to_string(), output_token_mint.to_string()],
-                                latency_ms: Some(request_duration_ms),
-                                execution_score: None,
-                                route_path: None,
-                                slippage_estimate: api_response.price_impact_pct,
-                            };
-
-                            if let Err(e) = self.cache.set_ex(
-                                cache_prefix,
-                                &cache_key_params,
-                                &quote_obj,
-                                Some(self.quote_cache_ttl_secs),
-                            )
-                            .await
-                            {
-                                warn!(
-                                    "Failed to cache Raydium quote for {}->{}: {}",
-                                    input_token_mint, output_token_mint, e
-                                );
-                            }
-                            Ok(quote_obj)
-                        }
-                        Err(e) => {
-                            error!(
-                                "Failed to deserialize Raydium quote from URL {}: {:?}. Response text: {}",
-                                url, e, text
-                            );
-                            Err(anyhow!("Failed to deserialize Raydium quote from {}. Error: {}. Body: {}", url, e, text))
-                        }
-                    }
-                } else {
-                    let error_text = response
-                        .text()
-                        .await
-                        .unwrap_or_else(|_| "Failed to read error response body".to_string());
-                    error!(
-                        "Failed to fetch Raydium quote from URL {}: Status {}. Body: {}",
-                        url, status, error_text
-                    );
-                    Err(anyhow!("Failed to fetch Raydium quote from {}: {}. Body: {}", url, status, error_text))
-                }
-            }
-            Err(e) => {
-                error!("HTTP request to Raydium failed for URL {}: {}", url, e);
-                Err(e)
-            }
-        }
-    }
-
-    fn get_supported_pairs(&self) -> Vec<(String, String)> {
-        warn!("RaydiumClient::get_supported_pairs returning empty; dynamic fetching or a larger static list may be implemented.");
-        vec![]
-    }
-
     fn get_name(&self) -> &str {
         "Raydium"
+    }
+
+    /// Calculates a quote using the Constant Product formula for AMM V4 pools.
+    fn calculate_onchain_quote(
+        &self,
+        pool: &PoolInfo,
+        input_amount: u64,
+    ) -> AnyhowResult<Quote> {
+        if pool.token_a.reserve == 0 || pool.token_b.reserve == 0 {
+            return Err(anyhow!("Pool has zero reserves."));
+        }
+        if pool.fee_denominator == 0 {
+            return Err(anyhow!("Fee denominator cannot be zero."));
+        }
+
+        let fee = (input_amount as u128 * pool.fee_numerator as u128 / pool.fee_denominator as u128) as u64;
+        let input_amount_after_fee = input_amount.saturating_sub(fee);
+
+        let k = pool.token_a.reserve as u128 * pool.token_b.reserve as u128;
+        let output_amount = (pool.token_b.reserve as u128)
+            .saturating_sub(k / (pool.token_a.reserve as u128 + input_amount_after_fee as u128));
+        
+        if output_amount == 0 {
+            return Err(anyhow!("Output amount is zero, likely due to high fee or low input."));
+        }
+
+        Ok(Quote {
+            input_token: pool.token_a.symbol.clone(),
+            output_token: pool.token_b.symbol.clone(),
+            input_amount,
+            output_amount: output_amount as u64,
+            dex: self.get_name().to_string(),
+            route: vec![pool.address],
+            slippage_estimate: None,
+        })
+    }
+
+    fn get_swap_instruction(
+        &self,
+        _swap_info: &SwapInfo,
+    ) -> AnyhowResult<Instruction> {
+        // TODO: Implement the instruction building logic for a Raydium AMM V4 swap.
+        let data = vec![];
+        let accounts = vec![];
+
+        if data.is_empty() || accounts.is_empty() {
+            return Err(anyhow!("Raydium AMM V4 swap instruction is not yet implemented."));
+        }
+
+        Ok(Instruction {
+            program_id: Pubkey::from_str(RAYDIUM_LIQUIDITY_POOL_V4_PROGRAM_ID).unwrap(),
+            accounts,
+            data,
+        })
     }
 }

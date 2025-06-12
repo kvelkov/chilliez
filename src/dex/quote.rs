@@ -1,7 +1,11 @@
 // src/dex/quote.rs
-use serde::{Deserialize, Serialize};
 
-/// Represents a raw quote retrieved from a DEX API for a token swap.
+use crate::utils::PoolInfo;
+use serde::{Deserialize, Serialize};
+use solana_program::instruction::Instruction;
+use solana_program::pubkey::Pubkey;
+
+/// Represents a calculated quote for a token swap based on on-chain data.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Quote {
     pub input_token: String,
@@ -9,54 +13,64 @@ pub struct Quote {
     pub input_amount: u64,
     pub output_amount: u64,
     pub dex: String,
-    /// The route or steps involved (if multi-step swap occurs).
-    pub route: Vec<String>,
-    /// Optional latency in milliseconds for the quote retrieval.
-    pub latency_ms: Option<u64>,
-    /// Optional score indicating execution viability.
-    pub execution_score: Option<f64>,
-    /// Optional route path as a series of routes.
-    pub route_path: Option<Vec<String>>,
+    /// The market addresses involved in the swap.
+    pub route: Vec<Pubkey>,
     /// Optional estimate of slippage percentage.
     pub slippage_estimate: Option<f64>,
 }
 
-/// A more standardized response version of a Quote.
-/// This may be used after internal processing to ensure all data is present.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct QuoteResponse {
-    pub input_token: String,
-    pub output_token: String,
-    pub input_amount: u64,
-    pub output_amount: u64,
-    pub dex: String,
-    pub latency_ms: u64,
-    pub execution_score: f64,
-    pub route_path: Vec<String>,
-    pub slippage_estimate: f64,
-}
-
-/// The DexClient trait defines the interface available to all DEX API clients.
-/// Implementing clients must provide methods to retrieve the best swap quote,
-/// report supported token pairings, and supply their client name.
-#[async_trait::async_trait]
+/// The new DexClient trait defines the interface for all on-chain DEX interactions.
+/// Implementing clients must provide methods to calculate quotes from on-chain data
+/// and build the raw transaction instructions for a swap.
 pub trait DexClient: Send + Sync {
-    async fn get_best_swap_quote(
+    /// Returns the name of the DEX client (e.g., "Orca", "Raydium").
+    fn get_name(&self) -> &str;
+
+    /// Calculates the expected output amount for a swap given a specific pool's on-chain state.
+    ///
+    /// # Arguments
+    /// * `pool` - A `PoolInfo` struct containing the live on-chain data for the liquidity pool.
+    /// * `input_amount` - The amount of the input token to be swapped.
+    ///
+    /// # Returns
+    /// A `Result` containing the calculated `Quote` or an error.
+    fn calculate_onchain_quote(
         &self,
-        input_token: &str,
-        output_token: &str,
-        amount: u64,
+        pool: &PoolInfo,
+        input_amount: u64,
     ) -> anyhow::Result<Quote>;
 
-    fn get_supported_pairs(&self) -> Vec<(String, String)>;
-
-    fn get_name(&self) -> &str;
+    /// Constructs the Solana `Instruction` required to perform the swap.
+    ///
+    /// # Arguments
+    /// * `swap_info` - A struct containing all necessary Pubkeys and data for the swap.
+    ///
+    /// # Returns
+    /// A `Result` containing the composed `Instruction` or an error.
+    fn get_swap_instruction(
+        &self,
+        swap_info: &SwapInfo,
+    ) -> anyhow::Result<Instruction>;
 }
+
+/// A struct to hold all the necessary information for building a swap instruction.
+#[derive(Debug, Clone)]
+pub struct SwapInfo<'a> {
+    pub dex_name: &'a str,
+    pub pool: &'a PoolInfo,
+    pub user_wallet: &'a Pubkey,
+    pub user_source_token_account: &'a Pubkey,
+    pub user_destination_token_account: &'a Pubkey,
+    pub amount_in: u64,
+    // Add any other fields that might be universally required, like slippage settings.
+    // pub slippage_bps: u16,
+}
+
 
 // ---- Helper Methods for Quote ----
 
 impl Quote {
-    /// Calculates the profit (output minus input) as a signed integer.
+    /// Calculates the profit (output minus input) as a signed integer, assuming same decimals.
     pub fn profit(&self) -> i64 {
         self.output_amount as i64 - self.input_amount as i64
     }
@@ -79,12 +93,4 @@ impl Quote {
     pub fn input_as_float(&self, decimals: u8) -> f64 {
         self.input_amount as f64 / 10f64.powi(decimals as i32)
     }
-}
-
-/// Represents a request for a quote from the DEX API.
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct QuoteRequest {
-    pub input_token: String,
-    pub output_token: String,
-    pub amount: u64,
 }

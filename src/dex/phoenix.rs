@@ -1,178 +1,137 @@
 // src/dex/phoenix.rs
-//! Phoenix API client for querying swap quotes.
+//! Phoenix client and parser for on-chain order book data and instruction building.
+//! This implementation leverages the official phoenix-sdk.
 
-use crate::cache::Cache;
-use crate::dex::http_utils::HttpRateLimiter;
-use crate::dex::quote::{DexClient, Quote as CanonicalQuote};
-use crate::dex::http_utils_shared::log_timed_request;
-use anyhow::{anyhow, Result as AnyhowResult};
-use async_trait::async_trait;
-use log::{debug, error, info, warn};
-use once_cell::sync::Lazy;
-use reqwest::Client as ReqwestClient;
-use serde::{Deserialize, Serialize};
-use std::env;
-use std::sync::Arc;
-use std::time::{Duration, Instant};
-
-static PHOENIX_RATE_LIMITER: Lazy<HttpRateLimiter> = Lazy::new(|| {
-    HttpRateLimiter::new(5, Duration::from_millis(200), 3, Duration::from_millis(500), vec![])
-});
-
-#[derive(Deserialize, Serialize, Debug, Clone)]
-struct PhoenixApiResponse {
-    #[serde(rename = "inputMint")]
-    input_mint: String,
-    #[serde(rename = "outputMint")]
-    output_mint: String,
-    #[serde(rename = "inAmount")]
-    in_amount: String,
-    #[serde(rename = "outAmount")]
-    out_amount: String,
-    #[serde(rename = "priceImpactPercent")]
-    price_impact_percent: Option<String>,
-}
-
-pub const PHOENIX_PROGRAM_ID: &str = "PhoeNiXZ8ByJGLkxNfZRnkUfjvmuYqLR89jjFHGqdXY";
-
-#[derive(Debug, Clone)]
-pub struct PhoenixClient {
-    _api_key: String, // Prefixed field for internal use.
-    http_client: ReqwestClient,
-    cache: Arc<Cache>,
-    quote_cache_ttl_secs: u64,
-}
-
-impl PhoenixClient {
-    /// Constructs a new Phoenix client using the provided cache and an optional TTL for quotes.
-    pub fn new(cache: Arc<Cache>, quote_cache_ttl_secs: Option<u64>) -> Self {
-        let api_key = env::var("PHOENIX_API_KEY").unwrap_or_else(|_| {
-            warn!("PHOENIX_API_KEY not set. This may affect API access for Phoenix.");
-            String::new()
-        });
-        Self {
-            _api_key: api_key,
-            http_client: ReqwestClient::builder()
-                .timeout(Duration::from_secs(10))
-                .user_agent(format!("RhodesArbBot/{}", env!("CARGO_PKG_VERSION")))
-                .build()
-                .unwrap_or_else(|e| {
-                    warn!("Failed to build ReqwestClient for Phoenix, using default: {}", e);
-                    ReqwestClient::new()
-                }),
-            cache,
-            quote_cache_ttl_secs: quote_cache_ttl_secs.unwrap_or(10),
-        }
-    }
-}
-
-#[async_trait]
-impl DexClient for PhoenixClient {
-    async fn get_best_swap_quote(
-        &self,
-        input_token_mint: &str,
-        output_token_mint: &str,
-        amount_in_atomic_units: u64,
-    ) -> AnyhowResult<CanonicalQuote> {
-        let operation_label = format!("PhoenixClient_GetQuote_{}_{}", input_token_mint, output_token_mint);
-        log_timed_request(&operation_label, async {
-            let cache_key_params = [
-                input_token_mint,
-                output_token_mint,
-                &amount_in_atomic_units.to_string(),
-            ];
-            let cache_prefix = "quote:phoenix";
-
-            // Check cache first.
-            if let Ok(Some(cached_quote)) = self.cache.get_json::<CanonicalQuote>(cache_prefix, &cache_key_params).await {
-                debug!(
-                    "Phoenix quote cache HIT for {}->{} amount {}",
-                    input_token_mint, output_token_mint, amount_in_atomic_units
-                );
-                return Ok(cached_quote);
-            }
-            debug!(
-                "Phoenix quote cache MISS for {}->{} amount {}",
-                input_token_mint, output_token_mint, amount_in_atomic_units
-            );
-
-            // Construct the API URL.
-            let url = format!(
-                "https://api.phoenix.trade/v1/quote?inputMint={}&outputMint={}&amountIn={}",
-                input_token_mint, output_token_mint, amount_in_atomic_units
-            );
-            info!("Requesting Phoenix quote from URL: {}", url);
-
-            let request_start_time = Instant::now();
-            let response_result = PHOENIX_RATE_LIMITER.get_with_backoff(&url, |request_url| {
-                let mut req_builder = self.http_client.get(request_url);
-                if !self._api_key.is_empty() {
-                    req_builder = req_builder.header("X-API-KEY", &self._api_key);
-                }
-                req_builder
-            }).await;
-            let request_duration_ms = request_start_time.elapsed().as_millis() as u64;
-
-            match response_result {
-                Ok(response) => {
-                    let status = response.status();
-                    if status.is_success() {
-                        let text = response.text().await.map_err(|e| anyhow!("Failed to read Phoenix response text: {}", e))?;
-                        debug!("Phoenix API response text for {}->{}: {}", input_token_mint, output_token_mint, text);
-                        match serde_json::from_str::<PhoenixApiResponse>(&text) {
-                            Ok(api_response) => {
-                                let input_amount_u64 = api_response.in_amount.parse::<u64>()
-                                    .map_err(|e| anyhow!("Parse Phoenix in_amount: {}", e))?;
-                                let output_amount_u64 = api_response.out_amount.parse::<u64>()
-                                    .map_err(|e| anyhow!("Parse Phoenix out_amount: {}", e))?;
-                                
-                                let slippage_estimate = api_response.price_impact_percent
-                                    .as_ref()
-                                    .and_then(|s| s.trim_end_matches('%').parse::<f64>().ok().map(|val| val / 100.0));
-
-                                let canonical_quote = CanonicalQuote {
-                                    input_token: api_response.input_mint,
-                                    output_token: api_response.output_mint,
-                                    input_amount: input_amount_u64,
-                                    output_amount: output_amount_u64,
-                                    dex: self.get_name().to_string(),
-                                    route: vec![input_token_mint.to_string(), output_token_mint.to_string()],
-                                    latency_ms: Some(request_duration_ms),
-                                    execution_score: None,
-                                    route_path: None,
-                                    slippage_estimate,
-                                };
-
-                                if let Err(e) = self.cache.set_ex(cache_prefix, &cache_key_params, &canonical_quote, Some(self.quote_cache_ttl_secs)).await {
-                                    warn!("Failed to cache Phoenix quote for {}->{}: {}", input_token_mint, output_token_mint, e);
-                                }
-                                Ok(canonical_quote)
-                            }
-                            Err(e) => {
-                                error!("Deserialize Phoenix quote: URL {}, Error: {:?}, Body: {}", url, e, text);
-                                Err(anyhow!("Deserialize Phoenix error: {}. Body: {}", e, text))
-                            }
-                        }
-                    } else {
-                        let error_text = response.text().await.unwrap_or_else(|_| "No error body".to_string());
-                        error!("Fetch Phoenix quote failed: Status {}, URL {}, Body: {}", status, url, error_text);
-                        Err(anyhow!("Fetch Phoenix quote: Status {}, Body: {}", status, error_text))
-                    }
-                }
-                Err(e) => {
-                    error!("HTTP request to Phoenix failed for URL {}: {}", url, e);
-                    Err(e)
-                }
-            }
-        }).await
-    }
-
-    fn get_supported_pairs(&self) -> Vec<(String, String)> {
-        warn!("PhoenixClient::get_supported_pairs returning empty list.");
-        vec![]
-    }
-
-    fn get_name(&self) -> &str {
-        "Phoenix"
-    }
-}
+// PHOENIX CLIENT DISABLED DUE TO INCOMPATIBLE DEPENDENCY
+//
+// use crate::dex::quote::{DexClient, Quote, SwapInfo};
+// use crate::solana::rpc::SolanaRpcClient;
+// use crate::utils::{DexType, PoolInfo, PoolParser as UtilsPoolParser, PoolToken};
+// use anyhow::{anyhow, Result as AnyhowResult};
+// use log::info;
+// use phoenix_sdk::sdk_client::SDKClient;
+// use phoenix_sdk::types::{Side, Token};
+// use solana_sdk::{instruction::Instruction, pubkey::Pubkey, signature::Keypair};
+// use std::sync::Arc;
+//
+// // --- On-Chain Data Parser ---
+//
+// pub struct PhoenixMarketParser;
+//
+// #[async_trait::async_trait]
+// impl UtilsPoolParser for PhoenixMarketParser {
+//     async fn parse_pool_data(
+//         &self,
+//         address: Pubkey,
+//         data: &[u8],
+//         _rpc_client: &Arc<SolanaRpcClient>,
+//     ) -> AnyhowResult<PoolInfo> {
+//         let (header, market_bytes) = data.split_at(std::mem::size_of::<phoenix_sdk::types::Header>());
+//         let market = phoenix_sdk::types::Market::load_with_header(header, market_bytes)
+//             .map_err(|e| anyhow!("Failed to parse Phoenix market state for {}: {:?}", address, e))?;
+//
+//         info!("Parsing Phoenix market data for address: {}", address);
+//
+//         // An order book doesn't have "reserves" in the AMM sense.
+//         // We populate PoolInfo pragmatically. The core logic will use the raw market data.
+//         Ok(PoolInfo {
+//             address,
+//             name: format!("Phoenix Market/{}", address),
+//             token_a: PoolToken {
+//                 mint: market.get_base_mint(),
+//                 symbol: "BASE".to_string(), // Placeholder
+//                 decimals: market.get_base_decimals() as u8,
+//                 reserve: 1, // Not applicable for an order book
+//             },
+//             token_b: PoolToken {
+//                 mint: market.get_quote_mint(),
+//                 symbol: "QUOTE".to_string(), // Placeholder
+//                 decimals: market.get_quote_decimals() as u8,
+//                 reserve: 1, // Not applicable for an order book
+//             },
+//             fee_numerator: market.get_fee_bps() as u64,
+//             fee_denominator: 10000,
+//             last_update_timestamp: market.get_creation_timestamp(),
+//             dex_type: DexType::Phoenix,
+//         })
+//     }
+//
+//     fn get_program_id(&self) -> Pubkey {
+//         phoenix_sdk::ID
+//     }
+// }
+//
+// // --- DEX Client Implementation ---
+//
+// #[derive(Debug, Clone, Default)]
+// pub struct PhoenixClient;
+//
+// impl PhoenixClient {
+//     pub fn new() -> Self {
+//         Self::default()
+//     }
+// }
+//
+// impl DexClient for PhoenixClient {
+//     fn get_name(&self) -> &str {
+//         "Phoenix"
+//     }
+//
+//     /// Calculates a quote by walking the on-chain order book.
+//     fn calculate_onchain_quote(
+//         &self,
+//         pool: &PoolInfo,
+//         input_amount: u64,
+//     ) -> AnyhowResult<Quote> {
+//         // To calculate a quote, we need the raw market data, not just the PoolInfo.
+//         // This function would need to be adapted to accept the raw `data: &[u8]` as well.
+//         // For now, we return an error indicating the need for this change.
+//         return Err(anyhow!(
+//             "Phoenix quote calculation requires the raw market account data."
+//         ));
+//
+//         // TODO: A full implementation would look like this:
+//         // let (header, market_bytes) = raw_market_data.split_at(..);
+//         // let market = Market::load_with_header(header, market_bytes)?;
+//         //
+//         // // Assuming we are selling token A (base) for token B (quote)
+//         // let quote = market.get_quote_for_base_amount(input_amount, Side::Ask)?;
+//         //
+//         // Ok(Quote {
+//         //     input_token: pool.token_a.symbol.clone(),
+//         //     output_token: pool.token_b.symbol.clone(),
+//         //     input_amount,
+//         //     output_amount: quote.total_quote_amount,
+//         //     dex: self.get_name().to_string(),
+//         //     route: vec![pool.address],
+//         //     slippage_estimate: None,
+//         // })
+//     }
+//
+//     /// Builds a swap instruction, which for Phoenix is an immediate-or-cancel limit order.
+//     fn get_swap_instruction(
+//         &self,
+//         swap_info: &SwapInfo,
+//     ) -> AnyhowResult<Instruction> {
+//         // This is a simplified swap. A more advanced implementation might place limit orders.
+//         // We will need to create a dummy SDKClient to use the instruction builder.
+//         // A real implementation would manage this client more elegantly.
+//         let dummy_signer = Keypair::new();
+//         let client = SDKClient::new(&dummy_signer);
+//
+//         // We determine the worst acceptable price for the IOC order to act like a swap.
+//         // This is a complex calculation; for now, we use a placeholder.
+//         let worst_case_price_in_ticks = 0; // Placeholder - this must be calculated properly.
+//
+//         let instruction = client.new_swap_instruction(
+//             &swap_info.pool.address,
+//             &swap_info.user_source_token_account,
+//             &swap_info.user_destination_token_account,
+//             Side::Ask, // Assuming we are selling token A for token B
+//             swap_info.amount_in,
+//             worst_case_price_in_ticks,
+//         );
+//
+//         Ok(instruction)
+//     }
+// }

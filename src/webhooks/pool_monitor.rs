@@ -4,12 +4,12 @@
 //! the Helius SDK for ultra-fast webhook management and event processing.
 
 use crate::helius_client::HeliusManager;
-use crate::webhooks::helius_sdk::{HeliusWebhookManager, WebhookConfig};
+use crate::webhooks::{EnhancedHeliusWebhookManager as HeliusWebhookManager, WebhookConfig};
 use crate::config::Config;
 use crate::utils::PoolInfo;
 use crate::utils::pool_validation::{PoolValidationConfig, validate_single_pool};
-use helius::types::EnhancedTransaction;
-use helius::Helius;
+// Use stub implementations for Helius types
+use super::helius_sdk_stub::{EnhancedTransaction, Helius};
 use anyhow::{Result, Context};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;

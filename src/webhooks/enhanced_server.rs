@@ -1,7 +1,7 @@
-//! Enhanced Webhook Event Processing Server for Helius SDK
+//! Enhanced Webhook Event Processing Server (STUB IMPLEMENTATION)
 
 use crate::webhooks::{PoolEvent, PoolEventType};
-use helius::types::{EnhancedTransaction, TransactionType};
+use crate::webhooks::helius_sdk_stub::EnhancedTransaction;
 use axum::{
     extract::{Path, State},
     http::StatusCode,
@@ -204,23 +204,26 @@ fn determine_event_type(payload: &HeliusWebhookPayload) -> PoolEventType {
 }
 
 /// Create an enhanced transaction from the webhook payload
-fn create_enhanced_transaction_from_payload(payload: &HeliusWebhookPayload) -> EnhancedTransaction {
-    // This is a simplified version - in practice you'd fully populate this
+fn create_enhanced_transaction_from_payload(_payload: &HeliusWebhookPayload) -> EnhancedTransaction {
+    use crate::webhooks::helius_sdk_stub::{TransactionType, Source, TransactionEvent};
+    
+    // Stub implementation - return default enhanced transaction
+    // TODO: Replace with real Helius implementation when dependency conflicts are resolved
     EnhancedTransaction {
-        signature: payload.signature.clone(),
-        slot: payload.slot as i32,
-        timestamp: payload.timestamp as u64,
-        fee: payload.fee as i32,
-        fee_payer: payload.fee_payer.clone(),
+        signature: "stub_signature".to_string(),
+        slot: 0,
+        timestamp: chrono::Utc::now().timestamp() as u64,
+        fee: 0,
+        fee_payer: "stub_fee_payer".to_string(),
         transaction_error: None,
-        description: format!("Pool transaction: {}", payload.transaction_type),
-        transaction_type: TransactionType::Transfer,
-        source: helius::types::Source::Other(payload.source.clone()),
+        description: "Stub transaction description".to_string(),
+        transaction_type: TransactionType::Swap,
+        source: Source::Other("STUB".to_string()),
         account_data: vec![],
         native_transfers: None,
         token_transfers: None,
         instructions: vec![],
-        events: helius::types::TransactionEvent::default(),
+        events: TransactionEvent::default(),
     }
 }
 

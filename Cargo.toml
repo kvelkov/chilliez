@@ -1,31 +1,29 @@
 [package]
 name = "solana-arb-bot"
-version = "0.1.0"
+version = "2.1.4"
 edition = "2021"
 
-[features]
-# Features can be added here as needed
-
 [dependencies]
-# === Helius SDK Integration ===
-helius = "0.2.6"           # Official Helius Rust SDK for enhanced webhook performance
+# === Helius SDK temporarily disabled due to dependency conflicts ===
+# helius = "0.2.6"
 
-# === Solana Core (Updated for Helius SDK compatibility) ===
-solana-client = "2.1.4"
-solana-sdk = "2.1.4"
-solana-account-decoder = "2.1.4"
-solana-transaction-status = "2.1.4"
-spl-token = "6.0.0"
-spl-associated-token-account = "4.0.0"
-solana-program = "2.1.4"
+# === Solana Core (Unified at v1.18.x for ecosystem compatibility) ===
+solana-client = "1.18.17"
+solana-sdk = "1.18.17"
+solana-account-decoder = "1.18.17"
+solana-transaction-status = "1.18.17"
+solana-program = "1.18.17"
+spl-token = "4.0.0"
+spl-associated-token-account = "3.0.2"
+
 
 # === Async & Runtime ===
 tokio = { version = "1.36.0", features = ["full"] }
 futures = "0.3.30"
 async-trait = "0.1.74"
 
-# === Enhanced Logging (upgraded from env_logger) ===
-tracing = "0.1.40"         # Better structured logging for production
+# === Enhanced Logging ===
+tracing = "0.1.40"
 tracing-subscriber = { version = "0.3.18", features = ["env-filter", "json"] }
 
 # === Data & Config ===
@@ -33,8 +31,8 @@ serde = { version = "1.0.197", features = ["derive"] }
 serde_json = "1.0.114"
 bytemuck = { version = "1.15.0", features = ["derive"] }
 anyhow = "1.0.75"
-log = "0.4.20"             # Keep for compatibility during migration
-env_logger = "0.11.2"      # Will be deprecated in favor of tracing
+log = "0.4.20"
+env_logger = "0.11.2"
 dotenv = "0.15.0"
 config = { version = "0.13", features = ["toml"] }
 csv = "1.1"
@@ -42,38 +40,38 @@ csv = "1.1"
 # === Networking ===
 reqwest = { version = "0.11.27", features = ["json", "rustls-tls"], default-features = false }
 
-# === Web Server (for webhooks - keeping for migration compatibility) ===
-axum = { version = "0.7.4", features = ["json"] }  # Will be phased out
-tower = "0.4.13"                                    # Will be phased out
-tower-http = { version = "0.5.0", features = ["cors"] }  # Will be phased out
-warp = "0.3"               # Alternative lightweight server for local endpoints
+# === Web Server ===
+axum = { version = "0.7.4", features = ["json"] }
+tower = "0.4.13"
+tower-http = { version = "0.5.0", features = ["cors"] }
+warp = "0.3"
 
 # === Utilities ===
 once_cell = "1.18.0"
-chrono = { version = "0.4.38", features = ["serde"] }  # Enhanced chrono features
+chrono = { version = "0.4.38", features = ["serde"] }
 rand = "0.8.5"
 base64 = "0.22.0"
 itertools = "0.12.0"
-regex = "1.10.0"  
-rayon = "1.8"         # For API key validation and pattern matching
+regex = "1.10.0"
+rayon = "1.8"
+lb_clmm = "0.1.1"
 
-# === Redis Cache ===
-petgraph = "0.6" # Added for graph-based opportunity discovery
-uuid = { version = "1.6", features = ["v4", "serde"] } # For unique opportunity IDs
+# === Graph & ID & Cache ===
+petgraph = "0.6"
+uuid = { version = "1.6", features = ["v4", "serde"] }
 redis = { version = "0.25.0", features = ["aio", "tokio-comp", "connection-manager"] }
 
 # === Advanced DEX Math Libraries ===
-# High precision decimal calculations for accurate quotes
-rust_decimal = "1.32"                 # High precision decimal calculations
-num-bigint = "0.4"                    # Large integer calculations for CLMM
-num-traits = "0.2"                    # Numeric trait abstractions
+rust_decimal = "1.32"
+num-bigint = "0.4"
+num-traits = "0.2"
 
-# We'll implement our own optimized CLMM math using these foundations
-# Based on Raydium, Orca, and other DEX implementations
-
+# === Other Core Utilities ===
 dashmap = "5.4.0"
 tungstenite = "0.20.1"
 futures-util = "0.3.30"
 thiserror = "1.0.57"
 fern = "0.6"
 fastrand = "2.3.0"
+
+# NOTE: The [patch] section is no longer needed as removing `helius` resolves the conflict at its source.

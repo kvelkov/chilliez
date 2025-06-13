@@ -1,4 +1,5 @@
 // src/dex/pool_discovery.rs
+use crate::cache::Cache; // <<<--- IMPORT CACHE
 use crate::dex::quote::PoolDiscoverable;
 use crate::solana::rpc::SolanaRpcClient;
 use crate::utils::{PoolInfo, PoolParser, POOL_PARSER_REGISTRY};
@@ -10,81 +11,66 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::time::{sleep, Duration, Instant};
 
-/// Core service responsible for discovering and managing liquidity pools across all supported DEXs.
-///
-/// This service implements an efficient strategy that prioritizes official DEX-provided JSON lists
-/// over expensive getProgramAccounts RPC calls. It discovers pools in batches and enriches them
-
-/// with live on-chain data using optimized RPC patterns.
 #[derive(Clone)]
 pub struct PoolDiscoveryService {
-    /// Collection of all DEX clients that support pool discovery.
     pool_discoverable_clients: Vec<Arc<dyn PoolDiscoverable>>,
-    /// Solana RPC client for fetching live on-chain data.
     rpc_client: Arc<SolanaRpcClient>,
-    /// Configuration for pool discovery behavior.
+    cache: Arc<Cache>, // <<<--- ADD CACHE
     config: PoolDiscoveryConfig,
 }
 
-/// Configuration parameters for the pool discovery service.
 #[derive(Debug, Clone)]
 pub struct PoolDiscoveryConfig {
-    /// Maximum number of pools to fetch in a single batch RPC call.
     pub batch_size: usize,
-    /// Delay between batch requests to avoid rate limiting.
     pub batch_delay_ms: u64,
+    pub api_cache_ttl_secs: u64, // <<<--- ADD TTL FOR API CACHE
 }
 
 impl Default for PoolDiscoveryConfig {
     fn default() -> Self {
         Self {
-            batch_size: 100, // Solana's getMultipleAccounts has a limit of 100
+            batch_size: 100,
             batch_delay_ms: 100,
+            api_cache_ttl_secs: 300, // Default to 5 minutes
         }
     }
 }
 
-/// Results from the complete pool discovery and enrichment operation.
+// ... PoolDiscoveryResult struct remains the same ...
 #[derive(Debug, Default)]
 pub struct PoolDiscoveryResult {
-    /// Successfully discovered and enriched pools, indexed by their address.
     pub pools: HashMap<Pubkey, Arc<PoolInfo>>,
-    /// Total number of unique pool addresses found from all DEX APIs.
     pub total_discovered_from_apis: usize,
-    /// Number of pools successfully enriched with live on-chain data.
     pub pools_enriched_count: usize,
-    /// Number of pools that failed during on-chain data fetching or parsing.
     pub enrichment_failures: usize,
-    /// Time taken for the entire operation.
     pub total_duration: Duration,
 }
 
+
 impl PoolDiscoveryService {
-    /// Creates a new pool discovery service.
     pub fn new(
         pool_discoverable_clients: Vec<Arc<dyn PoolDiscoverable>>,
         rpc_client: Arc<SolanaRpcClient>,
+        cache: Arc<Cache>, // <<<--- ADD CACHE
         config: PoolDiscoveryConfig,
     ) -> Self {
         Self {
             pool_discoverable_clients,
             rpc_client,
+            cache,
             config,
         }
     }
 
-    /// Discovers all pools from all configured DEXs, enriches them with live on-chain data,
-    /// and returns a complete map of valid, tradeable pools.
+    // ... discover_and_enrich_all_pools remains the same ...
     pub async fn discover_and_enrich_all_pools(&self) -> Result<PoolDiscoveryResult> {
         let start_time = Instant::now();
         info!("Starting full pool discovery and enrichment process...");
 
-        // --- Phase 1: Discover all pool addresses and static data from DEX APIs concurrently ---
         let api_pools = self.discover_from_apis().await?;
         let total_discovered_from_apis = api_pools.len();
         info!("Phase 1 complete: Discovered {} unique pools from all DEX APIs.", total_discovered_from_apis);
 
-        // --- Phase 2: Enrich pools with live on-chain data in batches ---
         let (enriched_pools, enrichment_failures) = self.enrich_with_onchain_data(api_pools).await?;
         let pools_enriched_count = enriched_pools.len();
         info!("Phase 2 complete: Successfully enriched {} pools with live on-chain data.", pools_enriched_count);
@@ -101,13 +87,43 @@ impl PoolDiscoveryService {
         Ok(result)
     }
 
-    /// Fetches initial pool lists from all DEX clients' APIs concurrently.
+
+    /// Fetches initial pool lists from all DEX clients' APIs concurrently, using a cache.
     async fn discover_from_apis(&self) -> Result<HashMap<Pubkey, PoolInfo>> {
         let mut discovery_futures = Vec::new();
         for client in &self.pool_discoverable_clients {
             let client = client.clone();
+            let cache = self.cache.clone(); // <<<--- CLONE CACHE FOR TASK
+            let cache_ttl = self.config.api_cache_ttl_secs;
+
             discovery_futures.push(tokio::spawn(async move {
-                client.discover_pools().await
+                let dex_name = client.dex_name();
+                let cache_key = format!("api_cache:{}", dex_name);
+
+                // <<< --- START CACHING LOGIC ---
+                // 1. Check cache first
+                if let Ok(Some(cached_pools_json)) = cache.get(&cache_key).await {
+                    info!("Cache HIT for {} pool list.", dex_name);
+                    if let Ok(pools) = serde_json::from_str::<Vec<PoolInfo>>(&cached_pools_json) {
+                        return Ok(pools);
+                    } else {
+                        warn!("Failed to deserialize cached pool list for {}. Fetching from API.", dex_name);
+                    }
+                }
+
+                // 2. If cache miss, fetch from API
+                info!("Cache MISS for {}. Fetching from API.", dex_name);
+                let pools = client.discover_pools().await?;
+
+                // 3. Save to cache
+                if let Ok(pools_json) = serde_json::to_string(&pools) {
+                    if let Err(e) = cache.set(&cache_key, &pools_json, Some(cache_ttl as usize)).await {
+                        warn!("Failed to cache pool list for {}: {}", dex_name, e);
+                    }
+                }
+                // --- END CACHING LOGIC --- >>>
+
+                Ok(pools)
             }));
         }
 
@@ -127,7 +143,7 @@ impl PoolDiscoveryService {
         Ok(all_pools)
     }
 
-    /// Takes a map of pools with static data and enriches them with live on-chain data.
+    // ... enrich_with_onchain_data remains the same ...
     async fn enrich_with_onchain_data(&self, static_pools: HashMap<Pubkey, PoolInfo>) -> Result<(HashMap<Pubkey, Arc<PoolInfo>>, usize)> {
         let pool_addresses: Vec<Pubkey> = static_pools.keys().cloned().collect();
         let mut enriched_pools = HashMap::new();
@@ -137,13 +153,11 @@ impl PoolDiscoveryService {
             info!("Fetching on-chain data for a batch of {} pools...", chunk.len());
             let accounts_data = self.rpc_client.primary_client.get_multiple_accounts(chunk).await
                 .context("Failed to get multiple accounts from RPC")?;
-
             let mut parse_futures = Vec::new();
 
             for (i, maybe_account) in accounts_data.into_iter().enumerate() {
                 let address = chunk[i];
                 if let Some(account) = maybe_account {
-                    // Get the corresponding parser from the registry
                     if let Some(parser) = POOL_PARSER_REGISTRY.get(&account.owner) {
                         let parser = parser.clone();
                         let rpc_client = self.rpc_client.clone();
@@ -152,7 +166,6 @@ impl PoolDiscoveryService {
                         parse_futures.push(tokio::spawn(async move {
                             match parser.parse_pool_data(&account.data, rpc_client.as_ref()).await {
                                 Ok(mut live_pool_info) => {
-                                    // Combine static API data with live on-chain data
                                     live_pool_info.address = address;
                                     live_pool_info.name = static_pool_info.name;
                                     live_pool_info.token_a.symbol = static_pool_info.token_a.symbol;
@@ -188,7 +201,6 @@ impl PoolDiscoveryService {
                 sleep(Duration::from_millis(self.config.batch_delay_ms)).await;
             }
         }
-
         Ok((enriched_pools, failures))
     }
 }

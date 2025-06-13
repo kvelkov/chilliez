@@ -27,7 +27,7 @@ Successfully integrated the `AdvancedQuotingEngine` and `PathFinder` into the ma
 
 - **Location**: `src/dex/path_finder.rs`
 - **Purpose**: Graph-based arbitrage discovery with background services
-- **Features**: 
+- **Features**:
   - Market graph construction from pool data
   - Background graph updates at configurable intervals
   - Continuous arbitrage opportunity discovery
@@ -52,7 +52,7 @@ Successfully integrated the `AdvancedQuotingEngine` and `PathFinder` into the ma
 #### **Opportunity Broadcasting**
 
 - **Channel**: `broadcast::Sender<MultiHopArbOpportunity>` with 1000 buffer
-- **Subscribers**: 
+- **Subscribers**:
   - Background logger for monitoring
   - Main loop for execution processing
 - **Format**: PathFinder opportunities converted to legacy format for compatibility
@@ -68,10 +68,8 @@ Successfully integrated the `AdvancedQuotingEngine` and `PathFinder` into the ma
 
 #### **Opportunity Processing Flow**
 
-```
 PathFinder Discovery → Broadcast Channel → Main Loop → Executor
                     → Background Logger (monitoring)
-```
 
 #### **Compatibility Layer**
 
@@ -105,19 +103,15 @@ ArbitrageDiscoveryConfig {
 
 ### **PathFinder Opportunities**
 
-```
 🔍 PathFinder discovered opportunity: ID=abc123, Profit=150bps, Hops=3
 🚀 PathFinder discovered opportunity: ID=abc123, Profit=150bps, Hops=3, Initial=$100.0, Final=$101.5
-```
 
 ### **Integration Status**
 
-```
 AdvancedQuotingEngine initialized with 6 DEX clients.
 PathFinder initialized successfully.
 Starting PathFinder background services with graph update interval: 300s
 Pool map now contains 245 total pools, DashMap cache: 245 pools
-```
 
 ---
 

@@ -1,17 +1,20 @@
 // examples/helius_sdk_pool_monitoring_demo.rs
-//! Comprehensive Demo: Enhanced Pool Monitoring with Helius SDK
+//! Comprehensive Demo: Enhanced Pool Monitoring with Helius SDK (STUB VERSION)
 //! 
 //! This example demonstrates the complete integration of the Helius SDK
 //! for ultra-fast pool monitoring and webhook management.
+//! 
+//! NOTE: Using stub implementation due to Helius SDK dependency conflicts
 
 use solana_arb_bot::{
     config::Config,
-    helius_client::{HeliusManager, HeliusConfig},
+    helius_client::{HeliusManager, HeliusConfig, Cluster},
     webhooks::{
         PoolMonitoringCoordinator,
         EnhancedWebhookServer,
         PoolEvent,
         PoolEventType,
+        helius_sdk_stub::{EnhancedTransaction},
     },
     utils::{PoolInfo, PoolToken, DexType},
 };
@@ -30,13 +33,14 @@ async fn main() -> Result<()> {
         .with_max_level(tracing::Level::INFO)
         .init();
 
-    info!("🚀 Enhanced Pool Monitoring with Helius SDK Demo");
+    info!("🚀 Enhanced Pool Monitoring with Helius SDK Demo (STUB VERSION)");
     info!("📋 This demo showcases:");
-    info!("   1. Helius SDK client initialization");
-    info!("   2. Enhanced webhook management");
-    info!("   3. Real-time pool monitoring");
-    info!("   4. Event processing pipeline");
-    info!("   5. Performance metrics and monitoring");
+    info!("   1. Helius SDK client initialization (STUB)");
+    info!("   2. Enhanced webhook management (STUB)");
+    info!("   3. Real-time pool monitoring (SIMULATED)");
+    info!("   4. Event processing pipeline (DEMO)");
+    info!("   5. Performance metrics and monitoring (DEMO)");
+    info!("⚠️  NOTE: Using stub implementation - real Helius functionality disabled due to dependency conflicts");
 
     // Load configuration
     let config = Arc::new(Config::from_env());
@@ -89,14 +93,14 @@ async fn initialize_helius_client() -> Result<Arc<HeliusManager>> {
         .unwrap_or_else(|_| "demo-key".to_string());
     
     let config = HeliusConfig {
-        api_key: api_key.clone(),
-        cluster: helius::types::Cluster::MainnetBeta,
-        webhook_url: None,
+        api_key,
+        cluster: Cluster::MainnetBeta,
+        webhook_url: Some("http://localhost:3000/webhook".to_string()),
         webhook_secret: None,
     };
     
     let helius_manager = HeliusManager::new(config)?;
-    info!("✅ Helius client initialized with API key: {}***", &api_key[..8.min(api_key.len())]);
+    info!("✅ Helius client initialized (using stub implementation)");
     
     Ok(Arc::new(helius_manager))
 }
@@ -342,8 +346,8 @@ async fn simulate_webhook_events(
     Ok(())
 }
 
-fn create_demo_enhanced_transaction() -> helius::types::EnhancedTransaction {
-    use helius::types::{EnhancedTransaction, TransactionType};
+fn create_demo_enhanced_transaction() -> EnhancedTransaction {
+    use solana_arb_bot::webhooks::helius_sdk_stub::{EnhancedTransaction, TransactionType, Source, TransactionEvent};
     
     EnhancedTransaction {
         signature: "demo_signature_12345".to_string(),
@@ -354,12 +358,12 @@ fn create_demo_enhanced_transaction() -> helius::types::EnhancedTransaction {
         transaction_error: None,
         description: "Demo pool swap transaction".to_string(),
         transaction_type: TransactionType::Swap,
-        source: helius::types::Source::Other("DEMO".to_string()),
+        source: Source::Other("DEMO".to_string()),
         account_data: vec![],
         native_transfers: None,
         token_transfers: None,
         instructions: vec![],
-        events: helius::types::TransactionEvent::default(),
+        events: TransactionEvent::default(),
     }
 }
 

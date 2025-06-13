@@ -10,10 +10,12 @@ use async_trait::async_trait;
 use bytemuck::{Pod, Zeroable};
 use solana_program::pubkey::Pubkey;
 use std::sync::Arc;
-use log::{info, warn};
+use log::info;
 use serde::Deserialize;
 use std::str::FromStr;
 use solana_sdk::instruction::Instruction;
+// Import our local math functions for Orca calculations
+use crate::dex::math::orca::{calculate_whirlpool_output, calculate_legacy_orca_output};
 
 // --- Constants ---
 pub const ORCA_WHIRLPOOL_PROGRAM_ID: Pubkey = solana_sdk::pubkey!("whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc");

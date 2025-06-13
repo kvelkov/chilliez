@@ -1,6 +1,6 @@
 # Advanced DEX Math Library Integration - Summary
 
-## Overview
+Overview
 Successfully integrated advanced DEX math libraries into the Solana arbitrage bot to automate and improve the accuracy of complex mathematical calculations for all DEX clients.
 
 ## Completed Integration

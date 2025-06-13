@@ -216,4 +216,22 @@ impl SolanaRpcClient {
             }
         }
     }
+
+    /// Gets the current network congestion factor based on recent slot progression
+    /// Returns a value between 0.0 (no congestion) and 1.0 (high congestion)
+    pub async fn get_network_congestion_factor(&self) -> f64 {
+        // Simple implementation based on slot progression
+        // In production, this could be more sophisticated
+        match self.primary_client.get_slot().await {
+            Ok(_slot) => {
+                // For now, return a mock value
+                // TODO: Implement actual congestion calculation based on:
+                // - Slot progression rate
+                // - Transaction fees
+                // - Failed transaction rate
+                0.1 // Low congestion for now
+            }
+            Err(_) => 0.5, // Medium congestion if RPC is having issues
+        }
+    }
 }

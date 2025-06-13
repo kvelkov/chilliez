@@ -219,10 +219,13 @@ mod tests {
 mod banned_pairs_tests {
     use std::sync::Arc;
     use std::path::PathBuf;
+    use async_trait::async_trait;
     use crate::dex::banned_pairs::{BannedPairsManager, BannedPairFilteringDexClientDecorator};
     use crate::dex::quote::DexClient;
 
     struct DummyDexClient;
+    
+    #[async_trait]
     impl DexClient for DummyDexClient {
         fn get_name(&self) -> &str { "Dummy" }
         fn calculate_onchain_quote(&self, _pool: &crate::utils::PoolInfo, _input_amount: u64) -> anyhow::Result<crate::dex::quote::Quote> {
@@ -230,6 +233,9 @@ mod banned_pairs_tests {
         }
         fn get_swap_instruction(&self, _swap_info: &crate::dex::quote::SwapInfo) -> anyhow::Result<solana_sdk::instruction::Instruction> {
             Err(anyhow::anyhow!("not implemented"))
+        }
+        async fn discover_pools(&self) -> anyhow::Result<Vec<crate::utils::PoolInfo>> {
+            Err(anyhow::anyhow!("dummy client discover_pools not implemented"))
         }
     }
 

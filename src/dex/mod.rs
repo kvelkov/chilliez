@@ -16,6 +16,7 @@ pub mod orca; // Ensures the orca.rs file is included as a module
 pub mod orca_test;
 // pub mod phoenix;
 pub mod pool;
+pub mod pool_discovery; // Add pool discovery service
 pub mod quote;
 pub mod raydium; // Ensures the raydium.rs file is included as a module
 #[cfg(test)]

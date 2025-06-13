@@ -173,10 +173,17 @@ impl DexClient for BannedPairFilteringDexClientDecorator {
     ) -> anyhow::Result<solana_sdk::instruction::Instruction> {
         self.inner_client.get_swap_instruction(swap_info)
     }
+
+    async fn discover_pools(&self) -> anyhow::Result<Vec<crate::utils::PoolInfo>> {
+        // Delegate to the inner client for pool discovery
+        self.inner_client.discover_pools().await
+    }
 }
 
 // Public dummy DexClient for integration example
 pub struct DummyDexClient;
+
+#[async_trait]
 impl DexClient for DummyDexClient {
     fn get_name(&self) -> &str { "Dummy" }
     fn calculate_onchain_quote(&self, _pool: &crate::utils::PoolInfo, _input_amount: u64) -> anyhow::Result<crate::dex::quote::Quote> {
@@ -184,6 +191,9 @@ impl DexClient for DummyDexClient {
     }
     fn get_swap_instruction(&self, _swap_info: &crate::dex::quote::SwapInfo) -> anyhow::Result<solana_sdk::instruction::Instruction> {
         Err(anyhow::anyhow!("not implemented"))
+    }
+    async fn discover_pools(&self) -> anyhow::Result<Vec<crate::utils::PoolInfo>> {
+        Err(anyhow::anyhow!("dummy client discover_pools not implemented"))
     }
 }
 

@@ -22,6 +22,7 @@ pub struct Quote {
 /// The new DexClient trait defines the interface for all on-chain DEX interactions.
 /// Implementing clients must provide methods to calculate quotes from on-chain data
 /// and build the raw transaction instructions for a swap.
+#[async_trait::async_trait]
 pub trait DexClient: Send + Sync {
     /// Returns the name of the DEX client (e.g., "Orca", "Raydium").
     fn get_name(&self) -> &str;
@@ -51,6 +52,46 @@ pub trait DexClient: Send + Sync {
         &self,
         swap_info: &SwapInfo,
     ) -> anyhow::Result<Instruction>;
+
+    /// Discovers all supported liquidity pools for the DEX.
+    ///
+    /// This method is responsible for fetching the addresses and static data of all pools.
+    /// It should prioritize efficient methods like fetching a JSON list over broad RPC calls.
+    ///
+    /// # Returns
+    /// A vector of `PoolInfo` structs, potentially with live market data missing,
+    /// which will be fetched later in a batched call.
+    async fn discover_pools(&self) -> anyhow::Result<Vec<PoolInfo>>;
+}
+
+/// Separate trait for pool discovery to maintain object safety of DexClient
+/// This trait provides methods for discovering and fetching pool data from DEXs.
+#[async_trait::async_trait]
+pub trait PoolDiscoverable: Send + Sync {
+    /// Discovers all supported liquidity pools for the DEX.
+    ///
+    /// This method is responsible for fetching the addresses and static data of all pools.
+    /// It should prioritize efficient methods like fetching a JSON list over broad RPC calls.
+    /// The strategy is to use official DEX-provided JSON lists when available, which provides
+    /// pre-filtered, structured lists of official pools, then enrich with live on-chain data
+    /// using efficient, batched RPC calls.
+    ///
+    /// # Returns
+    /// A vector of `PoolInfo` structs, potentially with live market data missing,
+    /// which will be fetched later in a batched call.
+    async fn discover_pools(&self) -> anyhow::Result<Vec<PoolInfo>>;
+
+    /// Fetches updated data for a specific pool by its address
+    ///
+    /// # Arguments
+    /// * `pool_address` - The on-chain address of the pool to fetch data for
+    ///
+    /// # Returns
+    /// A `Result` containing the updated `PoolInfo` or an error if the pool doesn't exist
+    async fn fetch_pool_data(&self, pool_address: Pubkey) -> anyhow::Result<PoolInfo>;
+
+    /// Returns the DEX name for this discoverable client
+    fn dex_name(&self) -> &str;
 }
 
 /// A struct to hold all the necessary information for building a swap instruction.

@@ -3,10 +3,8 @@ name = "solana-arb-bot"
 version = "0.1.0"
 edition = "2021"
 
-# The print-config feature seems to be for a utility function in utils.rs that was removed.
-# If no other code uses this feature flag, it can also be removed.
 [features]
-# print-config = [] # Candidate for removal if the associated function is gone.
+# Features can be added here as needed
 
 [dependencies]
 # === Solana Core ===

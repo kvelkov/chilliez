@@ -12,6 +12,7 @@ use crate::dex::quote::{DexClient, Quote, SwapInfo};
 use crate::solana::rpc::SolanaRpcClient;
 use crate::utils::{DexType, PoolInfo, PoolParser as UtilsPoolParser, PoolToken};
 use anyhow::{anyhow, Result as AnyhowResult};
+use async_trait::async_trait;
 use bytemuck::{Pod, Zeroable};
 use log::info;
 use solana_sdk::{
@@ -426,6 +427,7 @@ impl MeteoraClient {
     }
 }
 
+#[async_trait]
 impl DexClient for MeteoraClient {
     fn get_name(&self) -> &str {
         "Meteora"
@@ -490,6 +492,73 @@ impl DexClient for MeteoraClient {
                 swap_info.pool.address
             ))
         }
+    }
+
+    /// Discovers all supported liquidity pools for the DEX.
+    ///
+    /// This method is responsible for fetching the addresses and static data of all pools.
+    /// It should prioritize efficient methods like fetching a JSON list over broad RPC calls.
+    ///
+    /// # Returns
+    /// A vector of `PoolInfo` structs, potentially with live market data missing,
+    /// which will be fetched later in a batched call.
+    async fn discover_pools(&self) -> AnyhowResult<Vec<PoolInfo>> {
+        info!("Starting Meteora pool discovery using official pool list strategy");
+        
+        // For the foundational implementation, we'll start with known high-volume Meteora pools
+        // In a production implementation, this would fetch from:
+        // - Official Meteora JSON endpoint: https://app.meteora.ag/pools (web scraping needed)
+        // - Or use the Meteora SDK to list pools programmatically
+        // - Then enrich with live on-chain data using batched RPC calls
+        
+        // Known Meteora pools for initial testing (both Dynamic AMM and DLMM)
+        let known_pools = vec![
+            // SOL/USDC Dynamic AMM pool
+            "9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM",
+            // SOL/USDT DLMM pool
+            "LBUZKhRxPF3XUpBCjp4YzTKgLccjZhTSDM9YuVaPwxo",
+        ];
+
+        let mut pools = Vec::new();
+        
+        for pool_str in known_pools {
+            let pool_address = pool_str.parse::<Pubkey>()
+                .map_err(|e| anyhow!("Failed to parse pool address {}: {}", pool_str, e))?;
+            
+            // Create demo PoolInfo - in production this would fetch real data
+            let pool_info = PoolInfo {
+                address: pool_address,
+                name: format!("Meteora Pool {}", pool_str),
+                dex_type: DexType::Meteora,
+                token_a: PoolToken {
+                    mint: solana_sdk::pubkey!("So11111111111111111111111111111111111111112"), // SOL
+                    symbol: "SOL".to_string(),
+                    decimals: 9,
+                    reserve: 1_000_000_000, // Demo reserve
+                },
+                token_b: PoolToken {
+                    mint: solana_sdk::pubkey!("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"), // USDC  
+                    symbol: "USDC".to_string(),
+                    decimals: 6,
+                    reserve: 50_000_000_000, // Demo reserve
+                },
+                token_a_vault: Pubkey::default(), // Demo vault addresses
+                token_b_vault: Pubkey::default(),
+                fee_numerator: None,    // Meteora uses fee_rate_bips
+                fee_denominator: None,
+                last_update_timestamp: 0, // Demo timestamp
+                sqrt_price: Some(1000000000000000000), // Demo sqrt price
+                liquidity: Some(5000000000000000000),   // Demo liquidity
+                tick_current_index: Some(0),
+                tick_spacing: Some(64),
+                fee_rate_bips: Some(30), // 0.3% fee
+            };
+            
+            pools.push(pool_info);
+        }
+        
+        info!("Discovered {} Meteora pools", pools.len());
+        Ok(pools)
     }
 }
 

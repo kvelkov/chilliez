@@ -5,6 +5,7 @@ use crate::dex::quote::{DexClient, Quote, SwapInfo};
 use crate::solana::rpc::SolanaRpcClient;
 use crate::utils::{DexType, PoolInfo, PoolParser as UtilsPoolParser, PoolToken};
 use anyhow::{anyhow, Result as AnyhowResult};
+use async_trait::async_trait;
 use bytemuck::{Pod, Zeroable};
 use log::info;
 use solana_sdk::{
@@ -221,6 +222,7 @@ impl Default for LifinityClient {
     }
 }
 
+#[async_trait]
 impl DexClient for LifinityClient {
     fn get_name(&self) -> &str {
         "Lifinity"
@@ -266,6 +268,72 @@ impl DexClient for LifinityClient {
             accounts,
             data,
         })
+    }
+
+    /// Discovers all supported liquidity pools for the DEX.
+    ///
+    /// This method is responsible for fetching the addresses and static data of all pools.
+    /// It should prioritize efficient methods like fetching a JSON list over broad RPC calls.
+    ///
+    /// # Returns
+    /// A vector of `PoolInfo` structs, potentially with live market data missing,
+    /// which will be fetched later in a batched call.
+    async fn discover_pools(&self) -> AnyhowResult<Vec<PoolInfo>> {
+        info!("Starting Lifinity pool discovery using official pool list strategy");
+        
+        // For the foundational implementation, we'll start with known high-volume Lifinity pools
+        // In a production implementation, this would fetch from:
+        // - Official Lifinity JSON endpoint: https://api.lifinity.io/pools
+        // - Then enrich with live on-chain data using batched RPC calls
+        
+        // Known Lifinity Proton pools for initial testing
+        let known_pools = vec![
+            // SOL/USDC pool
+            "61R1ndXxvsWXXkWSyNkCxnzwd3zUAB7Q6YXTKgtJ4c4j",
+            // ETH/SOL pool
+            "2QdhepnKRTLjjSqPL1PtKNwqrUkoLee5Gqs8bvZhRdMv",
+        ];
+
+        let mut pools = Vec::new();
+        
+        for pool_str in known_pools {
+            let pool_address = pool_str.parse::<Pubkey>()
+                .map_err(|e| anyhow!("Failed to parse pool address {}: {}", pool_str, e))?;
+            
+            // Create demo PoolInfo - in production this would fetch real data
+            let pool_info = PoolInfo {
+                address: pool_address,
+                name: format!("Lifinity Pool {}", pool_str),
+                dex_type: DexType::Lifinity,
+                token_a: PoolToken {
+                    mint: solana_sdk::pubkey!("So11111111111111111111111111111111111111112"), // SOL
+                    symbol: "SOL".to_string(),
+                    decimals: 9,
+                    reserve: 1_000_000_000, // Demo reserve
+                },
+                token_b: PoolToken {
+                    mint: solana_sdk::pubkey!("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"), // USDC  
+                    symbol: "USDC".to_string(),
+                    decimals: 6,
+                    reserve: 50_000_000_000, // Demo reserve
+                },
+                token_a_vault: Pubkey::default(), // Demo vault addresses
+                token_b_vault: Pubkey::default(),
+                fee_numerator: None,    // Lifinity uses fee_rate_bips
+                fee_denominator: None,
+                last_update_timestamp: 0, // Demo timestamp
+                sqrt_price: Some(1000000000000000000), // Demo sqrt price
+                liquidity: Some(5000000000000000000),   // Demo liquidity
+                tick_current_index: Some(0),
+                tick_spacing: Some(64),
+                fee_rate_bips: Some(25), // 0.25% fee
+            };
+            
+            pools.push(pool_info);
+        }
+        
+        info!("Discovered {} Lifinity pools", pools.len());
+        Ok(pools)
     }
 }
 

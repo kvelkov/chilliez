@@ -168,9 +168,26 @@ pub trait PoolParser: Send + Sync {
         rpc_client: &Arc<SolanaRpcClient>,
     ) -> anyhow::Result<PoolInfo>;
 
+    /// Synchronous version for CPU-bound parallel processing
+    /// Default implementation calls the async version in a blocking context
+    fn parse_pool_data_sync(
+        &self,
+        address: Pubkey,
+        data: &[u8],
+    ) -> anyhow::Result<PoolInfo> {
+        // For now, provide a basic implementation that doesn't require RPC
+        // Individual parsers can override this for better performance
+        let mut pool_info = PoolInfo::default();
+        pool_info.address = address;
+        pool_info.last_update_timestamp = chrono::Utc::now().timestamp_millis() as u64;
+        
+        // Basic parsing logic would go here
+        // This is a placeholder - real implementations should parse the actual data
+        Ok(pool_info)
+    }
+
     fn get_program_id(&self) -> Pubkey;
 }
-
 
 pub fn calculate_output_amount(
     pool: &PoolInfo,

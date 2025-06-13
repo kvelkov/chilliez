@@ -1,508 +1,265 @@
-use crate::{
-    cache::Cache,
-    dex::pool::get_pool_parser_for_program,
-    solana::rpc::SolanaRpcClient,
-    utils::PoolInfo,
-};
-use base64::Engine;
-use futures_util::StreamExt;
-use log::{debug, error, info, warn};
-use solana_account_decoder::{UiAccount, UiAccountData, UiAccountEncoding};
-use solana_client::{
-    nonblocking::pubsub_client::{PubsubClient, PubsubClientError},
-    rpc_config::RpcAccountInfoConfig,
-    rpc_response,
-};
-use solana_sdk::{commitment_config::CommitmentConfig, pubkey::Pubkey};
-use std::{
-    collections::HashMap,
-    io::{Error as IoError, ErrorKind},
-    str::FromStr,
-    sync::Arc,
-    time::Duration,
-};
-use tokio::sync::{broadcast, mpsc, Mutex, RwLock};
-use tungstenite::error::Error as WsError;
+// src/solana/websocket.rs
 
-pub type SubscriptionId = u64;
-pub type AccountUpdateSender = broadcast::Sender<RawAccountUpdate>;
+use crate::error::ArbError;
+use futures_util::{stream::StreamExt, SinkExt};
+use log::{info, error, warn, debug};
+use solana_sdk::pubkey::Pubkey;
+use std::sync::Arc;
+use tokio::{sync::broadcast, task::JoinHandle};
+use tokio_tungstenite::{connect_async, tungstenite::Message};
+use base64::{Engine as _, engine::general_purpose};
 
 #[derive(Debug, Clone)]
-pub enum RawAccountUpdate {
-    Account {
-        pubkey: Pubkey,
-        data: Vec<u8>,
-        timestamp: u64,
-    },
-    Disconnected {
-        pubkey: Pubkey,
-        timestamp: u64,
-    },
-    Error {
-        pubkey: Pubkey,
-        message: String,
-        timestamp: u64,
-    },
-}
-
-impl RawAccountUpdate {
-    pub fn pubkey(&self) -> &Pubkey {
-        match self {
-            RawAccountUpdate::Account { pubkey, .. }
-            | RawAccountUpdate::Disconnected { pubkey, .. }
-            | RawAccountUpdate::Error { pubkey, .. } => pubkey,
-        }
-    }
-    pub fn _data(&self) -> Option<&Vec<u8>> {
-        match self {
-            RawAccountUpdate::Account { data, .. } => Some(data),
-            _ => None,
-        }
-    }
+pub struct RawAccountUpdate {
+    pub pubkey: Pubkey,
+    pub data: Vec<u8>,
+    pub timestamp: u64,
+    pub slot: Option<u64>,
+    pub lamports: Option<u64>,
 }
 
 #[derive(Debug, Clone)]
-pub enum WebsocketUpdate {
-    PoolUpdate(PoolInfo),
-    GenericUpdate(String),
+pub struct WebSocketMetrics {
+    pub total_updates_received: u64,
+    pub successful_parses: u64,
+    pub failed_parses: u64,
+    pub connection_count: u64,
+    pub last_update_timestamp: u64,
+    pub average_update_latency_ms: f64,
 }
 
 pub struct SolanaWebsocketManager {
     ws_url: String,
-    fallback_urls: Vec<String>,
-    subscriptions: Arc<RwLock<HashMap<Pubkey, SubscriptionId>>>,
-    update_sender: AccountUpdateSender,
-    shutdown_sender: mpsc::Sender<()>,
-    shutdown_receiver: Arc<Mutex<mpsc::Receiver<()>>>,
-    heartbeat_handle: Arc<RwLock<Option<tokio::task::JoinHandle<()>>>>,
-    pubsub_client: Arc<RwLock<Option<Arc<PubsubClient>>>>,
-    processed_update_sender: mpsc::Sender<WebsocketUpdate>,
-    processed_update_receiver: Arc<Mutex<mpsc::Receiver<WebsocketUpdate>>>,
-    rpc_client: Arc<SolanaRpcClient>,
-    cache: Option<Arc<Cache>>,
+    ws_sender: Option<tokio::sync::mpsc::Sender<Message>>,
+    updates_tx: broadcast::Sender<RawAccountUpdate>,
+    _handle: Option<JoinHandle<()>>,
+    metrics: Arc<tokio::sync::Mutex<WebSocketMetrics>>,
+    subscription_count: Arc<tokio::sync::Mutex<usize>>,
 }
 
 impl SolanaWebsocketManager {
-    pub fn new(
-        ws_url: String,
-        fallback_urls: Vec<String>,
-        update_channel_size: usize,
-        rpc_client: Arc<SolanaRpcClient>,
-        cache: Option<Arc<Cache>>,
-    ) -> (Self, broadcast::Receiver<RawAccountUpdate>) {
-        let (raw_update_sender, raw_update_receiver) = broadcast::channel(update_channel_size);
-        let (shutdown_tx, shutdown_rx) = mpsc::channel(1);
-        let (processed_update_tx, processed_update_rx) = mpsc::channel(update_channel_size);
-
+    pub fn new(ws_url: String) -> (Self, broadcast::Receiver<RawAccountUpdate>) {
+        let (updates_tx, updates_rx) = broadcast::channel(2048); // Increased buffer for high-frequency updates
+        
+        let metrics = Arc::new(tokio::sync::Mutex::new(WebSocketMetrics {
+            total_updates_received: 0,
+            successful_parses: 0,
+            failed_parses: 0,
+            connection_count: 0,
+            last_update_timestamp: 0,
+            average_update_latency_ms: 0.0,
+        }));
+        
         (
             Self {
                 ws_url,
-                fallback_urls,
-                subscriptions: Arc::new(RwLock::new(HashMap::new())),
-                update_sender: raw_update_sender,
-                shutdown_sender: shutdown_tx,
-                shutdown_receiver: Arc::new(Mutex::new(shutdown_rx)),
-                heartbeat_handle: Arc::new(RwLock::new(None)),
-                pubsub_client: Arc::new(RwLock::new(None)),
-                processed_update_sender: processed_update_tx,
-                processed_update_receiver: Arc::new(Mutex::new(processed_update_rx)),
-                rpc_client,
-                cache,
+                ws_sender: None,
+                updates_tx,
+                _handle: None,
+                metrics,
+                subscription_count: Arc::new(tokio::sync::Mutex::new(0)),
             },
-            raw_update_receiver,
+            updates_rx,
         )
     }
 
-    pub async fn is_connected(&self) -> bool {
-        self.pubsub_client.read().await.is_some()
-    }
+    pub async fn start(&mut self) -> Result<(), ArbError> {
+        info!("🌐 Connecting to enhanced WebSocket server: {}", self.ws_url);
+        
+        let (ws_stream, _) = connect_async(&self.ws_url)
+            .await
+            .map_err(|e| ArbError::WebSocketError(format!("Failed to connect: {}", e)))?;
 
-    pub async fn try_recv_update(&self) -> Result<Option<WebsocketUpdate>, mpsc::error::TryRecvError> {
-        match self.processed_update_receiver.lock().await.try_recv() {
-            Ok(update) => Ok(Some(update)),
-            Err(mpsc::error::TryRecvError::Empty) => Ok(None),
-            Err(e) => Err(e),
-        }
-    }
+        let (mut write, mut read) = ws_stream.split();
+        let (mpsc_tx, mut mpsc_rx) = tokio::sync::mpsc::channel::<Message>(256);
 
-    pub async fn start(&self) -> Result<(), PubsubClientError> {
-        match self.reconnect().await {
-            Ok(_) => info!("[WebSocket] Connected to {}", self.ws_url),
-            Err(e) => {
-                error!("[WebSocket] Initial connection to {} failed: {}", self.ws_url, e);
-                return Err(e);
-            }
+        self.ws_sender = Some(mpsc_tx);
+
+        // Update connection metrics
+        {
+            let mut metrics = self.metrics.lock().await;
+            metrics.connection_count += 1;
         }
 
-        let subscriptions_clone = self.subscriptions.clone();
-        let raw_update_sender_clone = self.update_sender.clone();
-        let pubsub_client_clone = self.pubsub_client.clone();
-        let ws_url_clone = self.ws_url.clone();
-        let fallback_urls_clone = self.fallback_urls.clone();
-        let rpc_client_clone = self.rpc_client.clone();
-        let cache_clone = self.cache.clone();
-        let processed_update_sender_clone = self.processed_update_sender.clone();
-        let shutdown_receiver_arc_clone = Arc::clone(&self.shutdown_receiver);
-
-        let handle = tokio::spawn(async move {
-            let mut interval = tokio::time::interval(Duration::from_secs(15));
-            loop {
-                tokio::select! {
-                    _ = interval.tick() => {
-                        if pubsub_client_clone.read().await.is_some() {
-                            debug!("[WebSocket] Heartbeat: connection to {} is alive", ws_url_clone);
-                        } else {
-                            warn!("[WebSocket] Disconnected from {}, attempting reconnect and resubscribe...", ws_url_clone);
-                            let fallback_urls_str_slices: Vec<&str> = fallback_urls_clone.iter().map(|s| s.as_str()).collect();
-                            if let Err(e) = Self::try_reconnect_and_resubscribe(
-                                &ws_url_clone,
-                                &fallback_urls_str_slices,
-                                &subscriptions_clone,
-                                &raw_update_sender_clone,
-                                &pubsub_client_clone,
-                                &rpc_client_clone,
-                                cache_clone.clone(),
-                                processed_update_sender_clone.clone(),
-                            ).await {
-                                error!("[WebSocket] Failed to reconnect and resubscribe: {}", e);
-                            }
-                        }
-                    }
-                    _ = async { shutdown_receiver_arc_clone.lock().await.recv().await }, if true => {
-                        info!("[WebSocket] Heartbeat task received shutdown signal. Exiting.");
-                        break;
-                    }
-                }
-            }
-        });
-        *self.heartbeat_handle.write().await = Some(handle);
-        Ok(())
-    }
-
-    async fn reconnect(&self) -> Result<(), PubsubClientError> {
-        match PubsubClient::new(&self.ws_url).await {
-            Ok(client) => {
-                *self.pubsub_client.write().await = Some(Arc::new(client));
-                info!("[WebSocket] Connected to primary URL: {}", self.ws_url);
-                return Ok(());
-            }
-            Err(e) => {
-                error!("[WebSocket] Failed to connect to primary URL {}: {}", self.ws_url, e);
-            }
-        }
-
-        for fallback_url in &self.fallback_urls {
-            warn!("[WebSocket] Attempting connection to fallback URL: {}", fallback_url);
-            match PubsubClient::new(fallback_url).await {
-                Ok(client) => {
-                    *self.pubsub_client.write().await = Some(Arc::new(client));
-                    info!("[WebSocket] Connected to fallback URL: {}", fallback_url);
-                    return Ok(());
-                }
-                Err(e) => {
-                    error!("[WebSocket] Failed to connect to fallback URL {}: {}", fallback_url, e);
-                }
-            }
-        }
-        let custom_err = IoError::new(ErrorKind::Other, "Failed to connect to any WebSocket endpoint");
-        Err(PubsubClientError::ConnectionError(WsError::Io(custom_err)))
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    async fn try_reconnect_and_resubscribe(
-        ws_url: &str,
-        fallback_urls: &[&str],
-        subscriptions_map: &Arc<RwLock<HashMap<Pubkey, SubscriptionId>>>,
-        raw_update_sender_channel: &AccountUpdateSender,
-        pubsub_client_arc_option: &Arc<RwLock<Option<Arc<PubsubClient>>>>,
-        rpc_client: &Arc<SolanaRpcClient>,
-        cache: Option<Arc<Cache>>,
-        processed_update_sender_channel: mpsc::Sender<WebsocketUpdate>,
-    ) -> Result<(), PubsubClientError> {
-        let mut connected_client: Option<Arc<PubsubClient>> = None;
-
-        for url_attempt in std::iter::once(ws_url).chain(fallback_urls.iter().copied()) {
-            match PubsubClient::new(url_attempt).await {
-                Ok(new_client) => {
-                    info!("[WebSocket] Reconnected to {}", url_attempt);
-                    connected_client = Some(Arc::new(new_client));
+        // Task to forward messages from our MPSC channel to the WebSocket sink
+        tokio::spawn(async move {
+            while let Some(msg) = mpsc_rx.recv().await {
+                if write.send(msg).await.is_err() {
+                    error!("❌ WebSocket write error. Closing connection.");
                     break;
                 }
-                Err(err) => {
-                    error!("[WebSocket] Failed to reconnect to {}: {}", url_attempt, err);
-                }
             }
-        }
-
-        if let Some(new_client_arc) = connected_client {
-            *pubsub_client_arc_option.write().await = Some(Arc::clone(&new_client_arc));
-            let keys_to_resubscribe: Vec<Pubkey> = { subscriptions_map.read().await.keys().copied().collect() };
-
-            for pubkey_to_resub in keys_to_resubscribe {
-                info!("[WebSocket] Attempting to resubscribe to {}", pubkey_to_resub);
-                match Self::create_account_subscription(
-                    Arc::clone(&new_client_arc),
-                    pubkey_to_resub,
-                    raw_update_sender_channel.clone(),
-                    rpc_client.clone(),
-                    cache.clone(),
-                    processed_update_sender_channel.clone(),
-                )
-                .await
-                {
-                    Ok(sub_id) => {
-                        subscriptions_map.write().await.insert(pubkey_to_resub, sub_id);
-                        info!("[WebSocket] Successfully resubscribed to {}", pubkey_to_resub);
-                    }
-                    Err(e) => {
-                        error!("[WebSocket] Failed to resubscribe to {}: {}", pubkey_to_resub, e);
-                        let timestamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
-                        let _ = raw_update_sender_channel.send(RawAccountUpdate::Error {
-                            pubkey: pubkey_to_resub,
-                            message: format!("Resubscription failed: {}", e),
-                            timestamp,
-                        });
-                    }
-                }
-            }
-            Ok(())
-        } else {
-            let custom_err = IoError::new(ErrorKind::Other, "Failed to reconnect to any WebSocket endpoint after multiple attempts");
-            Err(PubsubClientError::ConnectionError(WsError::Io(custom_err)))
-        }
-    }
-
-    pub async fn stop(&self) {
-        info!("[WebSocket] Attempting to stop WebSocket manager...");
-        if self.shutdown_sender.send(()).await.is_err() {
-            error!("[WebSocket] Failed to send shutdown signal to heartbeat task.");
-        } else {
-            info!("[WebSocket] Shutdown signal sent to heartbeat task.");
-        }
-
-        if let Some(handle) = self.heartbeat_handle.write().await.take() {
-            info!("[WebSocket] Waiting for heartbeat task to complete...");
-            if let Err(e) = handle.await {
-                error!("[WebSocket] Heartbeat task panicked or encountered an error during shutdown: {:?}", e);
-            } else {
-                info!("[WebSocket] Heartbeat task stopped gracefully.");
-            }
-        }
-
-        if let Some(client_arc) = self.pubsub_client.write().await.take() {
-            info!("[WebSocket] PubSub client instance dropped. Connections should close.");
-            drop(client_arc);
-        }
-        info!("[WebSocket] Manager stopped.");
-    }
-
-    pub async fn subscribe_to_account(&self, pubkey: Pubkey) -> Result<(), PubsubClientError> {
-        let client_arc = { self.pubsub_client.read().await.clone() };
-
-        let client_to_use = match client_arc {
-            Some(client) => client,
-            None => {
-                warn!("[WebSocket] No active client, attempting to reconnect before subscribing to {}", pubkey);
-                self.reconnect().await?;
-                self.pubsub_client.read().await.clone().ok_or_else(|| {
-                    let custom_err = IoError::new(ErrorKind::Other, "Failed to reconnect for subscription");
-                    PubsubClientError::ConnectionError(WsError::Io(custom_err))
-                })?
-            }
-        };
-
-        let sub_id = Self::create_account_subscription(
-            client_to_use,
-            pubkey,
-            self.update_sender.clone(),
-            self.rpc_client.clone(),
-            self.cache.clone(),
-            self.processed_update_sender.clone(),
-        )
-        .await?;
-
-        self.subscriptions.write().await.insert(pubkey, sub_id);
-        info!("[WebSocket] Successfully initiated subscription for {}", pubkey);
-        Ok(())
-    }
-
-    async fn create_account_subscription(
-        client: Arc<PubsubClient>,
-        pubkey: Pubkey,
-        raw_sender: AccountUpdateSender,
-        rpc_client: Arc<SolanaRpcClient>,
-        cache: Option<Arc<Cache>>,
-        processed_sender: mpsc::Sender<WebsocketUpdate>,
-    ) -> Result<SubscriptionId, PubsubClientError> {
-        info!("[WebSocket] Creating account subscription for {}", pubkey);
-
-        // Only use one Arc clone and move it into the spawned task.
-        let client_for_task = Arc::clone(&client);
-
-        // Move the subscribe call into an async block so the Arc is owned by the task.
-        let subscription_id = 0;
-
-        tokio::spawn(async move {
-            // Create the stream and unsubscribe_fn inside the task so the Arc lives long enough.
-            let (mut account_stream, unsubscribe_fn) = client_for_task
-                .account_subscribe(
-                    &pubkey,
-                    Some(RpcAccountInfoConfig {
-                        encoding: Some(UiAccountEncoding::Base64),
-                        commitment: Some(CommitmentConfig::confirmed()),
-                        data_slice: None,
-                        min_context_slot: None,
-                    }),
-                )
-                .await
-                .expect("Failed to subscribe to account");
-
-            let first_response_result = tokio::time::timeout(Duration::from_secs(30), account_stream.next()).await;
-
-            let first_response: rpc_response::Response<UiAccount> = match first_response_result {
-                Ok(Some(resp)) => resp,
-                Ok(None) => {
-                    let custom_err = IoError::new(ErrorKind::ConnectionAborted, format!("Stream ended before first message for {}", pubkey));
-                    error!("[WebSocket] Stream ended before first message for {}: {}", pubkey, custom_err);
-                    return;
-                }
-                Err(_elapsed) => {
-                    let custom_err = IoError::new(ErrorKind::TimedOut, format!("Timeout on first message for {}", pubkey));
-                    error!("[WebSocket] Timeout waiting for the first message for {}: {}", pubkey, custom_err);
-                    return;
-                }
-            };
-
-            let mut current_response_option: Option<rpc_response::Response<UiAccount>> = Some(first_response);
-
-            loop {
-                let response_result: Result<rpc_response::Response<UiAccount>, PubsubClientError> = if let Some(res) = current_response_option.take() {
-                    Ok(res)
-                } else {
-                    match tokio::time::timeout(Duration::from_secs(60), account_stream.next()).await {
-                        Ok(Some(inner_result)) => Ok(inner_result),
-                        Ok(None) => {
-                            warn!("[WebSocket] Subscription stream for {} (ID: {}) ended.", pubkey, subscription_id);
-                            break;
-                        }
-                        Err(_elapsed) => {
-                            debug!("[WebSocket] Timeout on stream for {} (ID: {}).", pubkey, subscription_id);
-                            continue;
-                        }
-                    }
-                };
-
-                match response_result {
-                    Ok(response) => {
-                        debug!("[WebSocket] Received update for {}", pubkey);
-                        let decoded_data = match &response.value.data {
-                            UiAccountData::Binary(encoded, _) => {
-                                match base64::engine::general_purpose::STANDARD.decode(encoded) {
-                                    Ok(data) => data,
-                                    Err(e) => {
-                                        error!("[WebSocket] Base64 decode error for {}: {}", pubkey, e);
-                                        let _ = raw_sender.send(RawAccountUpdate::Error {
-                                            pubkey,
-                                            message: format!("Base64 decode error: {}", e),
-                                            timestamp: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs(),
-                                        });
-                                        continue;
-                                    }
-                                }
-                            }
-                            _ => {
-                                warn!("[WebSocket] Received non-binary data for {}, skipping.", pubkey);
-                                continue;
-                            }
-                        };
-
-                        let timestamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
-                        let owner_program_id_str = &response.value.owner;
-
-                        if raw_sender.send(RawAccountUpdate::Account {
-                                pubkey,
-                                data: decoded_data.clone(),
-                                timestamp,
-                            }).is_err() {
-                            error!("[WebSocket] Failed to broadcast raw update for {}.", pubkey);
-                        }
-
-                        match Pubkey::from_str(owner_program_id_str) {
-                            Ok(owner_pubkey) => {
-                                if let Some(parser) = get_pool_parser_for_program(&owner_pubkey) {
-                                    match parser.parse_pool_data(pubkey, &decoded_data, &rpc_client).await {
-                                        Ok(pool_info) => {
-                                            debug!("[WebSocket] Successfully parsed pool data for {} (owner: {})", pubkey, owner_pubkey);
-                                            if let Some(ref cache_instance) = cache {
-                                                if let Err(e) = cache_instance.update_pool_cache(&pubkey.to_string(), &pool_info, None).await {
-                                                    warn!("[WebSocket] Failed to update cache for {}: {}", pubkey, e);
-                                                }
-                                            }
-                                            if processed_sender.send(WebsocketUpdate::PoolUpdate(pool_info)).await.is_err() {
-                                                warn!("[WebSocket] Failed to send PoolUpdate for {} to internal channel.", pubkey);
-                                            }
-                                        }
-                                        Err(e) => {
-                                            debug!("[WebSocket] Parser for owner {} failed for {}: {}. Treating as generic.", owner_pubkey, pubkey, e);
-                                            if processed_sender.send(WebsocketUpdate::GenericUpdate(format!("Parser error for {}: {}", pubkey, e))).await.is_err() {
-                                                 warn!("[WebSocket] Failed to send GenericUpdate (parser error) for {} to internal channel.", pubkey);
-                                            }
-                                        }
-                                    }
-                                } else {
-                                    debug!("[WebSocket] No parser for owner {}. Update for {} treated as generic.", owner_pubkey, pubkey);
-                                     if processed_sender.send(WebsocketUpdate::GenericUpdate(format!("No parser for owner {}, account {}", owner_pubkey, pubkey))).await.is_err() {
-                                         warn!("[WebSocket] Failed to send GenericUpdate (no parser) for {} to internal channel.", pubkey);
-                                     }
-                                }
-                            }
-                            Err(e) => {
-                                error!("[WebSocket] Invalid owner Pubkey string '{}' for {}: {}", owner_program_id_str, pubkey, e);
-                                if processed_sender.send(WebsocketUpdate::GenericUpdate(format!("Invalid owner string for {}: {}", pubkey, owner_program_id_str))).await.is_err() {
-                                     warn!("[WebSocket] Failed to send GenericUpdate (invalid owner) for {} to internal channel.", pubkey);
-                                }
-                            }
-                        }
-                    }
-                    Err(client_error) => {
-                        error!("[WebSocket] Subscription stream for {} (ID: {}) error: {}. Ending task.", pubkey, subscription_id, client_error);
-                        let _ = raw_sender.send(RawAccountUpdate::Error {
-                            pubkey,
-                            message: format!("Subscription stream error: {}", client_error),
-                            timestamp: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs(),
-                        });
-                        break;
-                    }
-                }
-            }
-            warn!("[WebSocket] Subscription task for {} (ID: {}) stopped.", pubkey, subscription_id);
-            let timestamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
-            let _ = raw_sender.send(RawAccountUpdate::Disconnected { pubkey, timestamp });
-            // The future returned by unsubscribe_fn must be awaited.
-            // Assuming it's an async fn that might perform I/O for unsubscription.
-            // If it's a simple closure returning (), this await might not be strictly necessary
-            // but the compiler warning `unused_must_use` suggests it returns a Future.
-            unsubscribe_fn().await;
-            info!("[WebSocket] Unsubscribe function called for {} (ID: {})", pubkey, subscription_id);
         });
 
-        Ok(subscription_id)
+        // Enhanced task to read messages from the WebSocket and broadcast them
+        let updates_tx_clone = self.updates_tx.clone();
+        let metrics_clone = self.metrics.clone();
+        
+        self._handle = Some(tokio::spawn(async move {
+            info!("🔄 Enhanced WebSocket read loop started with performance monitoring.");
+            let mut update_count = 0u64;
+            let mut parse_success_count = 0u64;
+            let mut parse_failure_count = 0u64;
+            
+            while let Some(Ok(msg)) = read.next().await {
+                if let Message::Text(text) = msg {
+                    update_count += 1;
+                    let parse_start = std::time::Instant::now();
+                    
+                    // Enhanced parsing for account notifications
+                    match serde_json::from_str::<serde_json::Value>(&text) {
+                        Ok(json) => {
+                            if json["method"] == "accountNotification" {
+                                if let Some(params) = json["params"].as_object() {
+                                    if let Some(result) = params["result"].as_object() {
+                                        if let Some(value) = result["value"].as_object() {
+                                            // Extract enhanced data
+                                            let pubkey_str = value["pubkey"].as_str();
+                                            let data_array = value["data"].as_array();
+                                            let lamports = value["lamports"].as_u64();
+                                            let slot = result["context"]["slot"].as_u64();
+                                            
+                                            if let (Some(pubkey_str), Some(data_array)) = (pubkey_str, data_array) {
+                                                if let Some(data_str) = data_array[0].as_str() {
+                                                    match (pubkey_str.parse::<Pubkey>(), general_purpose::STANDARD.decode(data_str)) {
+                                                        (Ok(pubkey), Ok(data)) => {
+                                                            let update = RawAccountUpdate {
+                                                                pubkey,
+                                                                data,
+                                                                timestamp: chrono::Utc::now().timestamp_millis() as u64,
+                                                                slot,
+                                                                lamports,
+                                                            };
+                                                            
+                                                            if let Err(e) = updates_tx_clone.send(update) {
+                                                                warn!("Failed to broadcast account update: {}", e);
+                                                            } else {
+                                                                parse_success_count += 1;
+                                                            }
+                                                        }
+                                                        _ => {
+                                                            parse_failure_count += 1;
+                                                            debug!("Failed to parse pubkey or data for update");
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        Err(_) => {
+                            parse_failure_count += 1;
+                            debug!("Failed to parse WebSocket message as JSON");
+                        }
+                    }
+                    
+                    // Update metrics periodically
+                    if update_count % 1000 == 0 {
+                        let parse_duration = parse_start.elapsed();
+                        let mut metrics = metrics_clone.lock().await;
+                        metrics.total_updates_received = update_count;
+                        metrics.successful_parses = parse_success_count;
+                        metrics.failed_parses = parse_failure_count;
+                        metrics.last_update_timestamp = chrono::Utc::now().timestamp_millis() as u64;
+                        metrics.average_update_latency_ms = parse_duration.as_millis() as f64;
+                        
+                        info!("📊 WebSocket metrics: {} updates processed ({} success, {} failed)", 
+                              update_count, parse_success_count, parse_failure_count);
+                    }
+                }
+            }
+            info!("🔚 Enhanced WebSocket read loop finished after processing {} updates.", update_count);
+        }));
+
+        info!("✅ Enhanced WebSocket manager started successfully with performance monitoring.");
+        Ok(())
     }
 
-    pub async fn unsubscribe(&self, pubkey: &Pubkey) -> Result<(), PubsubClientError> {
-        let mut subs = self.subscriptions.write().await;
-        if let Some(sub_id) = subs.remove(pubkey) {
-            info!(
-                "[WebSocket] Removed {} (ID: {}) from local subscriptions. Unsubscribing from client.",
-                pubkey, sub_id
-            );
-            if let Some(_client_arc) = self.pubsub_client.read().await.clone() {
-            } else {
-                warn!("[WebSocket] No active client to perform explicit unsubscribe for {}.", pubkey);
+    pub async fn subscribe_to_pools(&self, pool_addresses: Vec<Pubkey>) -> Result<(), ArbError> {
+        let sender = self.ws_sender.as_ref().ok_or_else(|| {
+            ArbError::WebSocketError("WebSocket sender not available.".to_string())
+        })?;
+        
+        let pool_count = pool_addresses.len();
+        info!("📡 Subscribing to {} pool addresses for real-time updates...", pool_count);
+        
+        let mut successful_subscriptions = 0;
+        let mut failed_subscriptions = 0;
+        
+        // Subscribe in batches to avoid overwhelming the WebSocket
+        const BATCH_SIZE: usize = 100;
+        for (batch_idx, batch) in pool_addresses.chunks(BATCH_SIZE).enumerate() {
+            info!("📡 Processing subscription batch {} ({} pools)", batch_idx + 1, batch.len());
+            
+            for pubkey in batch {
+                let subscribe_msg = serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": format!("pool_sub_{}", pubkey),
+                    "method": "accountSubscribe",
+                    "params": [
+                        pubkey.to_string(),
+                        {
+                            "encoding": "base64",
+                            "commitment": "processed"
+                        }
+                    ]
+                });
+                
+                match sender.send(Message::Text(subscribe_msg.to_string())).await {
+                    Ok(_) => successful_subscriptions += 1,
+                    Err(e) => {
+                        failed_subscriptions += 1;
+                        warn!("Failed to send subscription for {}: {}", pubkey, e);
+                    }
+                }
             }
-        } else {
-            warn!("[WebSocket] Attempted to unsubscribe from {}, but it was not found.", pubkey);
+            
+            // Small delay between batches to avoid rate limiting
+            if batch_idx < pool_addresses.chunks(BATCH_SIZE).len() - 1 {
+                tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+            }
         }
+        
+        // Update subscription count
+        {
+            let mut count = self.subscription_count.lock().await;
+            *count = successful_subscriptions;
+        }
+        
+        info!("✅ Subscription complete: {} successful, {} failed out of {} total pools", 
+              successful_subscriptions, failed_subscriptions, pool_count);
+        
+        if failed_subscriptions > 0 {
+            warn!("⚠️  {} subscriptions failed - some pools may not receive real-time updates", 
+                  failed_subscriptions);
+        }
+        
         Ok(())
+    }
+
+    pub async fn get_metrics(&self) -> WebSocketMetrics {
+        self.metrics.lock().await.clone()
+    }
+
+    pub async fn get_subscription_count(&self) -> usize {
+        *self.subscription_count.lock().await
+    }
+
+    pub async fn stop(&mut self) {
+        info!("🛑 Stopping enhanced WebSocket manager...");
+        
+        // Close the sender to signal shutdown
+        if let Some(sender) = self.ws_sender.take() {
+            drop(sender);
+        }
+        
+        // Wait for the handle to finish if it exists
+        if let Some(handle) = self._handle.take() {
+            let _ = handle.await;
+        }
+        
+        info!("✅ Enhanced WebSocket manager stopped gracefully");
     }
 }

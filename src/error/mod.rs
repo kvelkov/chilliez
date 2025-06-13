@@ -89,6 +89,13 @@ impl From<serde_json::Error> for ArbError {
     }
 }
 
+// Implement From<anyhow::Error> for ArbError
+impl From<anyhow::Error> for ArbError {
+    fn from(err: anyhow::Error) -> Self {
+        ArbError::ConfigError(format!("Anyhow error: {}", err))
+    }
+}
+
 impl ArbError {
     /// Determines if an error is recoverable through retry
     pub fn is_recoverable(&self) -> bool {

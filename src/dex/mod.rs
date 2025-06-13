@@ -9,6 +9,7 @@ pub mod meteora;
 pub mod orca;
 pub mod raydium;
 pub mod pool;
+pub mod pool_discovery;
 pub mod banned_pairs;
 pub mod whirlpool;
 pub mod whirlpool_parser;
@@ -104,6 +105,19 @@ pub fn get_all_clients(
         clients.len()
     );
     clients
+}
+
+/// Returns all DEX clients as PoolDiscoverable trait objects, wrapped in `Arc`.
+pub fn get_all_discoverable_clients(
+    _cache: Arc<Cache>,
+    _app_config: Arc<Config>,
+) -> Vec<Arc<dyn quote::PoolDiscoverable>> {
+    vec![
+        Arc::new(orca::OrcaClient::new()),
+        Arc::new(raydium::RaydiumClient::new()),
+        Arc::new(meteora::MeteoraClient::new()),
+        Arc::new(lifinity::LifinityClient::new()),
+    ]
 }
 
 /// Asynchronously initializes and returns all DEX client instances, wrapped in `Arc`.

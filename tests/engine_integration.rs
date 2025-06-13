@@ -1,14 +1,16 @@
-use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::Mutex;
+use dashmap::DashMap;
+use solana_sdk::pubkey::Pubkey;
 // Use the engine module directly from arbitrage
 use solana_arb_bot::arbitrage::engine::ArbitrageEngine;
 use solana_arb_bot::config::settings::Config;
 use solana_arb_bot::dex::DexClient;
+use solana_arb_bot::utils::PoolInfo;
 
 #[tokio::test]
 async fn reference_all_engine_methods_and_fields() {
-    let pools = Arc::new(RwLock::new(HashMap::new()));
+    let pools = Arc::new(DashMap::<Pubkey, Arc<PoolInfo>>::new());
     let ws_manager = None;
     let price_provider = None;
     let rpc_client = None;
@@ -67,7 +69,8 @@ async fn reference_all_engine_methods_and_fields() {
         config.metrics_log_path.clone(),      // Provide log path from config
     )));
     let dex_api_clients: Vec<Arc<dyn DexClient>> = vec![];
-    let _engine = ArbitrageEngine::new(pools, ws_manager, price_provider, rpc_client, config.clone(), metrics, dex_api_clients);
+    let executor = None; // No executor for this test
+    let _engine = ArbitrageEngine::new(pools, ws_manager, price_provider, rpc_client, config.clone(), metrics, dex_api_clients, executor);
 
     // Reference degradation_mode field: set and read
     // Instead of direct field access, use public getter/setter methods.

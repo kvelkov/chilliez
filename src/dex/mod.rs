@@ -9,6 +9,8 @@ pub mod integration_test;
 
 pub mod lifinity;
 pub mod meteora;
+#[cfg(test)]
+pub mod meteora_test;
 pub mod orca; // Ensures the orca.rs file is included as a module
 #[cfg(test)]
 pub mod orca_test;
@@ -16,6 +18,8 @@ pub mod orca_test;
 pub mod pool;
 pub mod quote;
 pub mod raydium; // Ensures the raydium.rs file is included as a module
+#[cfg(test)]
+pub mod raydium_test;
 pub mod whirlpool;
 pub mod whirlpool_parser;
 pub mod banned_pairs;

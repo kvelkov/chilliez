@@ -10,7 +10,7 @@ use crate::{
     error::ArbError,
     metrics::Metrics,
     solana::{rpc::SolanaRpcClient, websocket::SolanaWebsocketManager},
-    utils::{PoolInfo, PoolParser},
+    utils::{PoolInfo, PoolParser, pool_validation::{PoolValidationConfig, validate_pools, validate_pools_basic, validate_single_pool}},
 };
 
 use log::{debug, error, info, warn};
@@ -49,6 +49,7 @@ pub struct ArbitrageEngine {
     pub detector: Arc<Mutex<ArbitrageDetector>>,
     pub dex_providers: Vec<Arc<dyn DexClient>>, // ACTIVATED: Now used for health checks and validation
     pub dynamic_threshold_updater: Option<Arc<DynamicThresholdUpdater>>,
+    pub pool_validation_config: PoolValidationConfig, // ACTIVATED: Pool validation configuration
 }
 
 impl ArbitrageEngine {
@@ -72,6 +73,14 @@ impl ArbitrageEngine {
             None
         };
 
+        // Configure pool validation with sensible defaults
+        let pool_validation_config = PoolValidationConfig {
+            max_pool_age_secs: 300, // 5 minutes default
+            skip_empty_pools: true,
+            min_reserve_threshold: 1000,
+            verify_on_chain: false, // Expensive, off by default
+        };
+
         info!("ArbitrageEngine initialized with {} DEX providers", dex_providers.len());
 
         Self {
@@ -89,6 +98,7 @@ impl ArbitrageEngine {
             detector,
             dex_providers, // ACTIVATED: Store DEX providers for health checks
             dynamic_threshold_updater,
+            pool_validation_config,
         }
     }
 
@@ -177,21 +187,16 @@ impl ArbitrageEngine {
         F: FnOnce(HashMap<Pubkey, Arc<PoolInfo>>, Arc<Mutex<ArbitrageDetector>>, Arc<Mutex<Metrics>>) -> Fut,
         Fut: std::future::Future<Output = Result<Vec<MultiHopArbOpportunity>, ArbError>>,
     {
-        let pools_guard = timeout(
-            Duration::from_millis(self.config.pool_read_timeout_ms.unwrap_or(1000)),
-            self.pools.read(),
-        )
-        .await
-        .map_err(|_| {
-            let msg = format!("Timeout acquiring pools read lock for {}", operation_name);
-            if critical { error!("{}", msg); } else { warn!("{}", msg); }
-            ArbError::TimeoutError(msg)
-        })?;
-
-        let pools_snapshot = pools_guard.clone();
-        drop(pools_guard);
-
-        detector_operation(pools_snapshot, Arc::clone(&self.detector), Arc::clone(&self.metrics)).await
+        // Use validated pools for opportunity detection
+        let validated_pools = self.get_validated_pools().await?;
+        
+        if validated_pools.is_empty() {
+            warn!("No validated pools available for {} opportunity detection", operation_name);
+            return Ok(Vec::new());
+        }
+        
+        info!("Running {} opportunity detection with {} validated pools", operation_name, validated_pools.len());
+        detector_operation(validated_pools, Arc::clone(&self.detector), Arc::clone(&self.metrics)).await
     }
 
     /// ACTIVATED: Resolve pools for a given opportunity
@@ -213,6 +218,65 @@ impl ArbitrageEngine {
 
         info!("Resolved {} pools for opportunity {}", resolved_pools.len(), opportunity.id);
         Ok(resolved_pools)
+    }
+
+    /// ACTIVATED: Get validated pools for opportunity detection
+    pub async fn get_validated_pools(&self) -> Result<HashMap<Pubkey, Arc<PoolInfo>>, ArbError> {
+        let pools_guard = self.pools.read().await;
+        let pools_vec: Vec<PoolInfo> = pools_guard.values()
+            .map(|pool_arc| (**pool_arc).clone())
+            .collect();
+        drop(pools_guard);
+        
+        if pools_vec.is_empty() {
+            return Ok(HashMap::new());
+        }
+        
+        info!("Validating {} pools for opportunity detection", pools_vec.len());
+        
+        // Apply advanced validation with RPC client if available
+        let validated_pools = if self.pool_validation_config.verify_on_chain {
+            match validate_pools(&pools_vec, &self.pool_validation_config, self.rpc_client.as_ref()).await {
+                Ok(pools) => pools,
+                Err(e) => {
+                    warn!("Advanced pool validation failed, falling back to basic validation: {}", e);
+                    validate_pools_basic(&pools_vec, &self.pool_validation_config)
+                }
+            }
+        } else {
+            validate_pools_basic(&pools_vec, &self.pool_validation_config)
+        };
+        
+        let filtered_count = pools_vec.len() - validated_pools.len();
+        if filtered_count > 0 {
+            warn!("Pool validation filtered out {} of {} pools ({:.1}% rejection rate) for opportunity detection", 
+                  filtered_count, pools_vec.len(), (filtered_count as f64 / pools_vec.len() as f64) * 100.0);
+        }
+        
+        // Convert back to HashMap format
+        let result: HashMap<Pubkey, Arc<PoolInfo>> = validated_pools.into_iter()
+            .map(|pool| (pool.address, Arc::new(pool)))
+            .collect();
+            
+        info!("Using {} validated pools for opportunity detection", result.len());
+        Ok(result)
+    }
+
+    /// ACTIVATED: Add a single pool with validation
+    pub async fn add_validated_pool(&self, pool: PoolInfo) -> Result<bool, ArbError> {
+        // Validate the single pool
+        if !validate_single_pool(&pool, &self.pool_validation_config) {
+            warn!("Pool {} failed validation - not adding to pool map", pool.address);
+            return Ok(false);
+        }
+        
+        let mut pools_guard = self.pools.write().await;
+        let pool_address = pool.address;
+        pools_guard.insert(pool_address, Arc::new(pool));
+        drop(pools_guard);
+        
+        info!("Successfully added validated pool {} to pool map", pool_address);
+        Ok(true)
     }
 
     pub async fn run_dynamic_threshold_updates(&self) {
@@ -357,22 +421,41 @@ impl ArbitrageEngine {
         info!("Full health check completed");
     }
 
-    /// ACTIVATED: Update pools data
+    /// ACTIVATED: Update pools data with validation
     pub async fn update_pools(&self, new_pools: HashMap<Pubkey, Arc<PoolInfo>>) -> Result<(), ArbError> {
+        let pools_vec: Vec<PoolInfo> = new_pools.values()
+            .map(|pool_arc| (**pool_arc).clone())
+            .collect();
+        
+        // Validate pools before updating
+        info!("Validating {} pools before updating pool map", pools_vec.len());
+        let valid_pools = validate_pools_basic(&pools_vec, &self.pool_validation_config);
+        let filtered_count = pools_vec.len() - valid_pools.len();
+        
+        if filtered_count > 0 {
+            warn!("Pool validation filtered out {} of {} pools ({:.1}% rejection rate) during update", 
+                  filtered_count, pools_vec.len(), (filtered_count as f64 / pools_vec.len() as f64) * 100.0);
+        }
+        
+        // Convert valid pools back to HashMap format
+        let validated_pools: HashMap<Pubkey, Arc<PoolInfo>> = valid_pools.into_iter()
+            .map(|pool| (pool.address, Arc::new(pool)))
+            .collect();
+        
         let mut pools_guard = self.pools.write().await;
         let old_count = pools_guard.len();
         
-        // Update the pools map
-        *pools_guard = new_pools;
+        // Update the pools map with validated pools only
+        *pools_guard = validated_pools;
         let new_count = pools_guard.len();
         
         drop(pools_guard);
         
-        info!("Pools updated: {} -> {} pools", old_count, new_count);
+        info!("Pools updated: {} -> {} validated pools (filtered out {} invalid)", old_count, new_count, filtered_count);
         
         // Update metrics
         let mut metrics = self.metrics.lock().await;
-        metrics.log_pools_updated(new_count.saturating_sub(old_count), 0, new_count);
+        metrics.log_pools_updated(new_count.saturating_sub(old_count), filtered_count, new_count);
         
         Ok(())
     }
@@ -533,6 +616,19 @@ impl ArbitrageEngine {
                 info!("Successfully updated reserves for {}/{} pools in {}ms", 
                       updated_count, pools.len(), elapsed.as_millis());
 
+                // Validate updated pools after live data fetch
+                info!("Validating {} pools after live reserve update", pools.len());
+                let valid_pools = validate_pools_basic(pools, &self.pool_validation_config);
+                let invalid_count = pools.len() - valid_pools.len();
+                
+                if invalid_count > 0 {
+                    warn!("Post-update validation: {} of {} pools became invalid after live data update", 
+                          invalid_count, pools.len());
+                    
+                    // Replace pools vector with only valid pools
+                    *pools = valid_pools;
+                }
+
                 // Update metrics
                 let mut metrics = self.metrics.lock().await;
                 metrics.log_pools_fetched(updated_count);
@@ -634,6 +730,39 @@ impl ArbitrageEngine {
         info!("ArbitrageEngine shutdown completed");
         Ok(())
     }
+
+    /// ACTIVATED: Get current pool validation configuration
+    pub fn get_pool_validation_config(&self) -> &PoolValidationConfig {
+        &self.pool_validation_config
+    }
+
+    /// ACTIVATED: Update pool validation configuration
+    pub fn update_pool_validation_config(&mut self, config: PoolValidationConfig) {
+        info!("Updating pool validation configuration: max_age={}, skip_empty={}, min_reserve={}, verify_on_chain={}", 
+               config.max_pool_age_secs, config.skip_empty_pools, config.min_reserve_threshold, config.verify_on_chain);
+        self.pool_validation_config = config;
+    }
+
+    /// ACTIVATED: Get pool validation statistics
+    pub async fn get_pool_validation_stats(&self) -> Result<(usize, usize, f64), ArbError> {
+        let pools_guard = self.pools.read().await;
+        let total_pools = pools_guard.len();
+        let pools_vec: Vec<PoolInfo> = pools_guard.values()
+            .map(|pool_arc| (**pool_arc).clone())
+            .collect();
+        drop(pools_guard);
+        
+        if total_pools == 0 {
+            return Ok((0, 0, 0.0));
+        }
+        
+        let valid_pools = validate_pools_basic(&pools_vec, &self.pool_validation_config);
+        let valid_count = valid_pools.len();
+        let invalid_count = total_pools - valid_count;
+        let rejection_rate = (invalid_count as f64 / total_pools as f64) * 100.0;
+        
+        Ok((total_pools, invalid_count, rejection_rate))
+    }
 }
 
 impl Clone for ArbitrageEngine {
@@ -653,6 +782,7 @@ impl Clone for ArbitrageEngine {
             detector: Arc::clone(&self.detector),
             dex_providers: self.dex_providers.clone(),
             dynamic_threshold_updater: self.dynamic_threshold_updater.as_ref().map(Arc::clone),
+            pool_validation_config: self.pool_validation_config.clone(),
         }
     }
 }

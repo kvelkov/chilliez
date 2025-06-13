@@ -8,7 +8,7 @@ Successfully integrated advanced DEX math libraries into the Solana arbitrage bo
 ### 1. Core Math Infrastructure
 
 - **Location**: `src/dex/math.rs`
-- **Dependencies Added**: 
+- **Dependencies Added**:
   - `rust_decimal` - High-precision decimal arithmetic
   - `num-bigint` - Big integer support
   - `num-traits` - Numeric trait abstractions
@@ -20,14 +20,14 @@ Successfully integrated advanced DEX math libraries into the Solana arbitrage bo
 - **Module**: `clmm`
 - **Function**: `calculate_clmm_output()`
 - **Use Cases**: Orca Whirlpools, Raydium CLMM
-- **Features**: 
+- **Features**:
   - Tick-based liquidity calculations
   - Virtual reserve modeling for concentrated liquidity
   - High-precision fee calculations
 
 #### **Raydium-Specific Math**
 
-- **Module**: `raydium` 
+- **Module**: `raydium`
 - **Functions**:
   - `calculate_raydium_output()` - Standard AMM with Raydium fee structure
   - `calculate_raydium_input_for_output()` - Reverse calculation
@@ -48,7 +48,7 @@ Successfully integrated advanced DEX math libraries into the Solana arbitrage bo
 - **Functions**:
   - `calculate_dynamic_amm_output()` - Dynamic fee AMM pools
   - `calculate_dlmm_output()` - Bin-based DLMM calculations
-- **Features**: 
+- **Features**:
   - Variable fee structures
   - Bin-based pricing for DLMM pools
 

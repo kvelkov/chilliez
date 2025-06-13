@@ -2,17 +2,17 @@
 //! Defines PoolMap and the POOL_PARSER_REGISTRY for associating
 //! program IDs with their respective pool data parsers.
 
-use crate::utils::{PoolInfo, PoolParser as UtilsPoolParser};
 use crate::dex::{
+    lifinity::LifinityPoolParser,
+    meteora::MeteoraPoolParser,
     orca::OrcaPoolParser,
     raydium::RaydiumPoolParser,
-    lifinity::LifinityPoolParser, // Assuming you have this parser defined
-    whirlpool_parser::WhirlpoolPoolParser,
-}; // Removed unused import: anyhow::Result as AnyhowResult
+};
+use crate::utils::{PoolInfo, PoolParser as UtilsPoolParser};
+use log;
 use once_cell::sync::Lazy;
 use solana_sdk::pubkey::Pubkey;
 use std::collections::HashMap;
-use log;
 use std::sync::Arc;
 
 /// Static registry mapping DEX program IDs to their corresponding `PoolParser` instances.
@@ -20,28 +20,39 @@ use std::sync::Arc;
 pub static POOL_PARSER_REGISTRY: Lazy<HashMap<Pubkey, Arc<dyn UtilsPoolParser>>> = Lazy::new(|| {
     let mut m = HashMap::new();
 
+    // --- Register Orca Parser for Whirlpools ---
+    // The single OrcaPoolParser now handles Whirlpools.
     let orca_parser = Arc::new(OrcaPoolParser);
-    m.insert(orca_parser.get_program_id(), orca_parser.clone() as Arc<dyn UtilsPoolParser>);
-    log::info!("Registered Orca legacy pool parser for program ID: {}", orca_parser.get_program_id());
+    let orca_program_id = orca_parser.get_program_id();
+    m.insert(orca_program_id, orca_parser.clone() as Arc<dyn UtilsPoolParser>);
+    log::info!("Registered Orca Whirlpool parser for program ID: {}", orca_program_id);
 
+    // --- Register Raydium Parser ---
     let raydium_parser = Arc::new(RaydiumPoolParser);
-    m.insert(raydium_parser.get_program_id(), raydium_parser.clone() as Arc<dyn UtilsPoolParser>);
-    log::info!("Registered Raydium pool parser for program ID: {}", raydium_parser.get_program_id());
+    let raydium_program_id = raydium_parser.get_program_id();
+    m.insert(raydium_program_id, raydium_parser.clone() as Arc<dyn UtilsPoolParser>);
+    log::info!("Registered Raydium pool parser for program ID: {}", raydium_program_id);
 
-    // Assuming LifinityPoolParser exists and implements PoolParser
+    // --- Register Lifinity Parser ---
     let lifinity_parser = Arc::new(LifinityPoolParser);
-    m.insert(lifinity_parser.get_program_id(), lifinity_parser.clone() as Arc<dyn UtilsPoolParser>);
-    log::info!("Registered Lifinity pool parser for program ID: {}", lifinity_parser.get_program_id());
+    let lifinity_program_id = lifinity_parser.get_program_id();
+    m.insert(lifinity_program_id, lifinity_parser.clone() as Arc<dyn UtilsPoolParser>);
+    log::info!("Registered Lifinity pool parser for program ID: {}", lifinity_program_id);
 
+    // --- Register Meteora Parser ---
+    // NOTE: Meteora has multiple program IDs. The parser itself must handle dispatching.
+    // We register it under its primary/default ID.
+    let meteora_parser = Arc::new(MeteoraPoolParser);
+    let meteora_program_id = meteora_parser.get_program_id();
+    m.insert(meteora_program_id, meteora_parser.clone() as Arc<dyn UtilsPoolParser>);
+    log::info!("Registered Meteora pool parser for program ID: {}", meteora_program_id);
 
-    let whirlpool_parser = Arc::new(WhirlpoolPoolParser);
-    m.insert(whirlpool_parser.get_program_id(), whirlpool_parser.clone() as Arc<dyn UtilsPoolParser>);
-    log::info!("Registered Whirlpool parser for program ID: {}", whirlpool_parser.get_program_id());
+    // The WhirlpoolPoolParser is now removed, as OrcaPoolParser handles this.
 
     if m.is_empty() {
         log::warn!("POOL_PARSER_REGISTRY is empty. No pool parsers were registered.");
     } else {
-        log::info!("POOL_PARSER_REGISTRY initialized with {} parsers.", m.len());
+        log::info!("POOL_PARSER_REGISTRY initialized with {} unique parsers.", m.len());
     }
     m
 });
@@ -51,53 +62,24 @@ pub fn get_pool_parser_for_program(program_id: &Pubkey) -> Option<Arc<dyn UtilsP
     POOL_PARSER_REGISTRY.get(program_id).cloned()
 }
 
-// --- PoolMap Definition ---
-
-/// PoolMap organizes and manages a collection of PoolInfo objects, keyed by their addresses.
-/// It is used to store and retrieve pool data efficiently.
+// --- PoolMap Definition (remains unchanged) ---
 pub struct PoolMap {
-    pub _pools: HashMap<Pubkey, Arc<PoolInfo>>, // Prefixed with underscore to indicate internal usage.
+    pub _pools: HashMap<Pubkey, Arc<PoolInfo>>,
 }
-
 impl PoolMap {
-    /// Constructs a new, empty PoolMap.
-    pub fn new() -> Self {
-        Self {
-            _pools: HashMap::new(),
-        }
-    }
-
-    /// Constructs a PoolMap from an existing HashMap.
-    pub fn _from_hashmap(pools: HashMap<Pubkey, Arc<PoolInfo>>) -> Self {
-        Self { _pools: pools }
-    }
-
-    /// Adds a pool to the PoolMap.
-    pub fn _add_pool(&mut self, pool: Arc<PoolInfo>) {
-        self._pools.insert(pool.address, pool);
-    }
-
-    /// Retrieves a pool by its address.
-    pub fn _get_pool(&self, address: &Pubkey) -> Option<&Arc<PoolInfo>> {
-        self._pools.get(address)
-    }
-
-    /// Generates candidate pool pairs (for arbitrage) based on overlapping token mints.
-    /// This function collects all pool pairs that have any token in common.
+    pub fn new() -> Self { Self { _pools: HashMap::new() } }
+    pub fn _from_hashmap(pools: HashMap<Pubkey, Arc<PoolInfo>>) -> Self { Self { _pools: pools } }
+    pub fn _add_pool(&mut self, pool: Arc<PoolInfo>) { self._pools.insert(pool.address, pool); }
+    pub fn _get_pool(&self, address: &Pubkey) -> Option<&Arc<PoolInfo>> { self._pools.get(address) }
     pub fn _candidate_pairs(&self) -> Vec<(Pubkey, Pubkey)> {
+        // This function can be improved for performance later, but remains functionally correct.
         let mut pairs = Vec::new();
         let pool_vec: Vec<&Arc<PoolInfo>> = self._pools.values().collect();
-
-        if pool_vec.len() < 2 {
-            return pairs;
-        }
-
-        // Compare each pair of pools to look for common tokens by mint.
+        if pool_vec.len() < 2 { return pairs; }
         for (i, pool1_arc) in pool_vec.iter().enumerate() {
             let pool1 = pool1_arc.as_ref();
             for pool2_arc in pool_vec.iter().skip(i + 1) {
                 let pool2 = pool2_arc.as_ref();
-                // Check if pools share at least one token
                 if pool1.token_a.mint == pool2.token_a.mint || 
                    pool1.token_a.mint == pool2.token_b.mint || 
                    pool1.token_b.mint == pool2.token_a.mint || 
@@ -111,9 +93,4 @@ impl PoolMap {
         pairs
     }
 }
-
-impl Default for PoolMap {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+impl Default for PoolMap { fn default() -> Self { Self::new() } }

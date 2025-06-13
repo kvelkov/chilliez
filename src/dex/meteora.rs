@@ -223,6 +223,7 @@ pub fn identify_pool_type(program_id: &Pubkey, data_size: usize) -> AnyhowResult
 pub struct MeteoraPoolParser;
 
 impl MeteoraPoolParser {
+    #[allow(dead_code)] // Will be used when pool parsing is integrated
     pub fn new() -> Self {
         Self
     }
@@ -563,5 +564,11 @@ impl MeteoraClient {
             swap_info.amount_in,
             swap_info.min_output_amount
         ))
+    }
+}
+
+impl Default for MeteoraPoolParser {
+    fn default() -> Self {
+        Self::new()
     }
 }

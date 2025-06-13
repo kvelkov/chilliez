@@ -128,7 +128,7 @@ impl ArbitrageEngine {
         self.discover_opportunities_internal("direct", false, |pools, detector, metrics| {
             Box::pin(async move {
                 let mut metrics_guard = metrics.lock().await;
-                detector.lock().await.find_all_opportunities(&pools, &mut *metrics_guard).await
+                detector.lock().await.find_all_opportunities(&pools, &mut metrics_guard).await
             })
         }).await
     }
@@ -139,7 +139,7 @@ impl ArbitrageEngine {
             Box::pin(async move {
                 let mut metrics_guard = metrics.lock().await;
                 // Use find_all_opportunities for now since find_all_multihop_opportunities doesn't exist
-                detector.lock().await.find_all_opportunities(&pools, &mut *metrics_guard).await
+                detector.lock().await.find_all_opportunities(&pools, &mut metrics_guard).await
             })
         }).await
     }
@@ -149,7 +149,7 @@ impl ArbitrageEngine {
         self.discover_opportunities_internal("fixed_input", false, move |pools, detector, metrics| {
             Box::pin(async move {
                 let mut metrics_guard = metrics.lock().await;
-                detector.lock().await.find_all_opportunities(&pools, &mut *metrics_guard).await
+                detector.lock().await.find_all_opportunities(&pools, &mut metrics_guard).await
             })
         }).await
     }
@@ -162,7 +162,7 @@ impl ArbitrageEngine {
             Box::pin(async move {
                 let mut metrics_guard = metrics.lock().await;
                 // Use find_all_opportunities for now since find_all_multihop_opportunities_with_risk doesn't exist
-                detector.lock().await.find_all_opportunities(&pools, &mut *metrics_guard).await
+                detector.lock().await.find_all_opportunities(&pools, &mut metrics_guard).await
             })
         }).await
     }

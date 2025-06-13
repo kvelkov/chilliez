@@ -152,26 +152,23 @@ Relevant Instruction: swap. Each pool type has a unique swap instruction layout.
 
 Rust Scaffolding: Requires separate state structs for each pool type (e.g., LbPair for DLMM, another for Dynamic Pools).
 
-5. Phoenix
-Phoenix is a fully on-chain order book, not an AMM. It requires a different integration approach focused on parsing the order book and placing orders.
+5. Phoenix - DEFERRED FOR STRATEGIC REASONS
+Phoenix is a fully on-chain order book, not an AMM. After technical feasibility analysis, we've decided to defer Phoenix integration due to:
 
+CRITICAL ISSUE: Solana version conflicts (Phoenix SDK requires 1.18.26, workspace uses 1.18.3)
+RISK ASSESSMENT: High probability of breaking existing DEX integrations  
+STRATEGIC DECISION: Focus on perfecting 4-DEX powerhouse instead
+
+Technical Details (for future reference):
 Official Docs: Phoenix Developer Docs
-
-Reference SDK: Phoenix Rust SDK - This should be used directly.
-
+Reference SDK: Phoenix Rust SDK
 Program ID: PhoeNiXZ8ByJGLkxNfZRnkUfjvmuYqLR89jjFHGqdXY
+Key Challenge: Dependency management nightmare with current architecture
 
-Key Accounts:
+DECISION: Build the ultimate 4-DEX arbitrage bot with multi-hop routing and parallel processing instead.
+Phoenix can be added later when dependency issues are resolved or when natural version upgrades occur.
 
-Market Account: One account per trading pair contains the entire state of the order book (all bids and asks). Fetching this single account provides a full market picture.
-
-Relevant Instructions:
-
-Swap: Acts like a market order via an immediate-or-cancel (IOC) instruction. This is the simplest method.
-
-PlaceLimitOrder: For advanced strategies to place orders that rest on the book.
-
-Rust Scaffolding: The best approach is to directly use the phoenix-sdk crate. The dependency issues noted in phoenix.rs must be resolved by carefully aligning solana-* crate versions in Cargo.toml.
+Rust Scaffolding: Deferred - focus on optimizing existing 4 DEX integrations for maximum performance.
 
 DEX PLAN OF ACTION
 1. Start with a Comprehensive Design Document

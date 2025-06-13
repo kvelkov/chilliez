@@ -50,7 +50,7 @@ mod tests {
             config.rpc_url_backup
                 .as_ref()
                 .map(|s| s.split(',').map(str::to_string).collect())
-                .unwrap_or_else(Vec::new),
+                .unwrap_or_default(),
             config.rpc_max_retries.unwrap_or(3) as usize,
             std::time::Duration::from_millis(config.rpc_retry_delay_ms.unwrap_or(500)),
         ));
@@ -182,7 +182,7 @@ mod tests {
             config.rpc_url_backup
                 .as_ref()
                 .map(|s| s.split(',').map(str::to_string).collect())
-                .unwrap_or_else(Vec::new),
+                .unwrap_or_default(),
             config.rpc_max_retries.unwrap_or(3) as usize,
             std::time::Duration::from_millis(config.rpc_retry_delay_ms.unwrap_or(500)),
         ));
@@ -217,7 +217,6 @@ mod tests {
 
 #[cfg(test)]
 mod banned_pairs_tests {
-    use super::*;
     use std::sync::Arc;
     use std::path::PathBuf;
     use crate::dex::banned_pairs::{BannedPairsManager, BannedPairFilteringDexClientDecorator};

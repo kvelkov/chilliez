@@ -184,8 +184,8 @@ impl UtilsPoolParser for LifinityPoolParser {
                 decimals: decimals_b,
                 reserve: reserve_b,
             },
-            token_a_vault: token_a_vault,
-            token_b_vault: token_b_vault,
+            token_a_vault,
+            token_b_vault,
             fee_numerator: Some(fee_bps as u64),
             fee_denominator: Some(10000),
             fee_rate_bips: None,
@@ -438,7 +438,7 @@ mod tests {
     fn test_lifinity_pool_data_validation() {
         // Test 6: Test data validation in parser
         // Test too short data
-        let short_data = vec![0u8; 100];
+        let short_data = [0u8; 100];
         
         // Since we can't easily create a mock RpcClient, we'll test the size validation
         // by checking if the data is long enough
@@ -458,7 +458,7 @@ mod tests {
         assert_eq!(client.get_name(), "Lifinity");
         
         // Test default implementation
-        let default_client = LifinityClient::default();
+        let default_client = LifinityClient;
         assert_eq!(default_client.get_name(), "Lifinity");
     }
 

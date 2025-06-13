@@ -12,14 +12,18 @@ pub mod executor;
 pub mod opportunity;
 pub mod dynamic_threshold;
 pub mod detector;
+pub mod path_finder;
+pub mod batch_executor;
 
 // Re-export key types for easier access
 pub use self::engine::ArbitrageEngine;
 pub use self::detector::ArbitrageDetector;
 pub use self::executor::ExecutorEvent;
-pub use self::opportunity::ArbHop;
+pub use self::opportunity::{ArbHop, AdvancedMultiHopOpportunity, EnhancedArbHop};
 pub use self::pipeline::ExecutionPipeline;
 pub use self::dynamic_threshold::DynamicThresholdUpdater;
+pub use self::path_finder::{AdvancedPathFinder, ArbitragePath};
+pub use self::batch_executor::{AdvancedBatchExecutor, BatchExecutionConfig, BatchOpportunity};
 // pub use self::fee_manager::FeeManager; // Uncomment if FeeManager is a key export
 /// TradeInstruction is used to convey a new trade that must be executed.
 /// It carries all the metadata required (price, quantity, pool info, fees, slippage, etc.)

@@ -29,7 +29,7 @@ impl SlippageModel for XYKSlippageModel {
             pool.token_b.reserve as f64
         };
         let input_amount_float = input_amount.to_float();
-        if (input_reserve_float + input_amount_float).abs() < std::f64::EPSILON {
+        if (input_reserve_float + input_amount_float).abs() < f64::EPSILON {
             return 1.0;
         }
         // Slippage = input_amount / (reserve + input_amount)
@@ -312,7 +312,7 @@ mod tests {
     #[test]
     fn test_fee_spike_detection() {
         let pool = create_test_pool();
-        let in_amt = TokenAmount::new(1 * 10u64.pow(9), 9); // 1 SOL
+        let in_amt = TokenAmount::new(10u64.pow(9), 9); // 1 SOL
 
         let mut pool_spiked_fee = pool.clone();
         pool_spiked_fee.fee_numerator = Some(50);
@@ -324,7 +324,7 @@ mod tests {
             pool.fee_numerator,
             pool.fee_denominator,
             Some(pool_spiked_fee.last_update_timestamp),
-            &XYKSlippageModel::default(),
+            &XYKSlippageModel,
         );
         assert!(breakdown.sudden_fee_increase);
         assert!(breakdown.explanation.contains("[FEE SPIKE DETECTED!]"));
@@ -338,7 +338,7 @@ mod tests {
             pool.fee_numerator,
             pool.fee_denominator,
             Some(pool_normal_fee_increase.last_update_timestamp),
-            &XYKSlippageModel::default(),
+            &XYKSlippageModel,
         );
         assert!(!breakdown_normal.sudden_fee_increase);
         assert!(!breakdown_normal.explanation.contains("[FEE SPIKE DETECTED!]"));

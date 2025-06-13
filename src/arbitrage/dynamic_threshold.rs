@@ -164,10 +164,10 @@ mod tests {
             max_slippage_pct: 0.005,
             max_tx_fee_lamports_for_acceptance: Some(100000),
             
-            transaction_priority_fee_lamports: Some(10000).unwrap_or(5000),
-            pool_refresh_interval_secs: Some(10).unwrap_or(30),
-            redis_url: None::<String>.unwrap_or_else(|| "".to_string()),
-            redis_default_ttl_secs: Some(3600).unwrap_or(300),
+            transaction_priority_fee_lamports: 10000,
+            pool_refresh_interval_secs: 10,
+            redis_url: String::new(),
+            redis_default_ttl_secs: 3600,
             dex_quote_cache_ttl_secs: Some(HashMap::new()), // Wrapped in Some()
             volatility_tracker_window: vol_window,
             volatility_threshold_factor: Some(0.5),
@@ -177,8 +177,8 @@ mod tests {
             max_concurrent_executions: Some(10),
             execution_timeout_secs: Some(30),
             transaction_cu_limit: Some(400_000), // Add missing field
-            simulation_mode: Some(false).unwrap_or(true),
-            paper_trading: Some(false).unwrap_or(false),
+            simulation_mode: false,
+            paper_trading: false,
             metrics_log_path: None,
             rpc_url_backup: None,
             rpc_max_retries: Some(3),

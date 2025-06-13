@@ -97,10 +97,11 @@ impl PoolMap {
             let pool1 = pool1_arc.as_ref();
             for pool2_arc in pool_vec.iter().skip(i + 1) {
                 let pool2 = pool2_arc.as_ref();
-                if (pool1.token_a.mint == pool2.token_a.mint && pool1.token_b.mint == pool2.token_b.mint) ||
-                   (pool1.token_a.mint == pool2.token_b.mint && pool1.token_b.mint == pool2.token_a.mint) ||
-                   (pool1.token_a.mint == pool2.token_a.mint || pool1.token_a.mint == pool2.token_b.mint) ||
-                   (pool1.token_b.mint == pool2.token_a.mint || pool1.token_b.mint == pool2.token_b.mint)
+                // Check if pools share at least one token
+                if pool1.token_a.mint == pool2.token_a.mint || 
+                   pool1.token_a.mint == pool2.token_b.mint || 
+                   pool1.token_b.mint == pool2.token_a.mint || 
+                   pool1.token_b.mint == pool2.token_b.mint
                 {
                     pairs.push((pool1.address, pool2.address));
                 }

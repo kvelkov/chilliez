@@ -104,7 +104,7 @@ pub fn calculate_multihop_profit_and_slippage(
                 TokenAmount::from_float(current_amount_atomic.to_float(), input_decimals);
         }
 
-        amounts_for_fee_est.push(current_amount_atomic.clone());
+        amounts_for_fee_est.push(current_amount_atomic);
 
         let input_amount_float = current_amount_atomic.to_float();
         let input_reserve_float = TokenAmount::new(input_reserve, input_decimals).to_float();
@@ -115,7 +115,7 @@ pub fn calculate_multihop_profit_and_slippage(
             1.0
         };
 
-        total_slippage_fraction_product *= 1.0 - hop_slippage.max(0.0).min(1.0);
+        total_slippage_fraction_product *= 1.0 - hop_slippage.clamp(0.0, 1.0);
         current_amount_atomic =
             crate::utils::calculate_output_amount(pool, current_amount_atomic, is_a_to_b);
     }
@@ -137,7 +137,7 @@ pub fn calculate_multihop_profit_and_slippage(
 
     let result = (
         total_profit_float,
-        overall_slippage_fraction.max(0.0).min(1.0),
+        overall_slippage_fraction.clamp(0.0, 1.0),
         total_fee_usd,
     );
 

@@ -49,6 +49,14 @@ pub enum ArbError {
     #[error("Timeout Error: {0}")]
     TimeoutError(String),
     
+    /// Pool state validation errors
+    #[error("Invalid Pool State: {0}")]
+    InvalidPoolState(String),
+    
+    /// Invalid amount errors
+    #[error("Invalid Amount: {0}")]
+    InvalidAmount(String),
+    
     /// Pool not found errors
     #[error("Pool Not Found: {0}")]
     PoolNotFound(String),
@@ -99,7 +107,9 @@ impl ArbError {
             ArbError::ConfigError(_) => false, // Config needs fixing
             ArbError::CacheError(_) => true, // Redis might recover
             ArbError::TimeoutError(_) => true, // Timeouts are usually recoverable
-            ArbError::PoolNotFound(_) => false, // Pool doesn't exist
+            ArbError::InvalidPoolState(_) => false, // Invalid state needs intervention
+            ArbError::InvalidAmount(_) => false, // Invalid amount needs fixing
+            ArbError::PoolNotFound(_) => false, // Pool not found is not recoverable by retry
             ArbError::ExecutionError(msg) => {
                 // Some execution errors are recoverable (slippage, temporary network issues)
                 msg.contains("slippage") || msg.contains("temporary") || msg.contains("retry")
@@ -154,6 +164,8 @@ impl ArbError {
             ArbError::ConfigError(_) => ErrorCategory::Configuration,
             ArbError::CacheError(_) => ErrorCategory::Infrastructure,
             ArbError::TimeoutError(_) => ErrorCategory::Network,
+            ArbError::InvalidPoolState(_) => ErrorCategory::Configuration,
+            ArbError::InvalidAmount(_) => ErrorCategory::Data,
             ArbError::PoolNotFound(_) => ErrorCategory::Data,
             ArbError::ExecutionError(_) => ErrorCategory::Trading,
             ArbError::TransactionError(_) => ErrorCategory::Trading,

@@ -170,7 +170,7 @@ impl ArbitrageDetector {
             let last_opportunity = opportunities.last().unwrap(); // Get the opportunity we just pushed
             if let Err(e) = metrics.record_opportunity_detected(
                 &last_opportunity.input_token,
-                &last_opportunity.intermediate_tokens.get(0).cloned().unwrap_or_default(), // First intermediate token
+                &last_opportunity.intermediate_tokens.first().cloned().unwrap_or_default(), // First intermediate token
                 last_opportunity.profit_pct, // Already in percentage form (e.g., 1.5 for 1.5%)
                 last_opportunity.estimated_profit_usd,
                 last_opportunity.input_amount_usd,

@@ -56,3 +56,9 @@ impl ExecutionPipeline {
         self.sender.clone()
     }
 }
+
+impl Default for ExecutionPipeline {
+    fn default() -> Self {
+        Self::new()
+    }
+}

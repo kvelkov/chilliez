@@ -33,7 +33,7 @@ pub fn _init_and_get_config() -> Arc<Config> {
     // Use environment-based config, fallback to file-based config if needed
     // (Here, we just use file-based config if env-based fails, but you can expand as needed)
     // If you want to add more robust error handling, you can do so here.
-    match std::panic::catch_unwind(|| _load_app_config()) {
+    match std::panic::catch_unwind(_load_app_config) {
         Ok(cfg) => Arc::new(cfg),
         Err(_) => {
             log::warn!("Falling back to file-based config due to error loading from env.");

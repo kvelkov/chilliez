@@ -193,10 +193,8 @@ impl Config {
         if self.min_profit_pct <= 0.0 || self.min_profit_pct >= 1.0 {
             log::warn!("MIN_PROFIT_PCT ({}) is outside the typical range (0.0 to 1.0, exclusive of 0). Ensure it's a fraction (e.g., 0.001 for 0.1%).", self.min_profit_pct);
         }
-        if self.enable_fixed_input_arb_detection {
-            if self.fixed_input_arb_amount.is_none() {
-                log::warn!("ENABLE_FIXED_INPUT_ARB_DETECTION is true but FIXED_INPUT_ARB_AMOUNT is not set.");
-            }
+        if self.enable_fixed_input_arb_detection && self.fixed_input_arb_amount.is_none() {
+            log::warn!("ENABLE_FIXED_INPUT_ARB_DETECTION is true but FIXED_INPUT_ARB_AMOUNT is not set.");
         }
         if self.transaction_priority_fee_lamports > 0 {
             log::info!("Transaction priority fee lamports set to: {}", self.transaction_priority_fee_lamports);
@@ -259,6 +257,6 @@ mod tests {
         // This not only uses the function but also verifies its behavior.
         assert_eq!(config.min_profit_pct, 0.1, "Default min_profit_pct should be 0.1");
         assert_eq!(config.rpc_url, "http://localhost:8899", "Default rpc_url should be http://localhost:8899");
-        assert!(config.simulation_mode == false, "Default simulation_mode should be false");
+        assert!(!config.simulation_mode, "Default simulation_mode should be false");
     }
 }

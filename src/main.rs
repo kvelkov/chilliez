@@ -18,7 +18,14 @@ use crate::{
     },
     cache::Cache,
     config::settings::Config,
-    dex::get_all_clients_arc,
+    dex::{
+        get_all_clients_arc,
+        path_finder::{PathFinder, ArbitrageDiscoveryConfig}, // <-- Add PathFinder imports
+        quoting_engine::{AdvancedQuotingEngine, QuotingEngineOperations}, // <-- Add quoting engine imports
+        banned_pairs::integrate_banned_pairs_system, // <-- Import banned pairs system
+        raydium::RaydiumClient, // <-- Import RaydiumClient for PoolDiscoverable test
+        quote::PoolDiscoverable, // <-- Import PoolDiscoverable trait
+    },
     error::ArbError,
     metrics::Metrics,
     solana::{
@@ -26,13 +33,8 @@ use crate::{
         websocket::{RawAccountUpdate, SolanaWebsocketManager},
     },
     utils::{setup_logging, ProgramConfig, PoolInfo},
-    dex::{
-        banned_pairs::integrate_banned_pairs_system, // <-- Import banned pairs system
-        pool_discovery::{create_pool_discovery_service, test_pool_discoverable_integration}, // <-- Import pool discovery
-        raydium::RaydiumClient, // <-- Import RaydiumClient for PoolDiscoverable test
-        quote::PoolDiscoverable, // <-- Import PoolDiscoverable trait
-    },
 };
+use dashmap::DashMap; // <-- Add DashMap import for PathFinder
 use log::{error, info, warn};
 use solana_sdk::{pubkey::Pubkey, signature::read_keypair_file, signer::Signer};
 use std::{
@@ -101,67 +103,7 @@ async fn main() -> MainResult<()> {
     let dex_api_clients = get_all_clients_arc(Arc::clone(&redis_cache), Arc::clone(&app_config)).await;
     info!("DEX API clients initialized.");
 
-    // Initialize Pool Discovery Service and populate pools
-    info!("Initializing Pool Discovery Service...");
-    let pool_discovery_service = create_pool_discovery_service(
-        ha_solana_rpc_client.clone(),
-    ).await.map_err(|e| ArbError::ConfigError(format!("Pool discovery service init failed: {}", e)))?;
-    
-    // Demonstrate some PoolDiscoveryService methods to eliminate dead code warnings
-    let config = pool_discovery_service.get_config();
-    info!("Pool discovery service initialized with batch_size: {}, max_pool_age: {}s, delay: {}ms", 
-          config.batch_size, config.max_pool_age_secs, config.batch_delay_ms);
-    info!("Pool discovery config: skip_empty_pools={}, min_reserve_threshold={}", 
-          config.skip_empty_pools, config.min_reserve_threshold);
-    
-    // Try to discover pools using the full service (this will demonstrate the service methods)
-    match pool_discovery_service.discover_all_pools().await {
-        Ok(discovery_result) => {
-            info!("Pool discovery service found {} total pools", discovery_result.total_discovered);
-            // Access some fields to eliminate warnings
-            let _total_discovered = discovery_result.total_discovered;
-            let _pools_after_filtering = discovery_result.pools_after_filtering;
-            let _failed_pools = discovery_result.failed_pools;
-            let _discovery_time = discovery_result.discovery_time_ms;
-            let _pools_map = &discovery_result.pools;
-            
-            // Access DexDiscoveryStats fields
-            for (dex_name, stats) in &discovery_result.dex_stats {
-                let _dex_pools = stats.pools_discovered;
-                let _dex_valid = stats.pools_valid;
-                let _dex_failed = stats.pools_failed;
-                let _dex_time = stats.discovery_time_ms;
-                info!("DEX {} discovery stats accessed", dex_name);
-            }
-        }
-        Err(e) => {
-            info!("Pool discovery service failed (expected for demo): {}", e);
-        }
-    }
-    
-    // Test additional PoolDiscoveryService methods to eliminate dead code warnings
-    let mut test_pools = std::collections::HashMap::new();
-    
-    // Try to refresh pool data (will fail in demo but eliminates warning)
-    if let Err(_) = pool_discovery_service.refresh_pool_data(&mut test_pools).await {
-        info!("Pool data refresh failed (expected for demo)");
-    }
-    
-    // Test with_config associated function
-    let custom_config = pool_discovery_service.get_config().clone();
-    let _service_with_custom_config = dex::pool_discovery::PoolDiscoveryService::with_config(
-        vec![], // empty for demo
-        ha_solana_rpc_client.clone(),
-        custom_config
-    );
-    
-    // Test config update to eliminate dead code warning
-    let mut pool_discovery_service_mut = pool_discovery_service;
-    let mut new_config = pool_discovery_service_mut.get_config().clone();
-    new_config.batch_size = 200; // Change a value
-    pool_discovery_service_mut.update_config(new_config);
-    
-    // Discover pools from all DEXs using the new DexClient::discover_pools method
+    // Discover pools from all DEXs using the DexClient::discover_pools method
     let mut discovered_pools_count = 0;
     for dex_client in &dex_api_clients {
         match dex_client.discover_pools().await {
@@ -177,11 +119,7 @@ async fn main() -> MainResult<()> {
     
     // Also demonstrate PoolDiscoverable trait usage
     info!("Testing PoolDiscoverable trait methods...");
-    let raydium_client = RaydiumClient::new();
-    if let Err(e) = test_pool_discoverable_integration(&raydium_client).await {
-        warn!("PoolDiscoverable integration test failed: {}", e);
-    }
-    
+    let raydium_client = RaydiumClient::new(); // RaydiumClient implements PoolDiscoverable
     // Test individual PoolDiscoverable trait methods to eliminate warnings
     info!("Testing PoolDiscoverable with {}", raydium_client.dex_name());
     
@@ -203,12 +141,73 @@ async fn main() -> MainResult<()> {
     info!("Pool discovery completed. Found {} pools total. Pool data map initialized (current size: {}).", 
           discovered_pools_count, pools_map.read().await.len());
 
+    // Create DashMap for PathFinder (concurrent-safe pool cache)
+    let pool_data_cache: Arc<DashMap<Pubkey, Arc<PoolInfo>>> = Arc::new(DashMap::new());
+    info!("Pool data cache (DashMap) initialized for PathFinder.");
+
     let wallet_path = app_config.trader_wallet_keypair_path.clone().unwrap_or(app_config.wallet_path.clone());
     let wallet = match read_keypair_file(&wallet_path) {
         Ok(kp) => Arc::new(kp),
         Err(e) => return Err(ArbError::ConfigError(format!("Failed to read wallet keypair '{}': {}", wallet_path, e))),
     };
     info!("Trader wallet loaded: {}", wallet.pubkey());
+
+    // Initialize AdvancedQuotingEngine for PathFinder
+    info!("Initializing AdvancedQuotingEngine...");
+    let quoting_engine = Arc::new(AdvancedQuotingEngine::new(
+        pool_data_cache.clone(),
+        dex_api_clients.clone(),
+    ));
+    info!("AdvancedQuotingEngine initialized with {} DEX clients.", dex_api_clients.len());
+
+    // Create broadcast channel for arbitrage opportunities
+    let (opportunity_sender, opportunity_receiver) = broadcast::channel::<crate::dex::opportunity::MultiHopArbOpportunity>(1000);
+    info!("Opportunity broadcast channel created with buffer size 1000.");
+
+    // Create ArbitrageDiscoveryConfig
+    let arbitrage_discovery_config = ArbitrageDiscoveryConfig {
+        discovery_interval: Duration::from_secs(app_config.cycle_interval_seconds.unwrap_or(30)),
+        min_profit_bps_threshold: (app_config.min_profit_pct * 100.0) as u32, // Convert % to basis points
+        max_hops_for_opportunity: app_config.max_hops.unwrap_or(3),
+    };
+    info!("ArbitrageDiscoveryConfig created: interval={}s, min_profit={}bps, max_hops={}", 
+          arbitrage_discovery_config.discovery_interval.as_secs(),
+          arbitrage_discovery_config.min_profit_bps_threshold,
+          arbitrage_discovery_config.max_hops_for_opportunity);
+
+    // Initialize PathFinder
+    info!("Initializing PathFinder...");
+    let path_finder = Arc::new(PathFinder::new(
+        pool_data_cache.clone(),
+        quoting_engine as Arc<dyn QuotingEngineOperations + Send + Sync>,
+        dex_api_clients.clone(),
+        opportunity_sender,
+        arbitrage_discovery_config,
+    ));
+    info!("PathFinder initialized successfully.");
+
+    // Start PathFinder background services
+    let graph_update_interval = Duration::from_secs(app_config.congestion_update_interval_secs.unwrap_or(300)); // Use existing config field or default 5 minutes
+    info!("Starting PathFinder background services with graph update interval: {}s", graph_update_interval.as_secs());
+    let path_finder_clone = path_finder.clone();
+    tokio::spawn(async move {
+        path_finder_clone.start_services(graph_update_interval).await;
+    });
+
+    // Subscribe to opportunities (placeholder for now - just log them)
+    let mut opportunity_receiver_for_logging = opportunity_receiver;
+    tokio::spawn(async move {
+        info!("Starting opportunity receiver for logging...");
+        while let Ok(opportunity) = opportunity_receiver_for_logging.recv().await {
+            info!("🚀 PathFinder discovered opportunity: ID={}, Profit={}bps, Hops={}, Initial=${:.2}, Final=${:.2}",
+                  opportunity.id, 
+                  opportunity.profit_bps,
+                  opportunity.hops.len(),
+                  opportunity.initial_input_amount as f64 / 1_000_000.0, // Convert lamports to rough token amount
+                  opportunity.final_output_amount as f64 / 1_000_000.0);
+        }
+        warn!("Opportunity receiver stopped - channel closed");
+    });
 
     // Initialize WebSocket Manager components
     let ws_setup_opt: Option<(Arc<Mutex<SolanaWebsocketManager>>, broadcast::Receiver<RawAccountUpdate>)> = if !app_config.ws_url.is_empty() {
@@ -277,6 +276,7 @@ async fn main() -> MainResult<()> {
     // Start pool receiver to process discovered pools
     let _pool_processing_handle = {
         let pools_map_clone = pools_map.clone();
+        let pool_data_cache_clone = pool_data_cache.clone(); // <-- Add DashMap clone
         let metrics_clone = metrics.clone();
         let arbitrage_engine_clone = arbitrage_engine.clone();
         tokio::spawn(async move {
@@ -296,17 +296,19 @@ async fn main() -> MainResult<()> {
                     }
                 }
                 
-                // Update the pools map with discovered pools (now with live data)
+                // Update both the pools map and DashMap pool cache
                 let mut pools_write = pools_map_clone.write().await;
                 for pool in discovered_pools {
-                    pools_write.insert(pool.address, Arc::new(pool));
+                    let pool_arc = Arc::new(pool.clone());
+                    pools_write.insert(pool.address, pool_arc.clone());
+                    pool_data_cache_clone.insert(pool.address, pool_arc); // <-- Add to DashMap
                 }
                 
                 // Update metrics
                 let mut metrics_lock = metrics_clone.lock().await;
                 metrics_lock.log_pools_fetched(pools_write.len());
                 
-                info!("Pool map now contains {} total pools", pools_write.len());
+                info!("Pool map now contains {} total pools, DashMap cache: {} pools", pools_write.len(), pool_data_cache_clone.len());
             }
             warn!("Pool receiver stopped - channel closed");
         })
@@ -407,6 +409,9 @@ async fn main() -> MainResult<()> {
             info!("Engine Status: {}", status_string);
         }
     });
+
+    // Store a reference to the opportunity_receiver for the main loop
+    let mut opportunity_receiver_main = path_finder.subscribe_to_opportunities();
 
     info!("Starting main arbitrage detection cycle (interval: {}s).", app_config.cycle_interval_seconds.expect("cycle_interval_seconds must be set"));
     let mut main_cycle_interval = interval(Duration::from_secs(app_config.cycle_interval_seconds.expect("cycle_interval_seconds must be set")));
@@ -534,6 +539,56 @@ async fn main() -> MainResult<()> {
                     }
                     Err(e) => {
                         error!("[CAT: {:?}] Error during multi-hop opportunity detection: {}", e.categorize(), e);
+                    }
+                }
+            },
+            // Handle PathFinder opportunities from background discovery
+            pathfinder_opp = opportunity_receiver_main.recv() => {
+                match pathfinder_opp {
+                    Ok(opportunity) => {
+                        info!("🔍 PathFinder discovered opportunity: ID={}, Profit={}bps, Hops={}", 
+                              opportunity.id, opportunity.profit_bps, opportunity.hops.len());
+                        
+                        // Convert PathFinder opportunity to legacy format for executor compatibility
+                        let legacy_opportunity = crate::arbitrage::opportunity::MultiHopArbOpportunity {
+                            id: opportunity.id.clone(),
+                            hops: opportunity.hops.iter().map(|hop| crate::arbitrage::opportunity::ArbHop {
+                                dex: hop.dex_type.clone(),
+                                pool: hop.pool_address,
+                                input_token: hop.input_mint.to_string(), // Convert Pubkey to string
+                                output_token: hop.output_mint.to_string(), // Convert Pubkey to string
+                                input_amount: hop.input_amount as f64,
+                                expected_output: hop.output_amount as f64,
+                            }).collect(),
+                            total_profit: (opportunity.final_output_amount as f64) - (opportunity.initial_input_amount as f64),
+                            profit_pct: opportunity.profit_bps as f64 / 100.0, // Convert basis points to percentage
+                            input_amount: opportunity.initial_input_amount as f64,
+                            expected_output: opportunity.final_output_amount as f64,
+                            ..Default::default()
+                        };
+                        
+                        // Process the opportunity like regular ones
+                        if app_config.paper_trading || simulation_mode_from_env {
+                            info!("(Paper/Simulated) Would execute PathFinder opportunity {} with profit {:.4}%", 
+                                  legacy_opportunity.id, legacy_opportunity.profit_pct);
+                        } else {
+                            info!("Real Trading Mode: Attempting to execute PathFinder opportunity {}", legacy_opportunity.id);
+                            match tx_executor.execute_opportunity(&legacy_opportunity).await {
+                                Ok(signature) => {
+                                    info!("Successfully EXECUTED PathFinder opportunity {} - Signature: {}", 
+                                          legacy_opportunity.id, signature);
+                                }
+                                Err(e) => {
+                                    error!("Failed to EXECUTE PathFinder opportunity {}: {}", legacy_opportunity.id, e);
+                                }
+                            }
+                        }
+                    }
+                    Err(broadcast::error::RecvError::Lagged(skipped)) => {
+                        warn!("PathFinder opportunity receiver lagged, skipped {} opportunities", skipped);
+                    }
+                    Err(broadcast::error::RecvError::Closed) => {
+                        warn!("PathFinder opportunity channel closed");
                     }
                 }
             },

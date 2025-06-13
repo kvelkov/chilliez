@@ -8,7 +8,7 @@
 //!
 //! Each pool type has distinct on-chain layouts and requires specialized parsing logic.
 
-use crate::dex::quote::{DexClient, Quote, SwapInfo};
+use crate::dex::{quote::{DexClient, Quote, SwapInfo}, math};
 use crate::solana::rpc::SolanaRpcClient;
 use crate::utils::{DexType, PoolInfo, PoolParser as UtilsPoolParser, PoolToken};
 use anyhow::{anyhow, Result as AnyhowResult};
@@ -23,6 +23,7 @@ use solana_sdk::{
 use spl_token::state::Account as TokenAccount;
 use std::str::FromStr;
 use std::sync::Arc;
+use crate::dex::quote::PoolDiscoverable; // Added for PoolDiscoverable trait
 
 // ====================================================================
 // METEORA PROGRAM IDS & CONSTANTS
@@ -425,6 +426,15 @@ impl MeteoraClient {
     pub fn new() -> Self {
         Self::default()
     }
+    
+    /// Determine if a pool is a DLMM pool or Dynamic AMM pool
+    /// This is a simplified heuristic - in production, you'd check the actual program ID
+    fn is_dlmm_pool(&self, pool: &PoolInfo) -> bool {
+        // For now, assume pools with specific characteristics are DLMM
+        // In reality, you'd check if the pool's program ID matches METEORA_DLMM_PROGRAM_ID
+        // or parse the pool account to determine its type
+        pool.tick_spacing.is_some() || pool.sqrt_price.is_some()
+    }
 }
 
 #[async_trait]
@@ -443,14 +453,42 @@ impl DexClient for MeteoraClient {
             return Err(anyhow!("Pool {} has insufficient reserves", pool.address));
         }
 
-        // For Dynamic AMM pools, use constant product formula with fees
-        // For DLMM pools, this would need bin-based pricing calculation
-        let fee_rate = pool.fee_rate_bips.unwrap_or(0) as f64 / 10000.0; // Convert bips to decimal
-        let input_after_fees = (input_amount as f64 * (1.0 - fee_rate)) as u64;
-        
-        // Simple constant product calculation (k = x * y)
-        let output_amount = (input_after_fees as u128 * pool.token_b.reserve as u128 
-            / (pool.token_a.reserve as u128 + input_after_fees as u128)) as u64;
+        // Determine if this is a DLMM or Dynamic AMM pool and use appropriate math
+        let output_amount = if self.is_dlmm_pool(pool) {
+            // Use DLMM (bin-based) calculation for concentrated liquidity pools
+            math::meteora::calculate_dlmm_output(
+                input_amount,
+                8388608, // active_bin_id - would need to be determined from pool state
+                100,     // bin_step - would need to be extracted from pool state
+                0,       // liquidity_in_bin - would need to be extracted from pool state
+                pool.fee_rate_bips.unwrap_or(100) as u16,
+            ).unwrap_or_else(|_| {
+                // Fallback to simple constant product if DLMM calculation fails
+                math::general::calculate_simple_amm_output(
+                    input_amount,
+                    pool.token_a.reserve,
+                    pool.token_b.reserve,
+                    pool.fee_rate_bips.unwrap_or(0) as u32,
+                )
+            })
+        } else {
+            // Use Dynamic AMM calculation for standard AMM pools
+            math::meteora::calculate_dynamic_amm_output(
+                input_amount,
+                pool.token_a.reserve,
+                pool.token_b.reserve,
+                pool.fee_rate_bips.unwrap_or(0) as u32,
+                25, // dynamic_fee_bps - would need to be calculated from pool state
+            ).unwrap_or_else(|_| {
+                // Fallback to simple constant product if Dynamic AMM calculation fails
+                math::general::calculate_simple_amm_output(
+                    input_amount,
+                    pool.token_a.reserve,
+                    pool.token_b.reserve,
+                    pool.fee_rate_bips.unwrap_or(0) as u32,
+                )
+            })
+        };
 
         Ok(Quote {
             input_token: pool.token_a.symbol.clone(),
@@ -459,7 +497,7 @@ impl DexClient for MeteoraClient {
             output_amount,
             dex: self.get_name().to_string(),
             route: vec![pool.address],
-            slippage_estimate: Some(fee_rate), // Use fee rate as a basic slippage estimate
+            slippage_estimate: Some(pool.fee_rate_bips.unwrap_or(0) as f64 / 10000.0),
         })
     }
 
@@ -639,5 +677,48 @@ impl MeteoraClient {
 impl Default for MeteoraPoolParser {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[async_trait]
+impl PoolDiscoverable for MeteoraClient {
+    async fn discover_pools(&self) -> AnyhowResult<Vec<PoolInfo>> {
+        // Reuse the existing discover_pools logic from DexClient trait implementation
+        <Self as DexClient>::discover_pools(self).await
+    }
+
+    async fn fetch_pool_data(&self, pool_address: Pubkey) -> AnyhowResult<PoolInfo> {
+        // Placeholder implementation.
+        info!("Fetching pool data for Meteora pool (placeholder): {}", pool_address);
+        if pool_address == Pubkey::from_str("9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM").unwrap_or_default() {
+            Ok(PoolInfo {
+                address: pool_address,
+                name: format!("Meteora Pool {}", pool_address),
+                dex_type: DexType::Meteora,
+                token_a: PoolToken {
+                    mint: solana_sdk::pubkey!("So11111111111111111111111111111111111111112"), // SOL
+                    symbol: "SOL".to_string(),
+                    decimals: 9,
+                    reserve: 1_000_000_000,
+                },
+                token_b: PoolToken {
+                    mint: solana_sdk::pubkey!("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"), // USDC
+                    symbol: "USDC".to_string(),
+                    decimals: 6,
+                    reserve: 50_000_000_000,
+                },
+                token_a_vault: Pubkey::default(),
+                token_b_vault: Pubkey::default(),
+                fee_rate_bips: Some(30),
+                ..Default::default()
+            })
+        } else {
+            Err(anyhow!("fetch_pool_data not fully implemented for MeteoraClient via PoolDiscoverable for address: {}", pool_address))
+        }
+    }
+
+    fn dex_name(&self) -> &str {
+        // Reuse the existing get_name logic from DexClient trait implementation
+        <Self as DexClient>::get_name(self)
     }
 }

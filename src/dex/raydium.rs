@@ -2,8 +2,8 @@
 //! Raydium client and parser for on-chain data and instruction building.
 //! This implementation follows the official Raydium V4 layout for maximum accuracy.
 
-use crate::dex::quote::{DexClient, Quote, SwapInfo, PoolDiscoverable};
-use crate::dex::raydium_models::LiquidityFile;
+use crate::dex::{quote::{DexClient, Quote, SwapInfo, PoolDiscoverable}, math::raydium};
+// use crate::dex::raydium_models::LiquidityFile; // Temporarily commented out
 use crate::solana::rpc::SolanaRpcClient;
 use crate::utils::{DexType, PoolInfo, PoolParser as UtilsPoolParser, PoolToken};
 use anyhow::{anyhow, Result as AnyhowResult};
@@ -17,13 +17,12 @@ use solana_sdk::{
 };
 use spl_token::state::{Account as TokenAccount, Mint};
 use std::sync::Arc;
-use std::str::FromStr;
 
 // Official Program ID from Raydium's documentation.
 pub const RAYDIUM_LIQUIDITY_POOL_V4_PROGRAM_ID: Pubkey = solana_sdk::pubkey!("675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8");
 
-// Raydium API endpoint for pool discovery
-const RAYDIUM_LIQUIDITY_JSON_URL: &str = "https://api.raydium.io/v2/sdk/liquidity/mainnet.json";
+// Raydium API endpoint for pool discovery (temporarily disabled)
+// const RAYDIUM_LIQUIDITY_JSON_URL: &str = "https://api.raydium.io/v2/sdk/liquidity/mainnet.json";
 
 // Expected account size for Raydium V4 pool state (verified from official implementations)
 pub const RAYDIUM_V4_POOL_STATE_SIZE: usize = 752;
@@ -247,7 +246,7 @@ impl DexClient for RaydiumClient {
         "Raydium"
     }
 
-    /// Calculates a quote using the Constant Product formula for AMM V4 pools.
+    /// Calculates a quote using the enhanced Raydium math with high precision.
     fn calculate_onchain_quote(
         &self,
         pool: &PoolInfo,
@@ -263,25 +262,28 @@ impl DexClient for RaydiumClient {
         if fee_den == 0 {
             return Err(anyhow!("Raydium pool {} fee denominator cannot be zero.", pool.address));
         }
-        let fee = (input_amount as u128 * fee_num as u128 / fee_den as u128) as u64;
-        let input_amount_after_fee = input_amount.saturating_sub(fee);
 
-        let k = pool.token_a.reserve as u128 * pool.token_b.reserve as u128;
-        let output_amount = (pool.token_b.reserve as u128)
-            .saturating_sub(k / (pool.token_a.reserve as u128 + input_amount_after_fee as u128));
+        // Use the advanced Raydium math module for precise calculations
+        let output_amount = raydium::calculate_raydium_output(
+            input_amount,
+            pool.token_a.reserve,
+            pool.token_b.reserve,
+            fee_num,
+            fee_den,
+        ).map_err(|e| anyhow!("Raydium calculation error: {}", e))?;
         
-        if output_amount == 0 {
-            return Err(anyhow!("Output amount is zero, likely due to high fee or low input."));
-        }
+        // Validate the output is reasonable
+        crate::dex::math::utils::validate_output(input_amount, output_amount, 1000) // 10% max slippage check
+            .map_err(|e| anyhow!("Raydium output validation failed: {}", e))?;
 
         Ok(Quote {
             input_token: pool.token_a.symbol.clone(),
             output_token: pool.token_b.symbol.clone(),
             input_amount,
-            output_amount: output_amount as u64,
+            output_amount,
             dex: self.get_name().to_string(),
             route: vec![pool.address],
-            slippage_estimate: None,
+            slippage_estimate: None, // TODO: Calculate actual slippage estimate
         })
     }
 
@@ -332,9 +334,10 @@ impl DexClient for RaydiumClient {
     /// A vector of `PoolInfo` structs, potentially with live market data missing,
     /// which will be fetched later in a batched call.
     async fn discover_pools(&self) -> AnyhowResult<Vec<PoolInfo>> {
-        info!("Starting Raydium pool discovery using official API");
-        
-        // 1. Fetch the JSON file
+        // Temporarily return empty pools until raydium_models is available
+        warn!("Raydium pool discovery temporarily disabled - returning empty pool list");
+        Ok(Vec::new())
+        /*
         let response = reqwest::get(RAYDIUM_LIQUIDITY_JSON_URL).await
             .map_err(|e| anyhow!("Failed to fetch Raydium liquidity data: {}", e))?;
         
@@ -395,6 +398,7 @@ impl DexClient for RaydiumClient {
         }
 
         Ok(pools)
+        */
     }
 }
 
@@ -423,6 +427,11 @@ fn instruction_data_to_bytes(instruction: &RaydiumSwapInstruction) -> AnyhowResu
 #[async_trait]
 impl PoolDiscoverable for RaydiumClient {
     async fn discover_pools(&self) -> AnyhowResult<Vec<PoolInfo>> {
+        // TODO: Re-implement pool discovery once LiquidityFile models are available
+        warn!("Raydium pool discovery temporarily disabled - returning empty pool list");
+        Ok(vec![])
+        
+        /* TEMPORARILY DISABLED - requires LiquidityFile model
         info!("Starting RaydiumClient pool discovery using official API");
         
         // 1. Fetch the JSON file
@@ -486,6 +495,7 @@ impl PoolDiscoverable for RaydiumClient {
         }
 
         Ok(pools)
+        */
     }
 
     async fn fetch_pool_data(&self, pool_address: Pubkey) -> AnyhowResult<PoolInfo> {

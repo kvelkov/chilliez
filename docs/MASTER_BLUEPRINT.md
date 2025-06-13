@@ -1,6 +1,6 @@
 # 🚀 SOLANA ARBITRAGE BOT - MASTER BLUEPRINT
 
-**The Ultimate Multi-Million Dollar 4-DEX Arbitrage Bot Strategy**
+The Ultimate Multi-Million Dollar 4-DEX Arbitrage Bot Strategy**
 
 ---
 

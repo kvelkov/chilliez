@@ -54,10 +54,22 @@ chrono = { version = "0.4.38", features = ["serde"] }  # Enhanced chrono feature
 rand = "0.8.5"
 base64 = "0.22.0"
 itertools = "0.12.0"
-regex = "1.10.0"           # For API key validation and pattern matching
+regex = "1.10.0"  
+rayon = "1.8"         # For API key validation and pattern matching
 
 # === Redis Cache ===
+petgraph = "0.6" # Added for graph-based opportunity discovery
+uuid = { version = "1.6", features = ["v4", "serde"] } # For unique opportunity IDs
 redis = { version = "0.25.0", features = ["aio", "tokio-comp", "connection-manager"] }
+
+# === Advanced DEX Math Libraries ===
+# High precision decimal calculations for accurate quotes
+rust_decimal = "1.32"                 # High precision decimal calculations
+num-bigint = "0.4"                    # Large integer calculations for CLMM
+num-traits = "0.2"                    # Numeric trait abstractions
+
+# We'll implement our own optimized CLMM math using these foundations
+# Based on Raydium, Orca, and other DEX implementations
 
 dashmap = "5.4.0"
 tungstenite = "0.20.1"

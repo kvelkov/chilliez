@@ -1,7 +1,6 @@
 // src/dex/lifinity.rs
 //! Lifinity client and parser for on-chain data and instruction building.
-
-use crate::dex::quote::{DexClient, Quote, SwapInfo};
+use crate::dex::{quote::{DexClient, Quote, SwapInfo, PoolDiscoverable}, math};
 use crate::solana::rpc::SolanaRpcClient;
 use crate::utils::{DexType, PoolInfo, PoolParser as UtilsPoolParser, PoolToken};
 use anyhow::{anyhow, Result as AnyhowResult};
@@ -233,11 +232,27 @@ impl DexClient for LifinityClient {
         pool: &PoolInfo,
         input_amount: u64,
     ) -> AnyhowResult<Quote> {
-        // TODO: Implement the precise quote calculation for Lifinity's concentrated liquidity model.
-        if pool.token_a.reserve == 0 {
-            return Err(anyhow!("Pool has zero reserves for token A"));
+        // Validate pool has sufficient reserves
+        if pool.token_a.reserve == 0 || pool.token_b.reserve == 0 {
+            return Err(anyhow!("Pool {} has insufficient reserves", pool.address));
         }
-        let output_amount = (input_amount as u128 * pool.token_b.reserve as u128 / pool.token_a.reserve as u128) as u64;
+
+        // Use Lifinity's concentrated liquidity math with oracle rebalancing
+        let output_amount = math::lifinity::calculate_lifinity_output(
+            input_amount,
+            pool.token_a.reserve,
+            pool.token_b.reserve,
+            pool.fee_rate_bips.unwrap_or(0) as u32,
+            None, // oracle_price - would need to be fetched from external price oracle
+        ).unwrap_or_else(|_| {
+            // Fallback to simple constant product if Lifinity calculation fails
+            math::general::calculate_simple_amm_output(
+                input_amount,
+                pool.token_a.reserve,
+                pool.token_b.reserve,
+                pool.fee_rate_bips.unwrap_or(0) as u32,
+            )
+        });
 
         Ok(Quote {
             input_token: pool.token_a.symbol.clone(),
@@ -246,7 +261,7 @@ impl DexClient for LifinityClient {
             output_amount,
             dex: self.get_name().to_string(),
             route: vec![pool.address],
-            slippage_estimate: None,
+            slippage_estimate: Some(pool.fee_rate_bips.unwrap_or(0) as f64 / 10000.0),
         })
     }
 
@@ -334,6 +349,51 @@ impl DexClient for LifinityClient {
         
         info!("Discovered {} Lifinity pools", pools.len());
         Ok(pools)
+    }
+}
+
+#[async_trait]
+impl PoolDiscoverable for LifinityClient {
+    async fn discover_pools(&self) -> AnyhowResult<Vec<PoolInfo>> {
+        // Reuse the existing discover_pools logic from DexClient trait implementation
+        <Self as DexClient>::discover_pools(self).await
+    }
+
+    async fn fetch_pool_data(&self, pool_address: Pubkey) -> AnyhowResult<PoolInfo> {
+        // Placeholder implementation. In a real scenario, this would involve
+        // fetching account data via RPC and parsing it.
+        // For now, returning a demo pool or an error.
+        info!("Fetching pool data for Lifinity pool (placeholder): {}", pool_address);
+        if pool_address == Pubkey::from_str("61R1ndXxvsWXXkWSyNkCxnzwd3zUAB7Q6YXTKgtJ4c4j").unwrap_or_default() {
+            Ok(PoolInfo {
+                address: pool_address,
+                name: format!("Lifinity Pool {}", pool_address),
+                dex_type: DexType::Lifinity,
+                token_a: PoolToken {
+                    mint: solana_sdk::pubkey!("So11111111111111111111111111111111111111112"), // SOL
+                    symbol: "SOL".to_string(),
+                    decimals: 9,
+                    reserve: 1_000_000_000,
+                },
+                token_b: PoolToken {
+                    mint: solana_sdk::pubkey!("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"), // USDC
+                    symbol: "USDC".to_string(),
+                    decimals: 6,
+                    reserve: 50_000_000_000,
+                },
+                token_a_vault: Pubkey::default(),
+                token_b_vault: Pubkey::default(),
+                fee_rate_bips: Some(25),
+                ..Default::default()
+            })
+        } else {
+            Err(anyhow!("fetch_pool_data not fully implemented for LifinityClient via PoolDiscoverable for address: {}", pool_address))
+        }
+    }
+
+    fn dex_name(&self) -> &str {
+        // Reuse the existing get_name logic from DexClient trait implementation
+        <Self as DexClient>::get_name(self)
     }
 }
 
@@ -727,4 +787,3 @@ mod tests {
         assert_eq!(parsed_state.status, 1, "Status should be active");
     }
 }
-

@@ -2,12 +2,13 @@
 //! API Client for Orca Whirlpools.
 
 use crate::cache::Cache;
-use crate::dex::quote::{DexClient, Quote};
+use crate::dex::quote::{DexClient, Quote, PoolDiscoverable};
 use crate::utils::{PoolInfo, DexType, PoolToken};
 use anyhow::{anyhow, Result as AnyhowResult};
 use async_trait::async_trait;
 use log::info;
 use solana_sdk::pubkey::Pubkey;
+use std::str::FromStr;
 use std::sync::Arc;
 
 #[derive(Debug, Clone)]
@@ -104,5 +105,48 @@ impl DexClient for WhirlpoolClient {
         
         info!("Discovered {} Whirlpool pools", pools.len());
         Ok(pools)
+    }
+}
+
+#[async_trait]
+impl PoolDiscoverable for WhirlpoolClient {
+    async fn discover_pools(&self) -> AnyhowResult<Vec<PoolInfo>> {
+        // Reuse the existing discover_pools logic from DexClient trait implementation
+        <Self as DexClient>::discover_pools(self).await
+    }
+
+    async fn fetch_pool_data(&self, pool_address: Pubkey) -> AnyhowResult<PoolInfo> {
+        // Placeholder implementation.
+        info!("Fetching pool data for Whirlpool (placeholder): {}", pool_address);
+        if pool_address == Pubkey::from_str("HJPjoWUrhoZzkNfRpHuieeFk9WcZWjwy6PBjZ81ngndJ").unwrap_or_default() {
+            Ok(PoolInfo {
+                address: pool_address,
+                name: format!("Whirlpool Pool {}", pool_address),
+                dex_type: DexType::Whirlpool, // Or DexType::Orca if Whirlpool is considered Orca
+                token_a: PoolToken {
+                    mint: solana_sdk::pubkey!("So11111111111111111111111111111111111111112"), // SOL
+                    symbol: "SOL".to_string(),
+                    decimals: 9,
+                    reserve: 1_000_000_000,
+                },
+                token_b: PoolToken {
+                    mint: solana_sdk::pubkey!("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"), // USDC
+                    symbol: "USDC".to_string(),
+                    decimals: 6,
+                    reserve: 50_000_000_000,
+                },
+                token_a_vault: Pubkey::default(),
+                token_b_vault: Pubkey::default(),
+                fee_rate_bips: Some(30),
+                ..Default::default()
+            })
+        } else {
+            Err(anyhow!("fetch_pool_data not fully implemented for WhirlpoolClient via PoolDiscoverable for address: {}", pool_address))
+        }
+    }
+
+    fn dex_name(&self) -> &str {
+        // Reuse the existing get_name logic from DexClient trait implementation
+        <Self as DexClient>::get_name(self)
     }
 }

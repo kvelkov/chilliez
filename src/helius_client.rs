@@ -130,7 +130,7 @@ impl HeliusManager {
     }
     
     /// Create additional clients if using factory
-    pub fn create_additional_client(&self, cluster: Cluster) -> Result<Helius> {
+    pub fn create_additional_client(&self, _cluster: Cluster) -> Result<Helius> {
         error!("Cannot create additional client without factory");
         Err(anyhow::anyhow!("HeliusManager was not created with factory support"))
     }

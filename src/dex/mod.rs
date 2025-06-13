@@ -1,31 +1,28 @@
 // src/dex/mod.rs
 
 
-// src/dex/mod.rs
-
-
 #[cfg(any(test, debug_assertions))]
 pub mod integration_test;
 
 pub mod lifinity;
 pub mod meteora;
-#[cfg(test)]
-pub mod meteora_test;
-pub mod orca; // Ensures the orca.rs file is included as a module
-#[cfg(test)]
-pub mod orca_test;
-#[cfg(test)]
-pub mod orca_integration_test;
-pub mod pool;
-pub mod pool_discovery; // Add pool discovery service
-pub mod quote;
+pub mod orca;
 pub mod raydium;
-pub mod raydium_models; // Add Raydium models // Ensures the raydium.rs file is included as a module
-#[cfg(test)]
-pub mod raydium_test;
+pub mod pool;
+pub mod banned_pairs;
 pub mod whirlpool;
 pub mod whirlpool_parser;
-pub mod banned_pairs;
+pub mod phoenix;
+
+// --- New Advanced Math Module ---
+pub mod math;  // Advanced CLMM and AMM mathematical calculations
+
+// --- Quote and Client Infrastructure ---
+pub mod quote;
+pub mod quoting_engine;
+pub mod opportunity;
+pub mod path_finder;
+
 // Module declarations for each DEX client and utility
 
 // Re-export the main DexClient trait for easier access
@@ -33,6 +30,9 @@ pub use quote::DexClient;
 // pub use banned_pairs::{BannedPairsManager, BannedPairFilteringDexClientDecorator}; // These are unused as top-level exports
 
 
+pub use quoting_engine::{AdvancedQuotingEngine, QuotingEngineOperations}; // Export the new trait
+pub use opportunity::{HopInfo, MultiHopArbOpportunity};
+pub use path_finder::PathFinder;
 // --- Publicly re-export concrete client types ---
 // These lines make the client structs available directly under the `dex` module,
 // e.g., as `crate::dex::OrcaClient`

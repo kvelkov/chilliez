@@ -7,19 +7,11 @@
 use solana_arb_bot::{
     config::Config,
     helius_client::{HeliusManager, HeliusConfig},
-    discovery::PoolDiscoveryService,
     webhooks::{
         PoolMonitoringCoordinator,
         EnhancedWebhookServer,
         PoolEvent,
         PoolEventType,
-    },
-    dex::{
-        orca::OrcaClient,
-        raydium::RaydiumClient,
-        meteora::MeteoraClient,
-        lifinity::LifinityClient,
-        quote::DexClient,
     },
     utils::{PoolInfo, PoolToken, DexType},
 };
@@ -63,15 +55,10 @@ async fn run_enhanced_monitoring_demo(config: Arc<Config>) -> Result<()> {
     let helius_manager = initialize_helius_client().await?;
     info!("✅ Helius client initialized");
 
-    // Step 2: Create pool discovery service
-    let pool_discovery = create_pool_discovery_service().await?;
-    info!("✅ Pool discovery service created");
-
-    // Step 3: Create and initialize pool monitoring coordinator
+    // Step 2: Create and initialize pool monitoring coordinator (no pool discovery needed)
     let mut coordinator = create_pool_monitoring_coordinator(
         config.clone(),
         helius_manager,
-        pool_discovery.clone(),
     )?;
     
     coordinator.initialize().await?;
@@ -114,54 +101,15 @@ async fn initialize_helius_client() -> Result<Arc<HeliusManager>> {
     Ok(Arc::new(helius_manager))
 }
 
-async fn create_pool_discovery_service() -> Result<Arc<PoolDiscoveryService>> {
-    info!("🔍 Creating pool discovery service...");
-    
-    let dex_clients = create_dex_clients().await?;
-    let (discovery_sender, _discovery_receiver) = mpsc::channel(1000);
-    
-    let pool_discovery = Arc::new(PoolDiscoveryService::new(
-        dex_clients,
-        discovery_sender,
-        50,  // batch_size
-        300, // max_pool_age_secs
-        100, // delay_between_batches_ms
-    ));
-    
-    info!("✅ Pool discovery service created");
-    Ok(pool_discovery)
-}
-
-async fn create_dex_clients() -> Result<Vec<Arc<dyn DexClient>>> {
-    let mut clients: Vec<Arc<dyn DexClient>> = Vec::new();
-
-    info!("🔵 Creating Orca client...");
-    clients.push(Arc::new(OrcaClient::new()));
-
-    info!("🟡 Creating Raydium client...");
-    clients.push(Arc::new(RaydiumClient::new()));
-
-    info!("🟣 Creating Meteora client...");
-    clients.push(Arc::new(MeteoraClient::new()));
-
-    info!("🟢 Creating Lifinity client...");
-    clients.push(Arc::new(LifinityClient::new()));
-
-    info!("✅ Created {} DEX clients", clients.len());
-    Ok(clients)
-}
-
 fn create_pool_monitoring_coordinator(
     config: Arc<Config>,
     helius_manager: Arc<HeliusManager>,
-    pool_discovery: Arc<PoolDiscoveryService>,
 ) -> Result<PoolMonitoringCoordinator> {
     info!("🎯 Creating pool monitoring coordinator...");
     
     let coordinator = PoolMonitoringCoordinator::new(
         config,
         helius_manager,
-        pool_discovery,
     )?;
     
     info!("✅ Pool monitoring coordinator created");

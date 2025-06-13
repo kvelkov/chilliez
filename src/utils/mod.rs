@@ -10,6 +10,9 @@ use async_trait::async_trait;
 use serde::{Serialize, Deserialize};
 use std::sync::Arc;
 
+pub mod pool_validation;
+pub mod dex_routing;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PoolInfo {
     pub address: Pubkey,

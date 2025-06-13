@@ -5,9 +5,9 @@
 
 use crate::helius_client::HeliusManager;
 use crate::webhooks::helius_sdk::{HeliusWebhookManager, WebhookConfig};
-use crate::discovery::PoolDiscoveryService;
 use crate::config::Config;
 use crate::utils::PoolInfo;
+use crate::utils::pool_validation::{PoolValidationConfig, validate_single_pool};
 use helius::types::EnhancedTransaction;
 use helius::Helius;
 use anyhow::{Result, Context};
@@ -22,12 +22,11 @@ use solana_sdk::pubkey::Pubkey;
 /// Enhanced Pool Monitoring Coordinator using Helius SDK
 pub struct PoolMonitoringCoordinator {
     config: Arc<Config>,
-    helius_manager: Arc<HeliusManager>,
     webhook_manager: HeliusWebhookManager,
     
-    // Pool discovery and management
-    pool_discovery: Arc<PoolDiscoveryService>,
+    // Pool management and validation
     monitored_pools: Arc<RwLock<HashMap<Pubkey, MonitoredPool>>>,
+    validation_config: PoolValidationConfig,
     
     // Webhook management
     active_webhooks: Arc<RwLock<HashMap<String, WebhookMetadata>>>,
@@ -126,7 +125,6 @@ impl PoolMonitoringCoordinator {
     pub fn new(
         config: Arc<Config>,
         helius_manager: Arc<HeliusManager>,
-        pool_discovery: Arc<PoolDiscoveryService>,
     ) -> Result<Self> {
         info!("🎯 Initializing Pool Monitoring Coordinator with Helius SDK");
         
@@ -156,10 +154,9 @@ impl PoolMonitoringCoordinator {
         
         Ok(Self {
             config,
-            helius_manager,
             webhook_manager,
-            pool_discovery,
             monitored_pools: Arc::new(RwLock::new(HashMap::new())),
+            validation_config: PoolValidationConfig::default(),
             active_webhooks: Arc::new(RwLock::new(HashMap::new())),
             webhook_addresses: Arc::new(RwLock::new(HashSet::new())),
             event_sender,
@@ -195,10 +192,11 @@ impl PoolMonitoringCoordinator {
         let stats = self.stats.clone();
         let monitored_pools = self.monitored_pools.clone();
         let config = self.config.clone();
+        let validation_config = self.validation_config.clone();
         
         // Start event processing task
         let _event_processor = tokio::spawn(async move {
-            Self::process_events(event_receiver, stats, monitored_pools, config).await
+            Self::process_events(event_receiver, stats, monitored_pools, config, validation_config).await
         });
         
         // Start pool discovery and monitoring
@@ -288,6 +286,7 @@ impl PoolMonitoringCoordinator {
         stats: Arc<RwLock<PoolMonitorStats>>,
         monitored_pools: Arc<RwLock<HashMap<Pubkey, MonitoredPool>>>,
         _config: Arc<Config>,
+        validation_config: PoolValidationConfig,
     ) {
         info!("🔄 Starting event processing loop...");
         
@@ -321,6 +320,14 @@ impl PoolMonitoringCoordinator {
                 PoolEvent::NewPoolDetected { pool_address, pool_info } => {
                     info!("🆕 New pool detected: {}", pool_address);
                     
+                    // Validate the pool before adding it to monitoring
+                    if !validate_single_pool(&pool_info, &validation_config) {
+                        warn!("🚫 Pool {} failed validation, not adding to monitoring", pool_address);
+                        // Note: We don't have a pools_rejected field, so just log
+                        continue;
+                    }
+                    
+                    info!("✅ Pool {} passed validation, adding to monitoring", pool_address);
                     let monitored_pool = MonitoredPool {
                         pool_info,
                         webhook_id: None,
@@ -330,6 +337,7 @@ impl PoolMonitoringCoordinator {
                     };
                     
                     monitored_pools.write().await.insert(pool_address, monitored_pool);
+                    stats.write().await.total_pools_monitored += 1;
                 }
                 PoolEvent::PoolRemoved { pool_address } => {
                     info!("🗑️ Pool removed: {}", pool_address);
@@ -471,6 +479,17 @@ impl PoolMonitoringCoordinator {
     pub fn send_event(&self, event: PoolEvent) -> Result<()> {
         self.event_sender.send(event)
             .map_err(|e| anyhow::anyhow!("Failed to send event: {}", e))
+    }
+    
+    /// Update pool validation configuration
+    pub fn set_validation_config(&mut self, config: PoolValidationConfig) {
+        info!("🔧 Updating pool validation configuration");
+        self.validation_config = config;
+    }
+    
+    /// Get current pool validation configuration
+    pub fn get_validation_config(&self) -> &PoolValidationConfig {
+        &self.validation_config
     }
 }
 

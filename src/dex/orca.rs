@@ -1,8 +1,7 @@
 // src/dex/orca.rs
 //! Orca client and parser for on-chain data and instruction building.
 //! This implementation leverages the official orca_whirlpools SDK for accuracy.
-
-use crate::dex::quote::{DexClient, Quote, SwapInfo};
+use crate::dex::{quote::{DexClient, Quote, SwapInfo, PoolDiscoverable}, math::orca};
 use crate::solana::rpc::SolanaRpcClient;
 use crate::utils::{PoolInfo, PoolParser as UtilsPoolParser};
 use crate::utils::{DexType, PoolToken}; // Assuming DexType and PoolToken are in utils
@@ -18,6 +17,7 @@ use log::{info, warn};
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 use chrono;
+// Removed duplicate PoolDiscoverable import
 
 /// The program ID for the Orca Whirlpools program.
 pub const ORCA_WHIRLPOOL_PROGRAM_ID: Pubkey = solana_sdk::pubkey!("whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc");
@@ -203,39 +203,60 @@ impl DexClient for OrcaClient {
         "Orca"
     }
 
-    /// Calculates a quote using the official Orca SDK math.
+    /// Calculates a quote using enhanced Orca math for both Whirlpools and legacy pools.
     fn calculate_onchain_quote(
         &self,
-        _pool: &PoolInfo,
-        _input_amount: u64,
+        pool: &PoolInfo,
+        input_amount: u64,
     ) -> AnyhowResult<Quote> {
-        // This is a simplified example. A full implementation requires fetching the whirlpool,
-        // tick arrays, and oracle accounts to pass to the quote function.
-        // For now, we'll return an error indicating what's needed.
-        return Err(anyhow!( // Keep return for clarity, or remove semicolon from line below
-            "Orca quote calculation requires the full Whirlpool and TickArray accounts, not just PoolInfo."
-        ));
+        if pool.token_a.reserve == 0 || pool.token_b.reserve == 0 {
+            return Err(anyhow!("Orca pool {} has zero reserves.", pool.address));
+        }
 
-        // TODO: The actual implementation will look something like this:
-        // let whirlpool = ...; // Fetch and deserialize the full Whirlpool account.
-        // let tick_arrays = [...]; // Fetch and deserialize the necessary TickArray accounts.
-        // let quote = quote_from_whirlpool(
-        //     &whirlpool,
-        //     input_amount,
-        //     pool.token_a.mint,
-        //     &tick_arrays,
-        //     // ... other params
-        // )?;
-        //
-        // Ok(Quote {
-        //     input_token: pool.token_a.symbol.clone(),
-        //     output_token: pool.token_b.symbol.clone(),
-        //     input_amount,
-        //     output_amount: quote.estimated_amount_out,
-        //     dex: self.get_name().to_string(),
-        //     route: vec![pool.address],
-        //     slippage_estimate: Some(quote.estimated_slippage),
-        // })
+        // Try to determine if this is a Whirlpool (CLMM) or legacy constant product pool
+        // For now, we'll use heuristics - in production this would check the program ID
+        let is_whirlpool = pool.fee_numerator.is_none() || pool.fee_denominator.is_none();
+        
+        let output_amount = if is_whirlpool {
+            // Use CLMM calculation for Whirlpools
+            // Default values for testing - in production these would be fetched from on-chain data
+            let sqrt_price_x64 = (pool.token_b.reserve as u128 * (1u128 << 64)) / pool.token_a.reserve as u128;
+            let liquidity = ((pool.token_a.reserve as u128 * pool.token_b.reserve as u128) as f64).sqrt() as u128;
+            let fee_rate = 300; // Default 0.3% fee in hundredths of bps
+            
+            orca::calculate_whirlpool_output(
+                input_amount,
+                sqrt_price_x64,
+                liquidity,
+                fee_rate,
+            ).map_err(|e| anyhow!("Orca Whirlpool calculation error: {}", e))?
+        } else {
+            // Use constant product calculation for legacy pools
+            let fee_num = pool.fee_numerator.unwrap_or(3);
+            let fee_den = pool.fee_denominator.unwrap_or(1000);
+            
+            orca::calculate_legacy_orca_output(
+                input_amount,
+                pool.token_a.reserve,
+                pool.token_b.reserve,
+                fee_num,
+                fee_den,
+            ).map_err(|e| anyhow!("Orca legacy calculation error: {}", e))?
+        };
+        
+        // Validate the output is reasonable
+        crate::dex::math::utils::validate_output(input_amount, output_amount, 1000) // 10% max slippage check
+            .map_err(|e| anyhow!("Orca output validation failed: {}", e))?;
+
+        Ok(Quote {
+            input_token: pool.token_a.symbol.clone(),
+            output_token: pool.token_b.symbol.clone(),
+            input_amount,
+            output_amount,
+            dex: self.get_name().to_string(),
+            route: vec![pool.address],
+            slippage_estimate: None, // TODO: Calculate actual slippage estimate
+        })
     }
 
     fn get_swap_instruction(
@@ -309,6 +330,51 @@ impl DexClient for OrcaClient {
         
         info!("Discovered {} liquid Orca pools (TVL >= ${})", filtered_pools.len(), min_tvl);
         Ok(filtered_pools)
+    }
+}
+
+#[async_trait]
+impl PoolDiscoverable for OrcaClient {
+    async fn discover_pools(&self) -> AnyhowResult<Vec<PoolInfo>> {
+        // Reuse the existing discover_pools logic from DexClient trait implementation
+        // This method already fetches from the Orca API.
+        <Self as DexClient>::discover_pools(self).await
+    }
+
+    async fn fetch_pool_data(&self, pool_address: Pubkey) -> AnyhowResult<PoolInfo> {
+        // Placeholder implementation.
+        // A real implementation would fetch the specific pool from the API or RPC
+        // and convert it using `convert_api_pool_to_pool_info` or parse on-chain data.
+        info!("Fetching pool data for Orca pool (placeholder): {}", pool_address);
+
+        // Example: Return a demo pool if it's a known address, otherwise error.
+        // This is just for demonstration; a real implementation would fetch live data.
+        if pool_address == Pubkey::from_str("HJPjoWUrhoZzkNfRpHuieeFk9WcZWjwy6PBjZ81ngndJ").unwrap_or_default() {
+             Ok(PoolInfo {
+                address: pool_address,
+                name: format!("Orca Pool {}", pool_address),
+                dex_type: DexType::Orca,
+                token_a: PoolToken {
+                    mint: solana_sdk::pubkey!("So11111111111111111111111111111111111111112"), // SOL
+                    symbol: "SOL".to_string(),
+                    decimals: 9,
+                    reserve: 1_000_000_000, // Demo reserve
+                },
+                token_b: PoolToken {
+                    mint: solana_sdk::pubkey!("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"), // USDC
+                    symbol: "USDC".to_string(),
+                    decimals: 6,
+                    reserve: 50_000_000_000, // Demo reserve
+                },
+                ..Default::default()
+            })
+        } else {
+            Err(anyhow!("fetch_pool_data not fully implemented for OrcaClient via PoolDiscoverable for address: {}", pool_address))
+        }
+    }
+
+    fn dex_name(&self) -> &str {
+        <Self as DexClient>::get_name(self)
     }
 }
 

@@ -189,6 +189,11 @@ mod tests {
             cycle_interval_seconds: Some(5),
             pool_read_timeout_ms: Some(1000),
             log_level: Some("info".to_string()),
+            
+            // Webhook Configuration (test values)
+            webhook_port: Some(8080),
+            webhook_url: Some("http://localhost:8080/webhook".to_string()),
+            enable_webhooks: false,
         })
     }
 

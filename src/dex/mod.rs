@@ -14,11 +14,13 @@ pub mod meteora_test;
 pub mod orca; // Ensures the orca.rs file is included as a module
 #[cfg(test)]
 pub mod orca_test;
-// pub mod phoenix;
+#[cfg(test)]
+pub mod orca_integration_test;
 pub mod pool;
 pub mod pool_discovery; // Add pool discovery service
 pub mod quote;
-pub mod raydium; // Ensures the raydium.rs file is included as a module
+pub mod raydium;
+pub mod raydium_models; // Add Raydium models // Ensures the raydium.rs file is included as a module
 #[cfg(test)]
 pub mod raydium_test;
 pub mod whirlpool;

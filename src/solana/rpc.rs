@@ -136,6 +136,7 @@ impl SolanaRpcClient {
                 min_context_slot: None,
             },
             with_context: Some(false),
+            sort_results: None,
         };
 
         let config_clone = config.clone();

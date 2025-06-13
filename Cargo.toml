@@ -7,27 +7,34 @@ edition = "2021"
 # Features can be added here as needed
 
 [dependencies]
-# === Solana Core ===
-solana-client = "1.18.3"
-solana-sdk = "1.18.3"
-solana-account-decoder = "1.18.3"
-solana-transaction-status = "1.18.3"
-spl-token = "4.0.0"
-spl-associated-token-account = "2.3.0"
-solana-program = "1.18.3"
+# === Helius SDK Integration ===
+helius = "0.2.6"           # Official Helius Rust SDK for enhanced webhook performance
+
+# === Solana Core (Updated for Helius SDK compatibility) ===
+solana-client = "2.1.4"
+solana-sdk = "2.1.4"
+solana-account-decoder = "2.1.4"
+solana-transaction-status = "2.1.4"
+spl-token = "6.0.0"
+spl-associated-token-account = "4.0.0"
+solana-program = "2.1.4"
 
 # === Async & Runtime ===
 tokio = { version = "1.36.0", features = ["full"] }
 futures = "0.3.30"
 async-trait = "0.1.74"
 
+# === Enhanced Logging (upgraded from env_logger) ===
+tracing = "0.1.40"         # Better structured logging for production
+tracing-subscriber = { version = "0.3.18", features = ["env-filter", "json"] }
+
 # === Data & Config ===
 serde = { version = "1.0.197", features = ["derive"] }
 serde_json = "1.0.114"
 bytemuck = { version = "1.15.0", features = ["derive"] }
 anyhow = "1.0.75"
-log = "0.4.20"
-env_logger = "0.11.2"
+log = "0.4.20"             # Keep for compatibility during migration
+env_logger = "0.11.2"      # Will be deprecated in favor of tracing
 dotenv = "0.15.0"
 config = { version = "0.13", features = ["toml"] }
 csv = "1.1"
@@ -35,12 +42,19 @@ csv = "1.1"
 # === Networking ===
 reqwest = { version = "0.11.27", features = ["json", "rustls-tls"], default-features = false }
 
+# === Web Server (for webhooks - keeping for migration compatibility) ===
+axum = { version = "0.7.4", features = ["json"] }  # Will be phased out
+tower = "0.4.13"                                    # Will be phased out
+tower-http = { version = "0.5.0", features = ["cors"] }  # Will be phased out
+warp = "0.3"               # Alternative lightweight server for local endpoints
+
 # === Utilities ===
 once_cell = "1.18.0"
-chrono = "0.4.38"
+chrono = { version = "0.4.38", features = ["serde"] }  # Enhanced chrono features
 rand = "0.8.5"
 base64 = "0.22.0"
 itertools = "0.12.0"
+regex = "1.10.0"           # For API key validation and pattern matching
 
 # === Redis Cache ===
 redis = { version = "0.25.0", features = ["aio", "tokio-comp", "connection-manager"] }

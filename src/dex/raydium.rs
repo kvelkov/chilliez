@@ -3,12 +3,13 @@
 //! This implementation follows the official Raydium V4 layout for maximum accuracy.
 
 use crate::dex::quote::{DexClient, Quote, SwapInfo, PoolDiscoverable};
+use crate::dex::raydium_models::LiquidityFile;
 use crate::solana::rpc::SolanaRpcClient;
 use crate::utils::{DexType, PoolInfo, PoolParser as UtilsPoolParser, PoolToken};
 use anyhow::{anyhow, Result as AnyhowResult};
 use async_trait::async_trait;
 use bytemuck::{Pod, Zeroable};
-use log::info;
+use log::{info, warn};
 use solana_sdk::{
     instruction::{AccountMeta, Instruction},
     program_pack::Pack,
@@ -16,9 +17,13 @@ use solana_sdk::{
 };
 use spl_token::state::{Account as TokenAccount, Mint};
 use std::sync::Arc;
+use std::str::FromStr;
 
 // Official Program ID from Raydium's documentation.
 pub const RAYDIUM_LIQUIDITY_POOL_V4_PROGRAM_ID: Pubkey = solana_sdk::pubkey!("675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8");
+
+// Raydium API endpoint for pool discovery
+const RAYDIUM_LIQUIDITY_JSON_URL: &str = "https://api.raydium.io/v2/sdk/liquidity/mainnet.json";
 
 // Expected account size for Raydium V4 pool state (verified from official implementations)
 pub const RAYDIUM_V4_POOL_STATE_SIZE: usize = 752;
@@ -327,62 +332,68 @@ impl DexClient for RaydiumClient {
     /// A vector of `PoolInfo` structs, potentially with live market data missing,
     /// which will be fetched later in a batched call.
     async fn discover_pools(&self) -> AnyhowResult<Vec<PoolInfo>> {
-        info!("Starting Raydium pool discovery using official pool list strategy");
+        info!("Starting Raydium pool discovery using official API");
         
-        // For the foundational implementation, we'll start with known high-volume Raydium pools
-        // In a production implementation, this would fetch from:
-        // - Official Raydium JSON endpoint: https://api.raydium.io/v2/sdk/liquidity/mainnet.json
-        // - Then enrich with live on-chain data using batched RPC calls
+        // 1. Fetch the JSON file
+        let response = reqwest::get(RAYDIUM_LIQUIDITY_JSON_URL).await
+            .map_err(|e| anyhow!("Failed to fetch Raydium liquidity data: {}", e))?;
         
-        // Known Raydium AMM V4 pools for initial testing
-        let known_pools = vec![
-            // SOL/USDC pool - one of the highest volume pools
-            "58oQChx4yWmvKdwLLZzBi4ChoCc2fqCUWBkwMihLYQo2",
-            // RAY/USDC pool
-            "6UmmUiYoBjSrhakAobJw8BvkmJtDVxaeBtbt7rxWo1mg",
-            // RAY/SOL pool  
-            "AVs9TA4nWDzfPJE9gGVNJMVhcQy3V9PGazuz33BfG2RA",
-        ];
+        let liquidity_file: LiquidityFile = response.json().await
+            .map_err(|e| anyhow!("Failed to parse Raydium liquidity JSON: {}", e))?;
 
-        let mut pools = Vec::new();
-        
-        for pool_str in known_pools {
-            let pool_address = pool_str.parse::<Pubkey>()
-                .map_err(|e| anyhow!("Failed to parse pool address {}: {}", pool_str, e))?;
-            
-            // Create demo PoolInfo - in production this would fetch real data
-            let pool_info = PoolInfo {
-                address: pool_address,
-                name: format!("Raydium Pool {}", pool_str),
+        info!("Successfully fetched Raydium liquidity data with {} official pools", 
+              liquidity_file.official.len());
+
+        // 2. Transform the JSON data into placeholder PoolInfo structs
+        let pools: Vec<PoolInfo> = liquidity_file.official.into_iter().filter_map(|pool| {
+            // We use filter_map to easily skip any pools that fail to parse
+            let pool_pubkey = Pubkey::from_str(&pool.id).ok()?;
+            let base_mint = Pubkey::from_str(&pool.base_mint).ok()?;
+            let quote_mint = Pubkey::from_str(&pool.quote_mint).ok()?;
+            let base_vault = Pubkey::from_str(&pool.base_vault).ok()?;
+            let quote_vault = Pubkey::from_str(&pool.quote_vault).ok()?;
+
+            // Extract symbols to avoid ownership issues  
+            let base_symbol = pool.base_symbol.unwrap_or_else(|| "BASE".to_string());
+            let quote_symbol = pool.quote_symbol.unwrap_or_else(|| "QUOTE".to_string());
+
+            // NOTE: At this stage, we only populate static data.
+            // Live data like reserves will be fetched later.
+            Some(PoolInfo {
+                address: pool_pubkey,
+                name: format!("Raydium {}/{}", base_symbol, quote_symbol),
                 dex_type: DexType::Raydium,
                 token_a: PoolToken {
-                    mint: solana_sdk::pubkey!("So11111111111111111111111111111111111111112"), // SOL
-                    symbol: "SOL".to_string(),
-                    decimals: 9,
-                    reserve: 1_000_000_000, // Demo reserve
+                    mint: base_mint,
+                    symbol: base_symbol,
+                    decimals: pool.base_decimals.unwrap_or(9),
+                    reserve: 0, // Will be fetched later with live data
                 },
                 token_b: PoolToken {
-                    mint: solana_sdk::pubkey!("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"), // USDC  
-                    symbol: "USDC".to_string(),
-                    decimals: 6,
-                    reserve: 50_000_000_000, // Demo reserve
+                    mint: quote_mint,
+                    symbol: quote_symbol,
+                    decimals: pool.quote_decimals.unwrap_or(6),
+                    reserve: 0, // Will be fetched later with live data
                 },
-                token_a_vault: Pubkey::default(), // Demo vault addresses
-                token_b_vault: Pubkey::default(),
-                fee_numerator: Some(25),    // 0.25% fee
+                token_a_vault: base_vault,
+                token_b_vault: quote_vault,
+                fee_numerator: Some(25),    // Default Raydium AMM fee (0.25%)
                 fee_denominator: Some(10000),
-                last_update_timestamp: 0, // Demo timestamp
-                sqrt_price: Some(1000000000000000000), // Demo sqrt price
-                liquidity: Some(5000000000000000000),   // Demo liquidity
-                tick_current_index: Some(0),
-                tick_spacing: Some(64),
-                fee_rate_bips: Some(25),
-            };
-            
-            pools.push(pool_info);
-        }
+                last_update_timestamp: 0, // Will be updated with live data
+                sqrt_price: None,         // Will be fetched later
+                liquidity: None,          // Will be fetched later
+                tick_current_index: None,
+                tick_spacing: None,
+                fee_rate_bips: Some(25),  // 0.25% in basis points
+            })
+        }).collect();
+
+        info!("Successfully parsed {} Raydium pools from official API", pools.len());
         
-        info!("Discovered {} Raydium pools", pools.len());
+        if pools.is_empty() {
+            warn!("No valid Raydium pools found in API response");
+        }
+
         Ok(pools)
     }
 }
@@ -412,28 +423,69 @@ fn instruction_data_to_bytes(instruction: &RaydiumSwapInstruction) -> AnyhowResu
 #[async_trait]
 impl PoolDiscoverable for RaydiumClient {
     async fn discover_pools(&self) -> AnyhowResult<Vec<PoolInfo>> {
-        info!("Starting Raydium pool discovery using official pool list strategy");
+        info!("Starting RaydiumClient pool discovery using official API");
         
-        // For the foundational implementation, we'll start with known high-volume Raydium pools
-        // In a production implementation, this would fetch from:
-        // - Official Raydium JSON endpoint: https://api.raydium.io/v2/sdk/liquidity/mainnet.json
-        // - Or getProgramAccounts as a fallback
+        // 1. Fetch the JSON file
+        let response = reqwest::get(RAYDIUM_LIQUIDITY_JSON_URL).await
+            .map_err(|e| anyhow!("Failed to fetch Raydium liquidity data: {}", e))?;
         
-        let known_raydium_pools = get_known_raydium_pools();
-        let mut discovered_pools = Vec::new();
+        let liquidity_file: LiquidityFile = response.json().await
+            .map_err(|e| anyhow!("Failed to parse Raydium liquidity JSON: {}", e))?;
+
+        info!("Successfully fetched Raydium liquidity data with {} official pools", 
+              liquidity_file.official.len());
+
+        // 2. Transform the JSON data into placeholder PoolInfo structs
+        let pools: Vec<PoolInfo> = liquidity_file.official.into_iter().filter_map(|pool| {
+            // We use filter_map to easily skip any pools that fail to parse
+            let pool_pubkey = Pubkey::from_str(&pool.id).ok()?;
+            let base_mint = Pubkey::from_str(&pool.base_mint).ok()?;
+            let quote_mint = Pubkey::from_str(&pool.quote_mint).ok()?;
+            let base_vault = Pubkey::from_str(&pool.base_vault).ok()?;
+            let quote_vault = Pubkey::from_str(&pool.quote_vault).ok()?;
+
+            // Extract symbols to avoid ownership issues  
+            let base_symbol = pool.base_symbol.unwrap_or_else(|| "BASE".to_string());
+            let quote_symbol = pool.quote_symbol.unwrap_or_else(|| "QUOTE".to_string());
+
+            // NOTE: At this stage, we only populate static data.
+            // Live data like reserves will be fetched later.
+            Some(PoolInfo {
+                address: pool_pubkey,
+                name: format!("Raydium {}/{}", base_symbol, quote_symbol),
+                dex_type: DexType::Raydium,
+                token_a: PoolToken {
+                    mint: base_mint,
+                    symbol: base_symbol,
+                    decimals: pool.base_decimals.unwrap_or(9),
+                    reserve: 0, // Will be fetched later with live data
+                },
+                token_b: PoolToken {
+                    mint: quote_mint,
+                    symbol: quote_symbol,
+                    decimals: pool.quote_decimals.unwrap_or(6),
+                    reserve: 0, // Will be fetched later with live data
+                },
+                token_a_vault: base_vault,
+                token_b_vault: quote_vault,
+                fee_numerator: Some(25),    // Default Raydium AMM fee (0.25%)
+                fee_denominator: Some(10000),
+                last_update_timestamp: 0, // Will be updated with live data
+                sqrt_price: None,         // Will be fetched later
+                liquidity: None,          // Will be fetched later
+                tick_current_index: None,
+                tick_spacing: None,
+                fee_rate_bips: Some(25),  // 0.25% in basis points
+            })
+        }).collect();
+
+        info!("Successfully parsed {} Raydium pools from official API", pools.len());
         
-        info!("Attempting to discover {} known Raydium pools", known_raydium_pools.len());
-        
-        // For now, return the known pools as demo data
-        // TODO: Implement actual RPC calls to fetch live pool data
-        for pool_address in known_raydium_pools {
-            // Create a demo pool info for each known address
-            let pool_info = create_demo_raydium_pool(pool_address);
-            discovered_pools.push(pool_info);
+        if pools.is_empty() {
+            warn!("No valid Raydium pools found in API response");
         }
-        
-        info!("Successfully discovered {} Raydium pools", discovered_pools.len());
-        Ok(discovered_pools)
+
+        Ok(pools)
     }
 
     async fn fetch_pool_data(&self, pool_address: Pubkey) -> AnyhowResult<PoolInfo> {
@@ -451,23 +503,7 @@ impl PoolDiscoverable for RaydiumClient {
     }
 }
 
-/// Returns a list of known high-volume Raydium AMM V4 pool addresses.
-/// This is a foundational implementation that would be replaced with API calls
-/// to official Raydium endpoints in production.
-fn get_known_raydium_pools() -> Vec<Pubkey> {
-    // Known high-volume Raydium pools on mainnet
-    vec![
-        // SOL/USDC pool
-        "8tzS7SkUZyHPQY7gLqsMCXZ5EDCgjESUHcB17tiR1h3Z".parse().expect("Valid Raydium SOL/USDC pool address"),
-        // RAY/SOL pool  
-        "6UmmUiYoBjSrhakAobJw8BvkmJtDVxaeBtbt7rxWo1mg".parse().expect("Valid Raydium RAY/SOL pool address"),
-        // RAY/USDC pool
-        "6UmmUiYoBjSrhakAobJw8BvkmJtDVxaeBtbt7rxWo1mg".parse().expect("Valid Raydium RAY/USDC pool address"),
-        // USDT/USDC pool
-        "7XawhbbxtsRcQA8KTkHT9f9nc6d69UwqCDh6U5EEbEmX".parse().expect("Valid Raydium USDT/USDC pool address"),
-        // More known pools can be added here...
-    ]
-}
+
 
 /// Creates a demo PoolInfo struct for testing the discovery system.
 /// This provides realistic test data that matches the expected PoolInfo structure.

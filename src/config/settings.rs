@@ -47,6 +47,11 @@ pub struct Config {
     pub ws_update_channel_size: Option<usize>,
     pub congestion_update_interval_secs: Option<u64>,
     pub cycle_interval_seconds: Option<u64>,
+    
+    // Webhook Configuration
+    pub webhook_port: Option<u16>,
+    pub webhook_url: Option<String>,
+    pub enable_webhooks: bool,
 }
 
 impl Config {
@@ -124,6 +129,11 @@ impl Config {
             ws_update_channel_size: env::var("WS_UPDATE_CHANNEL_SIZE").ok().and_then(|s| s.parse().ok()),
             congestion_update_interval_secs: env::var("CONGESTION_UPDATE_INTERVAL_SECS").ok().and_then(|s| s.parse().ok()),
             cycle_interval_seconds: env::var("CYCLE_INTERVAL_SECONDS").ok().and_then(|s| s.parse().ok()),
+            
+            // Webhook Configuration
+            webhook_port: env::var("WEBHOOK_PORT").ok().and_then(|s| s.parse().ok()),
+            webhook_url: env::var("WEBHOOK_URL").ok(),
+            enable_webhooks: env::var("ENABLE_WEBHOOKS").unwrap_or_else(|_| "false".to_string()).parse().unwrap_or(false),
         }
     }
 
@@ -174,6 +184,11 @@ impl Config {
             cycle_interval_seconds: Some(5),
             pool_read_timeout_ms: Some(1000),
             log_level: Some("info".to_string()),
+            
+            // Webhook Configuration (test defaults)
+            webhook_port: Some(8080),
+            webhook_url: Some("http://localhost:8080/webhook".to_string()),
+            enable_webhooks: false,
         }
     }
 

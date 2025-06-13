@@ -10,7 +10,7 @@ use crate::{
     error::ArbError,
     metrics::Metrics,
     solana::{rpc::SolanaRpcClient, websocket::SolanaWebsocketManager},
-    utils::PoolInfo,
+    utils::{PoolInfo, PoolParser},
 };
 
 use log::{debug, error, info, warn};
@@ -483,6 +483,143 @@ impl ArbitrageEngine {
             current_threshold,
             self.dex_providers.len()
         )
+    }
+
+    /// Fetches live reserve data for pools using batched RPC calls
+    /// This implements Task 3.2 from the Pool Discovery Service plan
+    pub async fn fetch_live_pool_reserves(&self, pools: &mut Vec<PoolInfo>) -> Result<usize, ArbError> {
+        let start_time = Instant::now();
+        
+        if pools.is_empty() {
+            return Ok(0);
+        }
+
+        let rpc_client = match &self.rpc_client {
+            Some(client) => client,
+            None => {
+                warn!("No RPC client available for fetching live pool reserves");
+                return Err(ArbError::ConfigError("No RPC client available".to_string()));
+            }
+        };
+
+        // Extract all pool addresses for batched fetching
+        let pool_addresses: Vec<Pubkey> = pools.iter().map(|pool| pool.address).collect();
+        
+        info!("Fetching live reserve data for {} pools using batched RPC call", pool_addresses.len());
+
+        // Use batched RPC call to fetch all pool account data efficiently
+        match rpc_client.primary_client.get_multiple_accounts(&pool_addresses).await {
+            Ok(accounts) => {
+                let mut updated_count = 0;
+                
+                // Process each account and update corresponding pool
+                for (i, account_option) in accounts.iter().enumerate() {
+                    if let Some(account) = account_option {
+                        let pool = &mut pools[i];
+                        
+                        // Try to parse pool data using existing pool parsers
+                        if let Err(e) = self.update_pool_reserves_from_account_data(pool, &account.data).await {
+                            debug!("Failed to parse pool {} reserves: {}", pool.address, e);
+                            continue;
+                        }
+                        
+                        updated_count += 1;
+                    } else {
+                        warn!("Pool account {} not found on-chain", pool_addresses[i]);
+                    }
+                }
+
+                let elapsed = start_time.elapsed();
+                info!("Successfully updated reserves for {}/{} pools in {}ms", 
+                      updated_count, pools.len(), elapsed.as_millis());
+
+                // Update metrics
+                let mut metrics = self.metrics.lock().await;
+                metrics.log_pools_fetched(updated_count);
+
+                Ok(updated_count)
+            }
+            Err(e) => {
+                error!("Failed to fetch pool accounts: {}", e);
+                Err(ArbError::RpcError(format!("Batched account fetch failed: {}", e)))
+            }
+        }
+    }
+
+    /// Updates pool reserves from raw account data using appropriate parser
+    async fn update_pool_reserves_from_account_data(&self, pool: &mut PoolInfo, account_data: &[u8]) -> Result<(), ArbError> {
+        let rpc_client = match &self.rpc_client {
+            Some(client) => client,
+            None => return Err(ArbError::ConfigError("No RPC client available".to_string())),
+        };
+
+        // Determine which DEX parser to use based on pool's dex_type
+        match pool.dex_type {
+            crate::utils::DexType::Raydium => {
+                // Use Raydium parser to extract reserve data
+                let parser = crate::dex::raydium::RaydiumPoolParser;
+                match parser.parse_pool_data(pool.address, account_data, rpc_client).await {
+                    Ok(parsed_pool) => {
+                        // Update reserves with live data
+                        pool.token_a.reserve = parsed_pool.token_a.reserve;
+                        pool.token_b.reserve = parsed_pool.token_b.reserve;
+                        pool.last_update_timestamp = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_secs();
+                        
+                        // Update other live fields if available
+                        if let Some(sqrt_price) = parsed_pool.sqrt_price {
+                            pool.sqrt_price = Some(sqrt_price);
+                        }
+                        if let Some(liquidity) = parsed_pool.liquidity {
+                            pool.liquidity = Some(liquidity);
+                        }
+                    }
+                    Err(e) => {
+                        return Err(ArbError::ParseError(format!("Failed to parse Raydium pool {}: {}", pool.address, e)));
+                    }
+                }
+            }
+            crate::utils::DexType::Orca => {
+                // Use Orca parser when available
+                let parser = crate::dex::orca::OrcaPoolParser;
+                match parser.parse_pool_data(pool.address, account_data, rpc_client).await {
+                    Ok(parsed_pool) => {
+                        pool.token_a.reserve = parsed_pool.token_a.reserve;
+                        pool.token_b.reserve = parsed_pool.token_b.reserve;
+                        pool.last_update_timestamp = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_secs();
+                    }
+                    Err(e) => {
+                        warn!("Failed to parse Orca pool {} reserves: {}", pool.address, e);
+                        return Err(ArbError::ParseError(format!("Failed to parse Orca pool: {}", e)));
+                    }
+                }
+            }
+            crate::utils::DexType::Meteora => {
+                // Use Meteora parser when available  
+                warn!("Meteora live reserve fetching not yet fully implemented for pool {}", pool.address);
+                return Err(ArbError::ParseError("Meteora parser not fully implemented".to_string()));
+            }
+            crate::utils::DexType::Lifinity => {
+                // Use Lifinity parser when available
+                warn!("Lifinity live reserve fetching not yet fully implemented for pool {}", pool.address);
+                return Err(ArbError::ParseError("Lifinity parser not fully implemented".to_string()));
+            }
+            crate::utils::DexType::Whirlpool => {
+                // Use Whirlpool parser when available
+                warn!("Whirlpool live reserve fetching not yet fully implemented for pool {}", pool.address);
+                return Err(ArbError::ParseError("Whirlpool parser not fully implemented".to_string()));
+            }
+            crate::utils::DexType::Unknown(_) => {
+                return Err(ArbError::ParseError(format!("Unknown DEX type for pool {}", pool.address)));
+            }
+        }
+        
+        Ok(())
     }
 
     pub async fn shutdown(&self) -> Result<(), ArbError> {

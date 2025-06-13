@@ -4,6 +4,7 @@ mod cache;
 mod config;
 mod utils;
 mod dex;
+mod discovery;
 mod error;
 mod metrics;
 mod solana;
@@ -245,6 +246,71 @@ async fn main() -> MainResult<()> {
         dex_api_clients.clone(),
     ));
     info!("ArbitrageEngine initialized.");
+
+    // Setup new PoolDiscoveryService with mpsc channel
+    info!("Setting up new PoolDiscoveryService...");
+    let (pool_sender, mut pool_receiver) = tokio::sync::mpsc::channel::<Vec<crate::utils::PoolInfo>>(100);
+    
+    let new_pool_discovery_service = discovery::PoolDiscoveryService::new(
+        dex_api_clients.clone(),
+        pool_sender,
+        100, // batch_size
+        300, // max_pool_age_secs
+        100, // delay_between_batches_ms
+    );
+    
+    info!("New PoolDiscoveryService initialized with {} DEX clients: {:?}", 
+          new_pool_discovery_service.client_count(),
+          new_pool_discovery_service.get_client_names());
+    
+    // Start pool discovery service in background
+    let _discovery_service_handle = {
+        let service = new_pool_discovery_service;
+        tokio::spawn(async move {
+            info!("Starting continuous pool discovery...");
+            if let Err(e) = service.run_continuous_discovery(300).await { // 5 minute intervals
+                error!("Pool discovery service failed: {}", e);
+            }
+        })
+    };
+    
+    // Start pool receiver to process discovered pools
+    let _pool_processing_handle = {
+        let pools_map_clone = pools_map.clone();
+        let metrics_clone = metrics.clone();
+        let arbitrage_engine_clone = arbitrage_engine.clone();
+        tokio::spawn(async move {
+            info!("Starting pool receiver...");
+            while let Some(mut discovered_pools) = pool_receiver.recv().await {
+                info!("Received {} pools from discovery service", discovered_pools.len());
+                
+                // Fetch live reserve data for all discovered pools using ArbitrageEngine
+                info!("Fetching live reserve data for {} pools...", discovered_pools.len());
+                match arbitrage_engine_clone.fetch_live_pool_reserves(&mut discovered_pools).await {
+                    Ok(updated_count) => {
+                        info!("Successfully updated live reserves for {}/{} pools", updated_count, discovered_pools.len());
+                    }
+                    Err(e) => {
+                        error!("Failed to fetch live reserves: {}. Using static data only.", e);
+                        // Continue with static data
+                    }
+                }
+                
+                // Update the pools map with discovered pools (now with live data)
+                let mut pools_write = pools_map_clone.write().await;
+                for pool in discovered_pools {
+                    pools_write.insert(pool.address, Arc::new(pool));
+                }
+                
+                // Update metrics
+                let mut metrics_lock = metrics_clone.lock().await;
+                metrics_lock.log_pools_fetched(pools_write.len());
+                
+                info!("Pool map now contains {} total pools", pools_write.len());
+            }
+            warn!("Pool receiver stopped - channel closed");
+        })
+    };
 
     let simulation_mode_from_env = env::var("SIMULATION_MODE")
         .unwrap_or_else(|_| "false".to_string())

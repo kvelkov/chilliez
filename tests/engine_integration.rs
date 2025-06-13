@@ -56,6 +56,11 @@ async fn reference_all_engine_methods_and_fields() {
         ws_update_channel_size: None,
         congestion_update_interval_secs: None,
         cycle_interval_seconds: None,
+        
+        // Webhook Configuration (test values)
+        webhook_port: Some(8080),
+        webhook_url: Some("http://localhost:8080/webhook".to_string()),
+        enable_webhooks: false,
     }); // Semicolon was missing here, added for correctness
     let metrics = Arc::new(Mutex::new(solana_arb_bot::metrics::Metrics::new(
         config.sol_price_usd.unwrap_or(100.0), // Provide SOL price from config or a default

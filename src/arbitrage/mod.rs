@@ -1,41 +1,65 @@
-// In mod.rs
-pub mod calculator;
+//! Arbitrage Module
+//! 
+//! This module contains all arbitrage-related functionality organized in a flat structure:
+//! - orchestrator: Central control and coordination
+//! - strategy: Opportunity detection and path finding
+//! - execution: Trade execution (both HFT and batch)
+//! - analysis: Mathematical analysis, fees, and thresholds (to be created)
+//! - mev: MEV protection and Jito integration (to be created)
+
 use crate::metrics::Metrics;
 use std::sync::Arc;
 use tokio::sync::{mpsc::{self, Receiver, Sender}, Mutex};
 use log::{info, error};
 
-// Module declarations
-pub mod engine;
-pub mod pipeline;
-pub mod fee_manager;
-pub mod executor;
+// =============================================================================
+// Module Declarations
+// =============================================================================
+
+// Core modules
 pub mod opportunity;
-pub mod dynamic_threshold;
-pub mod detector;
-pub mod path_finder;
 pub mod tests;
+pub mod calculator_tests;
 
-// Sprint 3: Advanced MEV Protection and ML Integration
-pub mod mev_protection;
-pub mod execution_engine;
-pub mod jito_client;
+// New consolidated modules (flat structure)
+pub mod orchestrator;     // Central controller (formerly engine.rs)
+pub mod strategy;         // Opportunity detection and path finding
+pub mod execution;        // All execution logic (HFT + batch)
+pub mod analysis;         // Mathematical analysis, fees, thresholds
+pub mod mev;              // MEV protection and Jito integration
 
-// Re-export key types for easier access
-pub use self::engine::ArbitrageEngine;
-pub use self::detector::ArbitrageDetector;
-pub use self::executor::{ArbitrageExecutor, ExecutorEvent};
+// =============================================================================
+// Public Re-exports (New Flat Structure)
+// =============================================================================
+
+// Primary exports from new consolidated modules
+pub use self::orchestrator::ArbitrageOrchestrator;
+pub use self::strategy::ArbitrageStrategy;
+pub use self::analysis::ArbitragePath;
+pub use self::execution::{
+    HftExecutor, BatchExecutor, ExecutorEvent,
+    BatchExecutionConfig, OpportunityBatch, SimulationResult, 
+    JitoBundle, BundleExecutionResult, ExecutionMetrics
+};
+pub use self::analysis::{
+    ArbitrageAnalyzer, OpportunityCalculationResult, OptimalArbitrageResult,
+    VolatilityTracker, DynamicThresholdUpdater, FeeBreakdown, SlippageModel, XYKSlippageModel,
+    OptimalInputResult, SimulationResult as AnalysisSimulationResult, ContractSelector, ExecutionStrategy
+};
+pub use self::mev::{
+    JitoHandler, MevProtectionConfig, JitoConfig, GasOptimizationMetrics, NetworkConditions,
+    MevProtectionStrategy, MevProtectionStatus, JitoBundleResult
+};
 pub use self::opportunity::{ArbHop, MultiHopArbOpportunity, AdvancedMultiHopOpportunity, EnhancedArbHop};
-pub use self::pipeline::ExecutionPipeline;
-pub use self::dynamic_threshold::DynamicThresholdUpdater;
-pub use self::path_finder::{AdvancedPathFinder, ArbitragePath};
-// Batch execution types are available from execution_engine module
-pub use self::execution_engine::BatchExecutionConfig;
 
-// Sprint 3: Re-export new components
-pub use mev_protection::{AdvancedMevProtection, MevProtectionConfig, GasOptimizationMetrics};
-pub use execution_engine::{BatchExecutionEngine, OpportunityBatch, SimulationResult, JitoBundle, BundleExecutionResult, ExecutionMetrics};
-pub use jito_client::{JitoClient, JitoConfig, BundleSubmissionRequest, BundleSubmissionResponse, JitoError, BundleStatus};
+// Backward compatibility aliases
+pub use self::strategy::ArbitrageStrategy as ArbitrageDetector;
+pub use self::execution::HftExecutor as ArbitrageExecutor;
+pub use self::execution::BatchExecutor as BatchExecutionEngine;
+
+// =============================================================================
+// Trade Coordination System
+// =============================================================================
 
 /// TradeInstruction is used to convey a new trade that must be executed.
 /// It carries all the metadata required (price, quantity, pool info, fees, slippage, etc.)
@@ -48,7 +72,7 @@ pub enum TradeInstruction {
 /// and the on-chain trade execution (via the Executor). It listens for incoming trade instructions,
 /// dispatches them immediately to the Executor, and can record the execution results in Metrics.
 pub struct ArbitrageCoordinator {
-    executor: Arc<ArbitrageExecutor>,
+    executor: Arc<HftExecutor>, // Updated to use new HftExecutor
     metrics: Arc<Mutex<Metrics>>,
     instruction_rx: Receiver<TradeInstruction>,
     instruction_tx: Sender<TradeInstruction>,
@@ -57,7 +81,7 @@ pub struct ArbitrageCoordinator {
 impl ArbitrageCoordinator {
     /// Constructs a new coordinator with the given Executor and Metrics.
     /// It establishes an internal MPSC channel (with a capacity of 100) for trade instructions.
-    pub fn new(executor: Arc<ArbitrageExecutor>, metrics: Arc<Mutex<Metrics>>) -> Self {
+    pub fn new(executor: Arc<HftExecutor>, metrics: Arc<Mutex<Metrics>>) -> Self {
         let (instruction_tx, instruction_rx) = mpsc::channel(100);
         Self {
             executor,

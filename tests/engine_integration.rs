@@ -1,12 +1,29 @@
 use std::sync::Arc;
+use std::path::Path;
 use tokio::sync::Mutex;
 use dashmap::DashMap;
 use solana_sdk::pubkey::Pubkey;
-// Use the engine module directly from arbitrage
-use solana_arb_bot::arbitrage::engine::ArbitrageEngine;
+use solana_arb_bot::arbitrage::orchestrator::ArbitrageOrchestrator;
 use solana_arb_bot::config::settings::Config;
-use solana_arb_bot::dex::DexClient;
+use solana_arb_bot::dex::{DexClient, BannedPairsManager};
 use solana_arb_bot::utils::PoolInfo;
+
+// Helper function to create a dummy BannedPairsManager for testing
+fn dummy_banned_pairs_manager() -> Arc<BannedPairsManager> {
+    // Create a temporary CSV file for testing
+    let temp_csv_path = std::env::temp_dir().join("test_banned_pairs.csv");
+    std::fs::write(&temp_csv_path, "token_a,token_b\n").unwrap_or_default();
+    
+    Arc::new(
+        BannedPairsManager::new(&temp_csv_path)
+            .unwrap_or_else(|_| {
+                // Fallback: create with an empty temporary file
+                let fallback_path = std::env::temp_dir().join("empty_banned_pairs.csv");
+                std::fs::write(&fallback_path, "").unwrap_or_default();
+                BannedPairsManager::new(&fallback_path).expect("Failed to create fallback BannedPairsManager")
+            })
+    )
+}
 
 #[tokio::test]
 async fn reference_all_engine_methods_and_fields() {
@@ -70,7 +87,9 @@ async fn reference_all_engine_methods_and_fields() {
     )));
     let dex_api_clients: Vec<Arc<dyn DexClient>> = vec![];
     let executor = None; // No executor for this test
-    let _engine = ArbitrageEngine::new(pools, ws_manager, price_provider, rpc_client, config.clone(), metrics, dex_api_clients, executor);
+    let batch_engine = None; // No batch engine for this test
+    let banned_pairs_manager = dummy_banned_pairs_manager();
+    let _engine = ArbitrageOrchestrator::new(pools, ws_manager, price_provider, rpc_client, config.clone(), metrics, dex_api_clients, executor, batch_engine, banned_pairs_manager);
 
     // Reference degradation_mode field: set and read
     // Instead of direct field access, use public getter/setter methods.

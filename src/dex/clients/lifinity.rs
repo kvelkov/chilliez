@@ -1,7 +1,7 @@
 // src/dex/lifinity.rs
 //! Lifinity client and parser for on-chain data and instruction building.
 
-use crate::dex::quote::{DexClient, Quote, SwapInfo, PoolDiscoverable};
+use crate::dex::api::{DexClient, Quote, SwapInfo, PoolDiscoverable};
 use crate::solana::rpc::SolanaRpcClient;
 use crate::utils::{DexType, PoolInfo, PoolParser as UtilsPoolParser, PoolToken};
 use anyhow::{anyhow, Result as AnyhowResult};

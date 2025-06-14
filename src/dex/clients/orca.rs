@@ -1,8 +1,8 @@
-// src/dex/orca.rs
+// src/dex/clients/orca.rs
 //! Orca Whirlpools client, parser, and instruction builder.
 //! This is the consolidated, authoritative module for all Orca Whirlpools interactions.
 
-use crate::dex::quote::{DexClient, Quote, SwapInfo, PoolDiscoverable};
+use crate::dex::api::{DexClient, Quote, SwapInfo, PoolDiscoverable};
 use crate::solana::rpc::SolanaRpcClient;
 use crate::utils::{PoolInfo, PoolParser as UtilsPoolParser, PoolToken, DexType};
 use anyhow::{anyhow, Result as AnyhowResult};

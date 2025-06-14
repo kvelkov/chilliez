@@ -4,8 +4,8 @@
 
 #[cfg(test)]
 mod meteora_tests {
-    use super::super::meteora::*;
-    use super::super::quote::{DexClient};
+    use super::super::clients::meteora::*;
+    use super::super::DexClient;
     use crate::utils::{DexType, PoolInfo, PoolToken, PoolParser};
     use solana_sdk::pubkey::Pubkey;
     use std::str::FromStr;
@@ -235,8 +235,8 @@ mod meteora_tests {
 
 #[cfg(test)]
 mod orca_tests {
-    use super::super::orca::*;
-    use super::super::quote::{DexClient};
+    use super::super::clients::orca::*;
+    use super::super::DexClient;
     use crate::utils::{DexType, PoolInfo, PoolToken, PoolParser};
     use solana_sdk::pubkey::Pubkey;
     use std::str::FromStr;
@@ -304,8 +304,8 @@ mod orca_tests {
 
 #[cfg(test)]
 mod raydium_tests {
-    use super::super::raydium::*;
-    use super::super::quote::{DexClient};
+    use super::super::clients::raydium::*;
+    use super::super::DexClient;
     use crate::utils::{DexType, PoolInfo, PoolToken, PoolParser};
     use solana_sdk::pubkey::Pubkey;
     use std::str::FromStr;
@@ -404,20 +404,20 @@ mod integration_tests {
 
     #[test]
     fn test_pool_parser_registry() {
-        use crate::dex::pool_management::POOL_PARSER_REGISTRY;
+        use crate::dex::discovery::POOL_PARSER_REGISTRY;
         
         // Test that the registry is populated
         assert!(!POOL_PARSER_REGISTRY.is_empty());
         
         // Test that known program IDs are registered
-        let orca_program_id = orca::ORCA_WHIRLPOOL_PROGRAM_ID;
+        let orca_program_id = crate::dex::clients::orca::ORCA_WHIRLPOOL_PROGRAM_ID;
         assert!(POOL_PARSER_REGISTRY.contains_key(&orca_program_id));
     }
 }
 
 #[cfg(test)]
 mod banned_pairs_tests {
-    use super::super::banned_pairs::*;
+    use super::super::discovery::BannedPairsManager;
     // use solana_sdk::pubkey::Pubkey;
     // use std::str::FromStr;
 

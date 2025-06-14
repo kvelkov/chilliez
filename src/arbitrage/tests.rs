@@ -1,11 +1,12 @@
 #[cfg(test)]
 mod tests {
-    use crate::arbitrage::engine::ArbitrageEngine;
+    use crate::arbitrage::orchestrator::ArbitrageOrchestrator; // This will now be used
     use crate::arbitrage::opportunity::{ArbHop, MultiHopArbOpportunity};
-    use crate::utils::{DexType, PoolInfo, PoolToken, TokenAmount};
+    use crate::utils::{DexType, PoolInfo, PoolToken};
+    use crate::arbitrage::analysis::FeeManager; // Added import for FeeManager
     use crate::error::ArbError;
-    use crate::dex::DexClient;
-    use crate::dex::quote::{Quote, SwapInfo};
+    use crate::dex::{DexClient, BannedPairsManager};
+    use crate::dex::api::{Quote, SwapInfo};
     // use crate::arbitrage::detector::ArbitrageDetector; // TODO: Re-enable when banned pairs are implemented
     use crate::solana::rpc::SolanaRpcClient;
     use crate::config::settings::Config;
@@ -22,6 +23,23 @@ mod tests {
     
     // Ensure test output is visible
     use env_logger;
+
+    // Helper function to create a dummy BannedPairsManager for testing
+    fn dummy_banned_pairs_manager() -> Arc<BannedPairsManager> {
+        // Create a temporary CSV file for testing
+        let temp_csv_path = std::env::temp_dir().join("test_banned_pairs.csv");
+        std::fs::write(&temp_csv_path, "token_a,token_b\n").unwrap_or_default();
+        
+        Arc::new(
+            BannedPairsManager::new(&temp_csv_path)
+                .unwrap_or_else(|_| {
+                    // Fallback: create with an empty temporary file
+                    let fallback_path = std::env::temp_dir().join("empty_banned_pairs.csv");
+                    std::fs::write(&fallback_path, "").unwrap_or_default();
+                    BannedPairsManager::new(&fallback_path).expect("Failed to create fallback BannedPairsManager")
+                })
+        )
+    }
 
     fn dummy_config() -> Arc<Config> {
         Arc::new(Config::test_default())
@@ -186,8 +204,8 @@ mod tests {
         let metrics_arc = dummy_metrics();
         let dummy_dex_clients: Vec<Arc<dyn DexClient>> = vec![Arc::new(MockDexClient::new("Mock"))];
 
-        let engine = Arc::new(
-            ArbitrageEngine::new(
+        let engine = Arc::new( // Renamed ArbitrageEngine to ArbitrageOrchestrator
+            ArbitrageOrchestrator::new(
                 pools_map_arc.clone(),
                 None,
                 None,
@@ -196,6 +214,8 @@ mod tests {
                 metrics_arc.clone(),
                 dummy_dex_clients,
                 None, // executor
+                None, // batch_execution_engine
+                dummy_banned_pairs_manager(), // banned_pairs_manager
             )
         );
 
@@ -214,7 +234,10 @@ mod tests {
         }
 
         // Discover direct opportunities.
-        let opps_result = engine.detect_arbitrage_opportunities().await;
+        // Explicit type annotation for clarity, though it might be inferred after other fixes.
+        let opps_result: Result<Vec<MultiHopArbOpportunity>, ArbError> = engine
+            .detect_arbitrage_opportunities()
+            .await;
         println!("discover_direct_opportunities result: {:?}", opps_result);
 
         if let Ok(ref opps) = opps_result {
@@ -253,7 +276,17 @@ mod tests {
         let config = dummy_config();
         let metrics_arc = dummy_metrics();
         let dummy_dex_clients: Vec<Arc<dyn DexClient>> = vec![Arc::new(MockDexClient::new("Mock"))];
-        let engine = ArbitrageEngine::new(pools_map.clone(), None, None, None, config, metrics_arc, dummy_dex_clients, None);
+        let engine = ArbitrageOrchestrator::new( // Renamed ArbitrageEngine to ArbitrageOrchestrator
+            pools_map.clone(),
+            None,
+            None,
+            None,
+            config,
+            metrics_arc,
+            dummy_dex_clients,
+            None, None,
+            dummy_banned_pairs_manager(), // banned_pairs_manager
+        );
 
         let existing_pool_arc = pools_map.iter().next().unwrap().value().clone();
         let missing_pool_address = Pubkey::new_unique();
@@ -307,7 +340,7 @@ mod tests {
         let dummy_dex_clients: Vec<Arc<dyn DexClient>> = vec![Arc::new(MockDexClient::new("Mock"))];
         let dummy_sol_rpc_client = Some(Arc::new(SolanaRpcClient::new("http://dummy.rpc", vec![], 3, Duration::from_secs(1))));
 
-        let engine = ArbitrageEngine::new(
+        let engine = ArbitrageOrchestrator::new( // Renamed ArbitrageEngine to ArbitrageOrchestrator
             pools_map,
             None,
             None,
@@ -315,7 +348,9 @@ mod tests {
             config.clone(),
             metrics_arc,
             dummy_dex_clients,
-            None
+            None,
+            None, // batch_execution_engine
+            dummy_banned_pairs_manager(), // banned_pairs_manager
         );
 
         let expected_threshold_pct = config.min_profit_pct * 100.0;
@@ -345,7 +380,7 @@ mod tests {
         let mock_dex_client2 = Arc::new(MockDexClient::new("Orca"));
         let dex_clients: Vec<Arc<dyn DexClient>> = vec![mock_dex_client1, mock_dex_client2];
 
-        let engine = ArbitrageEngine::new(
+        let engine = ArbitrageOrchestrator::new( // Renamed ArbitrageEngine to ArbitrageOrchestrator
             pools,
             None,
             None,
@@ -354,6 +389,8 @@ mod tests {
             metrics,
             dex_clients,
             None,
+            None, // batch_execution_engine
+            dummy_banned_pairs_manager(), // banned_pairs_manager
         );
 
         assert_eq!(engine.dex_providers.len(), 2, "Engine should have 2 DEX API clients");
@@ -368,8 +405,17 @@ mod tests {
         let config = dummy_config();
         let metrics_arc = dummy_metrics();
         let dummy_dex_clients: Vec<Arc<dyn DexClient>> = vec![Arc::new(MockDexClient::new("Mock"))];
-        let engine = ArbitrageEngine::new(
-            pools_map.clone(), None, None, None, config, metrics_arc, dummy_dex_clients, None
+        let engine = ArbitrageOrchestrator::new( // Renamed ArbitrageEngine to ArbitrageOrchestrator
+            pools_map.clone(),
+            None,
+            None,
+            None,
+            config,
+            metrics_arc,
+            dummy_dex_clients,
+            None,
+            None,
+            dummy_banned_pairs_manager(), // banned_pairs_manager
         );
         let _ = engine.degradation_mode.load(std::sync::atomic::Ordering::Relaxed);
         assert!(!engine.dex_providers.is_empty() || engine.dex_providers.len() == 0);
@@ -396,19 +442,26 @@ mod tests {
 
     #[test]
     fn test_exercise_all_fee_manager_functions() {
-        use crate::arbitrage::fee_manager::{FeeManager, XYKSlippageModel};
-        use crate::utils::PoolInfo;
+        // FeeManager is imported at the module level.
+        // XYKSlippageModel is also part of analysis module.
+        use crate::arbitrage::analysis::{XYKSlippageModel, FeeBreakdown};
+        use crate::utils::{PoolInfo, TokenAmount}; // Removed unused DexType import
+
+        // Instantiate FeeManager
+        let fee_manager = FeeManager;
         let pool = PoolInfo::default();
         let input_amt = TokenAmount::new(100_000_000, 6);
-        let _ = FeeManager::estimate_pool_swap_with_model(
-            &pool,
+        let sol_price_usd = 150.0; // Dummy SOL price for the test
+
+        // Call the public method on FeeManager
+        let fee_breakdown: FeeBreakdown = fee_manager.calculate_multihop_fees(
+            &[&pool], // For a single pool, pass it as a slice
             &input_amt,
-            true,
-            pool.fee_numerator,
-            pool.fee_denominator,
-            Some(pool.last_update_timestamp),
-            &XYKSlippageModel::default(),
+            sol_price_usd
         );
+        // Optionally, assert something about fee_breakdown, e.g., that total_cost is non-negative.
+        assert!(fee_breakdown.total_cost >= 0.0, "Total cost should be non-negative");
+
         let _ = XYKSlippageModel::default();
     }
 }

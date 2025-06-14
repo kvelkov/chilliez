@@ -1,55 +1,64 @@
 // src/dex/mod.rs
+//! DEX module with flat, focused structure.
+//! Provides high-level API, pool discovery, and DEX client implementations.
 
+// =====================================================================================
+// CORE MODULES
+// =====================================================================================
 
-// src/dex/mod.rs
+/// Core DEX API: traits, quotes, and quoting engine
+pub mod api;
+
+/// Pool discovery, management, and banned pairs filtering
+pub mod discovery;
+
+/// Advanced mathematical calculations for CLMM and AMM pools
+pub mod math;
+
+/// DEX client implementations
+pub mod clients;
+
+// =====================================================================================
+// TESTS
+// =====================================================================================
 
 #[cfg(any(test, debug_assertions))]
-pub mod dex_tests; // Consolidated all tests
+pub mod dex_tests;
+pub mod integration_test;
 
-pub mod lifinity;
-pub mod meteora;
-pub mod orca;
-pub mod raydium;
-pub mod phoenix;
-pub mod pool_management; // Combined pool.rs + pool_discovery.rs
-pub mod banned_pairs;
-pub mod routing; // DEX routing utilities moved from utils
+// =====================================================================================
+// PUBLIC API RE-EXPORTS
+// =====================================================================================
 
-// --- New Advanced Math Module ---
-pub mod math;  // Advanced CLMM and AMM mathematical calculations
+// Core API exports
+pub use api::{
+    DexClient, PoolDiscoverable, Quote, SwapInfo, 
+    QuotingEngineOperations
+};
 
-// --- Quote and Client Infrastructure ---
-pub mod quote;
-pub mod quoting_engine;
-pub mod path_finder; // Now includes opportunity.rs
+// Discovery and management exports
+pub use discovery::{
+    PoolDiscoveryService, PoolValidationConfig, BannedPairsManager,
+    find_dex_client_for_pool, group_pools_by_dex, find_pools_for_pair,
+    validate_pools, validate_single_pool, POOL_PARSER_REGISTRY
+};
 
-// Re-export the main DexClient trait for easier access
-pub use quote::DexClient;
-
-// Re-export only the used items from pool_management
-pub use pool_management::{PoolValidationConfig, validate_pools, validate_single_pool, validate_pools_basic};
+// Client exports
+pub use clients::{
+    OrcaClient, RaydiumClient, MeteoraClient, LifinityClient
+    // PhoenixClient is currently disabled
+};
 // --- Publicly re-export concrete client types ---
 // These lines make the client structs available directly under the `dex` module,
 // e.g., as `crate::dex::OrcaClient`
-// The following re-exports are marked as unused by the compiler.
-// They are not strictly necessary if `get_all_clients` is the primary way clients are obtained,
-// or if external modules use the full path like `crate::dex::orca::OrcaClient`.
-// Removing them to satisfy the compiler warning.
-// pub use self::lifinity::LifinityClient;
-// pub use self::meteora::MeteoraClient;
-// pub use self::orca::OrcaClient;
-// pub use self::phoenix::PhoenixClient;
-// pub use self::raydium::RaydiumClient;
-// WhirlpoolClient removed - consolidated into OrcaClient
+// =====================================================================================
+// HELPER FUNCTIONS
+// =====================================================================================
 
-// (Keep your existing imports for get_all_clients, etc.)
 use crate::cache::Cache;
 use crate::config::settings::Config;
 use log::info;
 use std::sync::Arc;
-
-// The get_all_clients function can remain as is,
-// as it internally uses the full paths to the clients.
 
 /// Initializes and returns all supported DEX API client instances.
 /// Each client is configured with shared cache and application configuration.
@@ -68,32 +77,22 @@ pub fn get_all_clients(
             .or(Some(app_config.redis_default_ttl_secs))
     };
 
-    // These instantiations will work if OrcaClient, RaydiumClient etc. are correctly defined
-    // in their respective modules (e.g. orca.rs, raydium.rs)
-    clients.push(Box::new(orca::OrcaClient::new()));
+    // Use the new clients module structure
+    clients.push(Box::new(clients::OrcaClient::new()));
     info!("- Orca client initialized.");
 
-    clients.push(Box::new(raydium::RaydiumClient::new()));
+    clients.push(Box::new(clients::RaydiumClient::new()));
     info!("- Raydium client initialized.");
 
-    clients.push(Box::new(meteora::MeteoraClient::new()));
+    clients.push(Box::new(clients::MeteoraClient::new()));
     info!("- Meteora client initialized.");
 
-    clients.push(Box::new(lifinity::LifinityClient::new()));
+    clients.push(Box::new(clients::LifinityClient::new()));
     info!("- Lifinity client initialized.");
 
-    // clients.push(Box::new(phoenix::PhoenixClient::new(
-    //     Arc::clone(&cache),
-    //     get_dex_ttl("Phoenix"),
-    // )));
+    // Phoenix client commented out until needed
+    // clients.push(Box::new(clients::PhoenixClient::new()));
     // info!("- Phoenix client initialized.");
-
-    // WhirlpoolClient removed - now using OrcaClient for all Orca Whirlpool interactions
-    // clients.push(Box::new(whirlpool::WhirlpoolClient::new(
-    //     Arc::clone(&cache),
-    //     get_dex_ttl("Whirlpool"),
-    // )));
-    // info!("- Whirlpool API client initialized.");
 
     info!(
         "Total {} DEX API clients initialized successfully.",
@@ -106,12 +105,12 @@ pub fn get_all_clients(
 pub fn get_all_discoverable_clients(
     _cache: Arc<Cache>,
     _app_config: Arc<Config>,
-) -> Vec<Arc<dyn quote::PoolDiscoverable>> {
+) -> Vec<Arc<dyn PoolDiscoverable>> {
     vec![
-        Arc::new(orca::OrcaClient::new()),
-        Arc::new(raydium::RaydiumClient::new()),
-        Arc::new(meteora::MeteoraClient::new()),
-        Arc::new(lifinity::LifinityClient::new()),
+        Arc::new(clients::OrcaClient::new()),
+        Arc::new(clients::RaydiumClient::new()),
+        Arc::new(clients::MeteoraClient::new()),
+        Arc::new(clients::LifinityClient::new()),
     ]
 }
 

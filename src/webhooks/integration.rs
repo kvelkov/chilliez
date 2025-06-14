@@ -8,8 +8,7 @@ use crate::webhooks::helius_sdk_stub::EnhancedTransaction; // Added import
 use crate::webhooks::types::{HeliusWebhookNotification, PoolUpdateEvent, PoolUpdateType};
 use crate::config::Config;
 use crate::utils::{PoolInfo, DexType};
-use crate::dex::{PoolValidationConfig, validate_single_pool, quote::DexClient};
-use crate::discovery::PoolDiscoveryService;
+use crate::dex::{PoolValidationConfig, validate_single_pool, api::DexClient, BannedPairsManager};
 use log::{info, warn, error, debug};
 use solana_sdk::pubkey::Pubkey;
 use std::collections::{HashMap, HashSet};
@@ -197,12 +196,13 @@ impl WebhookIntegrationService {
     }
 }
 
-/// Comprehensive pool management service combining static discovery with real-time updates
+/// Comprehensive pool management service combining webhook-based real-time updates
+/// with optional static discovery through DEX client APIs
 pub struct IntegratedPoolService {
     config: Arc<Config>,
     
-    // Static pool discovery
-    pool_discovery: Arc<PoolDiscoveryService>,
+    // Static pool discovery through DEX clients
+    dex_clients: Vec<Arc<dyn DexClient>>,
     discovered_pools: Arc<RwLock<HashMap<Pubkey, Arc<PoolInfo>>>>,
     
     // Real-time webhook updates
@@ -225,6 +225,7 @@ pub struct PoolMonitoringCoordinator {
     // Pool management and validation
     monitored_pools: Arc<RwLock<HashMap<Pubkey, MonitoredPool>>>,
     validation_config: PoolValidationConfig,
+    banned_pairs_manager: Arc<BannedPairsManager>,
     
     // Webhook management
     active_webhooks: Arc<RwLock<HashMap<String, WebhookMetadata>>>,
@@ -367,16 +368,6 @@ impl IntegratedPoolService {
     ) -> AnyhowResult<Self> {
         let (pool_update_sender, pool_update_receiver) = mpsc::unbounded_channel();
         
-        // Create pool discovery service
-        let (discovery_sender, _discovery_receiver) = mpsc::channel(1000);
-        let pool_discovery = Arc::new(PoolDiscoveryService::new(
-            dex_clients,
-            discovery_sender,
-            100, // batch_size
-            300, // max_pool_age_secs
-            100, // delay_between_batches_ms
-        ));
-        
         // Create webhook service if enabled
         let webhook_service = if config.enable_webhooks {
             Some(WebhookIntegrationService::new(config.clone()))
@@ -386,7 +377,7 @@ impl IntegratedPoolService {
 
         Ok(Self {
             config,
-            pool_discovery,
+            dex_clients,
             discovered_pools: Arc::new(RwLock::new(HashMap::new())),
             webhook_service,
             master_pool_cache: Arc::new(RwLock::new(HashMap::new())),
@@ -443,16 +434,34 @@ impl IntegratedPoolService {
 
     /// Run initial static pool discovery to populate the base pool set
     async fn run_initial_pool_discovery(&self) -> AnyhowResult<()> {
-        info!("🔍 Running initial static pool discovery...");
+        info!("🔍 Running initial static pool discovery using DEX clients...");
         
-        let pools = self.pool_discovery.run_discovery_cycle().await?;
-        let pool_count = pools.len();
+        let mut all_pools = Vec::new();
+        
+        // Discover pools from all DEX clients directly
+        for client in &self.dex_clients {
+            let client_name = client.get_name();
+            info!("Discovering pools from DEX: {}", client_name);
+            
+            match client.discover_pools().await {
+                Ok(pools) => {
+                    let pool_count = pools.len();
+                    info!("Successfully discovered {} pools from {}", pool_count, client_name);
+                    all_pools.extend(pools);
+                }
+                Err(e) => {
+                    error!("Failed to discover pools from {}: {}", client_name, e);
+                }
+            }
+        }
+        
+        let pool_count = all_pools.len();
         
         // Convert to HashMap for easier management
         let mut pool_map = HashMap::new();
         let mut stats_by_dex = HashMap::new();
         
-        for pool in pools {
+        for pool in all_pools {
             let dex_name = format!("{:?}", pool.dex_type);
             *stats_by_dex.entry(dex_name).or_insert(0) += 1;
             pool_map.insert(pool.address, Arc::new(pool));
@@ -506,7 +515,7 @@ impl IntegratedPoolService {
 
     /// Start periodic static pool refresh
     async fn start_periodic_static_refresh(&self) -> AnyhowResult<()> {
-        let pool_discovery = self.pool_discovery.clone();
+        let dex_clients = self.dex_clients.clone();
         let sender = self.pool_update_sender.clone();
         let refresh_interval = self.config.pool_refresh_interval_secs;
         
@@ -517,17 +526,25 @@ impl IntegratedPoolService {
                 interval.tick().await;
                 
                 info!("🔄 Running periodic static pool refresh...");
-                match pool_discovery.run_discovery_cycle().await {
-                    Ok(pools) => {
-                        info!("✅ Periodic refresh discovered {} pools", pools.len());
-                        if let Err(e) = sender.send(PoolUpdateNotification::StaticDiscovery(pools)) {
-                            error!("Failed to send static discovery notification: {}", e);
-                            break;
+                
+                let mut all_pools = Vec::new();
+                
+                // Discover pools from all DEX clients directly
+                for client in &dex_clients {
+                    match client.discover_pools().await {
+                        Ok(pools) => {
+                            all_pools.extend(pools);
+                        }
+                        Err(e) => {
+                            error!("Failed to discover pools from {}: {}", client.get_name(), e);
                         }
                     }
-                    Err(e) => {
-                        error!("❌ Periodic refresh failed: {}", e);
-                    }
+                }
+                
+                info!("✅ Periodic refresh discovered {} pools", all_pools.len());
+                if let Err(e) = sender.send(PoolUpdateNotification::StaticDiscovery(all_pools)) {
+                    error!("Failed to send static discovery notification: {}", e);
+                    break;
                 }
             }
         });
@@ -713,6 +730,14 @@ impl PoolMonitoringCoordinator {
             webhook_manager,
             monitored_pools: Arc::new(RwLock::new(HashMap::new())),
             validation_config: PoolValidationConfig::default(),
+            banned_pairs_manager: Arc::new(
+                BannedPairsManager::new(std::path::Path::new("banned_pairs_log.csv"))
+                    .unwrap_or_else(|e| {
+                        warn!("Failed to load banned pairs: {}, creating empty manager", e);
+                        // Since we can't create manually due to private fields, just use the Path method
+                        BannedPairsManager::new(std::path::Path::new("/dev/null")).unwrap_or_else(|_| panic!("Cannot create BannedPairsManager"))
+                    })
+            ),
             active_webhooks: Arc::new(RwLock::new(HashMap::new())),
             webhook_addresses: Arc::new(RwLock::new(HashSet::new())),
             event_sender,
@@ -748,10 +773,11 @@ impl PoolMonitoringCoordinator {
         let monitored_pools = self.monitored_pools.clone();
         let config = self.config.clone();
         let validation_config = self.validation_config.clone();
+        let banned_pairs_manager = self.banned_pairs_manager.clone();
         
         // Start event processing task
         let _event_processor = tokio::spawn(async move {
-            Self::process_events(event_receiver, stats, monitored_pools, config, validation_config).await
+            Self::process_events(event_receiver, stats, monitored_pools, config, validation_config, banned_pairs_manager).await
         });
         
         // Start pool discovery and monitoring
@@ -834,6 +860,7 @@ impl PoolMonitoringCoordinator {
         monitored_pools: Arc<RwLock<HashMap<Pubkey, MonitoredPool>>>,
         _config: Arc<Config>,
         validation_config: PoolValidationConfig,
+        banned_pairs_manager: Arc<BannedPairsManager>,
     ) {
         info!("🔄 Starting event processing loop...");
         
@@ -868,9 +895,12 @@ impl PoolMonitoringCoordinator {
                     info!("🆕 New pool detected: {}", pool_address);
                     
                     // Validate the pool before adding it to monitoring
-                    if !validate_single_pool(&pool_info, &validation_config) {
-                        warn!("🚫 Pool {} failed validation, not adding to monitoring", pool_address);
-                        continue;
+                    match validate_single_pool(&pool_info, &validation_config, &banned_pairs_manager).await {
+                        Ok(false) | Err(_) => {
+                            warn!("🚫 Pool {} failed validation, not adding to monitoring", pool_address);
+                            continue;
+                        }
+                        Ok(true) => {}
                     }
                     
                     info!("✅ Pool {} passed validation, adding to monitoring", pool_address);

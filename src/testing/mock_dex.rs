@@ -7,7 +7,7 @@
 //! - Performance testing capabilities
 
 use crate::{
-    dex::quote::{DexClient, PoolDiscoverable, Quote, SwapInfo},
+    dex::api::{DexClient, PoolDiscoverable, Quote, SwapInfo},
     utils::{PoolInfo, PoolToken, DexType},
     error::ArbError,
     arbitrage::opportunity::MultiHopArbOpportunity,

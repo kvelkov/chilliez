@@ -2,7 +2,7 @@
 mod tests {
     // Import all relevant functions and types from our calculator module.
     // Adjust the import path as needed depending on your project hierarchy.
-    use super::super::calculator::*; // This assumes that calculator.rs is sibling to calculator_tests.rs.
+    use super::super::analysis::*; // Updated to use the new analysis module
     
     /// Helper function that creates a dummy `OpportunityCalculationResult`
     /// to simulate different arbitrage outcomes. It uses an input amount of 1.0,
@@ -13,7 +13,6 @@ mod tests {
             output_amount: 1.0 + profit_in_token,
             profit: profit_in_token,
             profit_percentage: if 1.0 > 0.0 { profit_in_token / 1.0 } else { 0.0 },
-            price_impact: 0.0,
         }
     }
 

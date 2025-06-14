@@ -3,7 +3,7 @@
 //! This implementation follows the official Raydium V4 layout for maximum accuracy.
 //! Includes Raydium API data models.
 
-use crate::dex::quote::{DexClient, Quote, SwapInfo, PoolDiscoverable};
+use crate::dex::api::{DexClient, Quote, SwapInfo, PoolDiscoverable};
 use crate::solana::rpc::SolanaRpcClient;
 use crate::utils::{DexType, PoolInfo, PoolParser as UtilsPoolParser, PoolToken};
 use anyhow::{anyhow, Result as AnyhowResult};

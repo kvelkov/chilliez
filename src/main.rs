@@ -12,15 +12,14 @@ pub mod websocket;
 
 use crate::{
     arbitrage::{
-        engine::{ArbitrageEngine, PriceDataProvider},
-        executor::ArbitrageExecutor,
+        orchestrator::{ArbitrageOrchestrator, PriceDataProvider},
+        execution::HftExecutor,
     },
     cache::Cache,
     config::settings::Config,
     dex::{
         get_all_clients_arc, get_all_discoverable_clients,
-        pool_management::{PoolDiscoveryConfig, PoolDiscoveryService, POOL_PARSER_REGISTRY},
-        quote::PoolDiscoverable,
+        discovery::{PoolDiscoveryService, POOL_PARSER_REGISTRY, BannedPairsManager, PoolValidationConfig},
     },
     error::ArbError,
     metrics::Metrics,
@@ -83,44 +82,34 @@ async fn main() -> Result<(), ArbError> {
     // --- Sprint 1 & 2: Enhanced Pool Discovery Service with Hot Cache ---
     info!("🔧 Initializing Enhanced Pool Discovery Service with Sprint 2 features...");
     
-    let discovery_config = PoolDiscoveryConfig {
-        batch_size: 100,
-        batch_delay_ms: 50, // Reduced for faster processing
-        api_cache_ttl_secs: 300,
-        parallel_parsing_threads: num_cpus::get(),
-        discovery_interval_secs: 300, // 5 minutes
-        max_concurrent_batches: 10,
-    };
+    let validation_config = PoolValidationConfig::default();
     
     let discoverable_clients = get_all_discoverable_clients(redis_cache.clone(), app_config.clone());
     let pool_discovery_service = Arc::new(PoolDiscoveryService::new(
         discoverable_clients, 
         ha_solana_rpc_client.clone(), 
         redis_cache.clone(), 
-        discovery_config
-    ));
+        validation_config,
+        std::path::Path::new("banned_pairs_log.csv"),
+    ).map_err(ArbError::from)?);
 
     // --- Initial Discovery with Performance Metrics ---
     info!("🔍 Starting initial pool discovery with enhanced parallel processing...");
     let discovery_start = std::time::Instant::now();
     
-    let discovery_result = pool_discovery_service.discover_and_parse_pools().await?;
+    let discovery_result = pool_discovery_service.discover_all_pools().await.map_err(ArbError::from)?;
     let discovery_duration = discovery_start.elapsed();
     
     info!("✅ Initial discovery complete in {:?}:", discovery_duration);
-    info!("   📊 Total discovered from APIs: {}", discovery_result.total_discovered_from_apis);
-    info!("   🔧 Successfully enriched: {}", discovery_result.pools_enriched_count);
-    info!("   ❌ Enrichment failures: {}", discovery_result.enrichment_failures);
-    info!("   ⏱️  RPC time: {:?}", discovery_result.rpc_duration);
-    info!("   🧮 Parsing time: {:?}", discovery_result.parsing_duration);
+    info!("   📊 Total discovered pools: {}", discovery_result.len());
 
     // --- Sprint 2: Establish Enhanced Hot Cache (DashMap) ---
     info!("🔥 Establishing enhanced hot cache with DashMap for Sprint 2...");
     let hot_cache: Arc<DashMap<Pubkey, Arc<PoolInfo>>> = Arc::new(DashMap::new());
     
     // Populate hot cache with initial discovery results
-    for (pubkey, pool_info) in discovery_result.pools {
-        hot_cache.insert(pubkey, pool_info);
+    for pool_info in discovery_result {
+        hot_cache.insert(pool_info.address, Arc::new(pool_info));
     }
     
     metrics.lock().await.log_pools_fetched(hot_cache.len());
@@ -205,7 +194,7 @@ async fn main() -> Result<(), ArbError> {
                     let executor_rpc = Arc::new(NonBlockingRpcClient::new(app_config.rpc_url.clone()));
                     
                     // Create executor
-                    let executor = Arc::new(ArbitrageExecutor::new(
+                    let executor = Arc::new(HftExecutor::new(
                         Arc::new(keypair),
                         executor_rpc,
                         None, // Event sender - can be added later for monitoring
@@ -229,8 +218,18 @@ async fn main() -> Result<(), ArbError> {
         None
     };
 
+    // Create banned pairs manager
+    let banned_pairs_manager = Arc::new(
+        BannedPairsManager::new(std::path::Path::new("banned_pairs_log.csv"))
+            .unwrap_or_else(|e| {
+                warn!("Failed to load banned pairs: {}, creating minimal manager", e);
+                // Since constructor requires CSV file, use a fallback or handle error
+                panic!("Cannot initialize banned pairs manager: {}", e);
+            })
+    );
+
     // Initialize enhanced arbitrage engine with hot cache
-    let arbitrage_engine = Arc::new(ArbitrageEngine::new(
+    let arbitrage_engine = Arc::new(ArbitrageOrchestrator::new(
         hot_cache.clone(),
         Some(Arc::new(Mutex::new(ws_manager))),
         Some(price_provider),
@@ -240,6 +239,7 @@ async fn main() -> Result<(), ArbError> {
         dex_api_clients,
         executor,
         None, // batch_execution_engine - can be initialized later if needed
+        banned_pairs_manager,
     ));
 
     // Start enhanced arbitrage engine services
@@ -256,8 +256,20 @@ async fn main() -> Result<(), ArbError> {
     let continuous_discovery_service = pool_discovery_service.clone();
     let continuous_hot_cache = hot_cache.clone();
     tokio::spawn(async move {
-        if let Err(e) = continuous_discovery_service.run_continuous_discovery_task().await {
-            error!("Continuous discovery task failed: {}", e);
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(300)); // 5-minute intervals
+        loop {
+            interval.tick().await;
+            match continuous_discovery_service.discover_all_pools().await {
+                Ok(new_pools) => {
+                    info!("Continuous discovery found {} pools", new_pools.len());
+                    for pool in new_pools {
+                        continuous_hot_cache.insert(pool.address, Arc::new(pool));
+                    }
+                }
+                Err(e) => {
+                    error!("Continuous discovery task failed: {}", e);
+                }
+            }
         }
     });
 
@@ -324,7 +336,7 @@ async fn main() -> Result<(), ArbError> {
 
     // --- Sprint 2 Summary ---
     info!("✅ Sprint 2 implementation complete!");
-    info!("   🚀 Enhanced ArbitrageEngine with hot cache integration");
+    info!("   🚀 Enhanced ArbitrageOrchestrator with hot cache integration");
     info!("   🔥 DashMap-based hot cache for sub-millisecond access");
     info!("   🎯 Advanced multi-hop arbitrage detection");
     info!("   ⚡ Intelligent opportunity execution with batching");
@@ -341,7 +353,7 @@ async fn main() -> Result<(), ArbError> {
     
     // Enhanced shutdown
     arbitrage_engine.shutdown().await?;
-    info!("✅ Enhanced ArbitrageEngine shutdown completed");
+    info!("✅ Enhanced ArbitrageOrchestrator shutdown completed");
 
     Ok(())
 }

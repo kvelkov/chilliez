@@ -183,12 +183,14 @@ mod tests {
         let dummy_dex_clients: Vec<Arc<dyn crate::dex::DexClient>> = vec![];
         let engine = ArbitrageEngine::new(
             pools.clone(),
+            None, // websocket manager
+            None, // price provider
             Some(Arc::new(SolanaRpcClient::new("http://dummy.rpc", vec![], 3, Duration::from_secs(1)))),
             config.clone(),
             metrics.clone(),
-            None,
-            None,
             dummy_dex_clients.clone(),
+            None, // executor
+            None, // batch_execution_engine
         );
         let rt = Runtime::new().unwrap();
         rt.block_on(async {
@@ -245,7 +247,7 @@ mod tests {
     #[test]
     fn test_exercise_all_token_metadata_cache_and_pool_parser() {
         use crate::solana::accounts::{TokenMetadataCache, TokenMetadata};
-        use crate::dex::pool_management::{POOL_PARSER_REGISTRY, get_pool_parser_for_program};
+        use crate::dex::discovery::{POOL_PARSER_REGISTRY};
         use solana_sdk::pubkey::Pubkey;
         let cache = TokenMetadataCache::new();
         let _ = TokenMetadata::default();

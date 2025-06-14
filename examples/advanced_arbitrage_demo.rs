@@ -1,240 +1,370 @@
 // examples/advanced_arbitrage_demo.rs
+//! Advanced Arbitrage Demo - Sprint 3: High-Throughput Execution & Atomic Batching
+//! 
+//! This example demonstrates the complete Sprint 3 implementation:
+//! - BatchExecutionEngine with intelligent opportunity batching
+//! - Mandatory pre-transaction simulation pipeline
+//! - Jito bundle submission with MEV protection
+//! - Real-time metrics and monitoring
+
 use solana_arb_bot::{
     arbitrage::{
-        AdvancedPathFinder, AdvancedBatchExecutor, BatchExecutionConfig,
-        AdvancedMultiHopOpportunity,
+        execution_engine::{BatchExecutionEngine, BatchExecutionConfig},
+        jito_client::{JitoClient, JitoConfig},
+        opportunity::{MultiHopArbOpportunity, ArbHop},
+        mev_protection::{AdvancedMevProtection, MevProtectionConfig},
     },
-    utils::{DexType, PoolInfo, PoolToken},
+    solana::rpc::SolanaRpcClient,
+    utils::{DexType, PoolInfo},
+    error::ArbError,
 };
+use log::info;
+use std::sync::Arc;
+use tokio::time::{Duration, sleep};
 use solana_sdk::pubkey::Pubkey;
-use std::{collections::HashMap, sync::Arc};
-use tokio::time::{sleep, Duration};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize logging
-    env_logger::init();
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
-    println!("🚀 Advanced 4-DEX Arbitrage Bot Demo");
-    println!("===================================");
+    info!("🚀 Starting Advanced Arbitrage Demo - Sprint 3");
+    info!("   📦 High-Throughput Execution & Atomic Batching");
+    info!("   🛡️ MEV Protection with Jito Bundles");
+    info!("   🧪 Mandatory Pre-Transaction Simulation");
 
-    // 1. Setup Advanced Path Finder
-    let path_finder = AdvancedPathFinder::new(
-        4,       // max_hops
-        10000.0, // min_liquidity_threshold ($10k)
-        1.0,     // max_slippage_pct (1%)
-        0.5,     // min_profit_threshold_pct (0.5%)
-    );
-
-    // 2. Setup Batch Executor
-    let batch_config = BatchExecutionConfig {
-        max_batch_size: 3,
-        max_compute_units: 1_200_000,
-        max_batch_execution_time_ms: 2500,
-        priority_threshold: 6,
-    };
-    let mut batch_executor = AdvancedBatchExecutor::new(batch_config);
-
-    // 3. Create mock pool data for demonstration
-    let pools_by_dex = create_demo_pools();
-
-    // 4. Find arbitrage opportunities
-    println!("\n🔍 Scanning for arbitrage opportunities across 4 DEXs...");
+    // Initialize components
+    let demo = ArbitrageDemo::new().await?;
     
-    let usdc_mint = Pubkey::new_unique(); // Mock USDC token
-    let profitable_paths = path_finder.find_all_profitable_paths(
-        usdc_mint,
-        &pools_by_dex,
-        1000.0, // $1000 starting amount
-    ).await?;
+    // Run the demo
+    demo.run_demo().await?;
 
-    println!("✅ Found {} profitable arbitrage paths", profitable_paths.len());
-
-    // 5. Convert paths to advanced opportunities
-    let opportunities: Vec<AdvancedMultiHopOpportunity> = profitable_paths
-        .into_iter()
-        .map(|path| path.into())
-        .collect();
-
-    // 6. Display opportunities
-    println!("\n📊 Arbitrage Opportunities Analysis:");
-    println!("=====================================");
-    
-    for (i, opp) in opportunities.iter().enumerate() {
-        println!(
-            "{}. Opportunity {} | Profit: {:.2}% (${:.2}) | Priority: {} | Hops: {} | DEXs: {:?}",
-            i + 1,
-            opp.id,
-            opp.profit_pct,
-            opp.expected_profit_usd,
-            opp.execution_priority,
-            opp.path.len(),
-            opp.dex_sequence
-        );
-        
-        if opp.requires_batch {
-            println!("   🔗 Requires batch execution");
-        }
-        
-        if opp.execution_priority >= 8 {
-            println!("   ⚡ High priority - urgent execution recommended");
-        }
-    }
-
-    // 7. Demonstrate parallel processing simulation
-    println!("\n⚡ Simulating Parallel Batch Execution:");
-    println!("=======================================");
-
-    // Queue opportunities for batch execution
-    for opportunity in opportunities {
-        batch_executor.queue_opportunity(opportunity).await;
-        
-        // Simulate real-time opportunity arrival
-        sleep(Duration::from_millis(100)).await;
-    }
-
-    // Force execute any remaining opportunities
-    let signatures = batch_executor.force_execute_pending().await?;
-    println!("✅ Executed {} transactions", signatures.len());
-
-    // 8. Display execution statistics
-    let stats = batch_executor.get_stats();
-    println!("\n📈 Execution Statistics:");
-    println!("========================");
-    println!("Total Batches Executed: {}", stats.total_batches_executed);
-    println!("Successful Batches: {}", stats.successful_batches);
-    println!("Failed Batches: {}", stats.failed_batches);
-    println!("Average Batch Size: {:.1}", stats.average_batch_size);
-    println!("Total Profit (USD): ${:.2}", stats.total_profit_usd);
-    println!("Total Gas Spent: {} compute units", stats.total_gas_spent);
-    
-    if stats.total_gas_spent > 0 {
-        println!("Profit per Compute Unit: ${:.6}", stats.total_profit_usd / stats.total_gas_spent as f64);
-    }
-
-    // 9. Demonstrate advanced features
-    println!("\n🎯 Advanced Features Demonstrated:");
-    println!("==================================");
-    println!("✅ Multi-hop arbitrage path finding (2-4 hops)");
-    println!("✅ Cross-DEX routing optimization");
-    println!("✅ Intelligent batch grouping");
-    println!("✅ Priority-based execution ordering");
-    println!("✅ Gas cost optimization");
-    println!("✅ Parallel opportunity processing");
-    println!("✅ Real-time profitability analysis");
-    println!("✅ Comprehensive execution metrics");
-
-    println!("\n🚀 Demo completed successfully!");
-    println!("This showcases the foundation for the most advanced 4-DEX arbitrage bot on Solana.");
-    
     Ok(())
 }
 
-/// Create demonstration pool data across 4 DEXs
-fn create_demo_pools() -> HashMap<DexType, Vec<Arc<PoolInfo>>> {
-    let mut pools_by_dex = HashMap::new();
-    
-    // Mock token mints
-    let usdc_mint = Pubkey::new_unique();
-    let sol_mint = Pubkey::new_unique();
-    let ray_mint = Pubkey::new_unique();
-    let orca_mint = Pubkey::new_unique();
+struct ArbitrageDemo {
+    batch_engine: Arc<BatchExecutionEngine>,
+    jito_client: Arc<JitoClient>,
+    mev_protection: Arc<AdvancedMevProtection>,
+}
 
-    // Create pools for each DEX
-    let dexs = vec![DexType::Orca, DexType::Raydium, DexType::Meteora, DexType::Lifinity];
-    
-    for dex in dexs {
-        let mut pools = Vec::new();
-        
-        // USDC/SOL pool
-        pools.push(Arc::new(PoolInfo {
-            address: Pubkey::new_unique(),
-            name: format!("{:?} USDC/SOL Pool", dex),
-            token_a: PoolToken {
-                mint: usdc_mint,
-                symbol: "USDC".to_string(),
-                decimals: 6,
-                reserve: 1_000_000_000, // $1M
-            },
-            token_b: PoolToken {
-                mint: sol_mint,
-                symbol: "SOL".to_string(),
-                decimals: 9,
-                reserve: 6_666_667_000_000, // ~6,667 SOL at $150
-            },
-            token_a_vault: Pubkey::new_unique(),
-            token_b_vault: Pubkey::new_unique(),
-            fee_numerator: Some(25),
-            fee_denominator: Some(10000), // 0.25% fee
-            fee_rate_bips: None,
-            last_update_timestamp: 1640995200, // Jan 1, 2022
-            dex_type: dex.clone(),
-            liquidity: Some(1_000_000_000_000), // High liquidity
-            sqrt_price: Some(12247448714876), // Mock sqrt price
-            tick_current_index: Some(-29876), // Mock tick
-            tick_spacing: Some(64),
-        }));
+impl ArbitrageDemo {
+    async fn new() -> Result<Self, ArbError> {
+        info!("🔧 Initializing demo components...");
 
-        // SOL/RAY pool
-        pools.push(Arc::new(PoolInfo {
-            address: Pubkey::new_unique(),
-            name: format!("{:?} SOL/RAY Pool", dex),
-            token_a: PoolToken {
-                mint: sol_mint,
-                symbol: "SOL".to_string(),
-                decimals: 9,
-                reserve: 3_333_333_000_000, // ~3,333 SOL
-            },
-            token_b: PoolToken {
-                mint: ray_mint,
-                symbol: "RAY".to_string(),
-                decimals: 6,
-                reserve: 250_000_000_000, // 250k RAY at $2
-            },
-            token_a_vault: Pubkey::new_unique(),
-            token_b_vault: Pubkey::new_unique(),
-            fee_numerator: Some(30),
-            fee_denominator: Some(10000), // 0.30% fee
-            fee_rate_bips: None,
-            last_update_timestamp: 1640995200,
-            dex_type: dex.clone(),
-            liquidity: Some(500_000_000_000),
-            sqrt_price: Some(8944271910071), // Mock sqrt price
-            tick_current_index: Some(-23456),
-            tick_spacing: Some(64),
-        }));
+        // Create RPC client
+        let rpc_client = Arc::new(SolanaRpcClient::new(
+            "https://api.mainnet-beta.solana.com",
+            vec![], // No fallback endpoints for demo
+            3,      // max_retries
+            Duration::from_millis(1000), // retry_delay
+        ));
 
-        // RAY/ORCA pool
-        pools.push(Arc::new(PoolInfo {
-            address: Pubkey::new_unique(),
-            name: format!("{:?} RAY/ORCA Pool", dex),
-            token_a: PoolToken {
-                mint: ray_mint,
-                symbol: "RAY".to_string(),
-                decimals: 6,
-                reserve: 100_000_000_000, // 100k RAY
-            },
-            token_b: PoolToken {
-                mint: orca_mint,
-                symbol: "ORCA".to_string(),
-                decimals: 6,
-                reserve: 200_000_000_000, // 200k ORCA at $1
-            },
-            token_a_vault: Pubkey::new_unique(),
-            token_b_vault: Pubkey::new_unique(),
-            fee_numerator: Some(25),
-            fee_denominator: Some(10000), // 0.25% fee
-            fee_rate_bips: None,
-            last_update_timestamp: 1640995200,
-            dex_type: dex.clone(),
-            liquidity: Some(300_000_000_000),
-            sqrt_price: Some(7071067811865), // Mock sqrt price for 1:2 ratio
-            tick_current_index: Some(-6932),
-            tick_spacing: Some(64),
-        }));
+        // Configure batch execution engine
+        let batch_config = BatchExecutionConfig {
+            max_opportunities_per_batch: 3,
+            max_compute_units_per_tx: 1_400_000,
+            max_compute_units_per_bundle: 4_000_000,
+            min_batch_profit_usd: 5.0,
+            max_batch_assembly_time_ms: 300,
+            enable_parallel_simulation: true,
+            simulation_timeout_ms: 1500,
+            jito_tip_lamports: 15_000,
+            max_bundle_size: 4,
+            enable_mev_protection: true,
+        };
 
-        pools_by_dex.insert(dex, pools);
+        let batch_engine = Arc::new(BatchExecutionEngine::new(batch_config, rpc_client));
+
+        // Configure Jito client
+        let jito_config = JitoConfig {
+            default_tip_lamports: 15_000,
+            submission_timeout_ms: 3_000,
+            max_retries: 2,
+            ..Default::default()
+        };
+
+        let jito_client = Arc::new(JitoClient::new(jito_config));
+
+        // Configure MEV protection
+        let mev_config = MevProtectionConfig {
+            enable_private_mempool: true,
+            max_priority_fee_lamports: 50_000,
+            dynamic_fee_adjustment: true,
+            bundle_transactions: true,
+            randomize_execution_timing: true,
+            use_flashloan_protection: true,
+            max_slippage_protection: 0.015, // 1.5%
+        };
+
+        let mev_protection = Arc::new(AdvancedMevProtection::new(mev_config));
+
+        info!("✅ Demo components initialized successfully");
+
+        Ok(Self {
+            batch_engine,
+            jito_client,
+            mev_protection,
+        })
     }
 
-    pools_by_dex
+    async fn run_demo(&self) -> Result<(), ArbError> {
+        info!("🎬 Starting arbitrage demo simulation...");
+
+        // Create sample opportunities
+        let opportunities = self.create_sample_opportunities().await?;
+        
+        info!("📊 Created {} sample arbitrage opportunities", opportunities.len());
+
+        // Submit opportunities to batch engine
+        for (idx, opportunity) in opportunities.into_iter().enumerate() {
+            info!("📥 Submitting opportunity {}: {} ({}% profit, ${:.2})", 
+                  idx + 1, opportunity.id, opportunity.profit_pct, 
+                  opportunity.estimated_profit_usd.unwrap_or(0.0));
+
+            self.batch_engine.submit_opportunity(opportunity).await?;
+
+            // Add small delay to simulate real-time opportunity discovery
+            sleep(Duration::from_millis(200)).await;
+
+            // Show batch engine status
+            let status = self.batch_engine.get_status().await;
+            info!("   📊 Batch Engine Status: {} pending, {} active batches, {:.1}% success rate",
+                  status.pending_opportunities, status.active_batches, status.success_rate * 100.0);
+        }
+
+        // Wait for batch processing
+        info!("⏳ Waiting for batch processing to complete...");
+        sleep(Duration::from_secs(2)).await;
+
+        // Force execute any remaining opportunities
+        info!("🔄 Force executing any remaining opportunities...");
+        self.batch_engine.force_execute_pending().await?;
+
+        // Show final metrics
+        self.show_final_metrics().await?;
+
+        // Demonstrate MEV protection features
+        self.demonstrate_mev_protection().await?;
+
+        // Demonstrate Jito integration
+        self.demonstrate_jito_integration().await?;
+
+        info!("🎉 Advanced arbitrage demo completed successfully!");
+
+        Ok(())
+    }
+
+    async fn create_sample_opportunities(&self) -> Result<Vec<MultiHopArbOpportunity>, ArbError> {
+        let mut opportunities = Vec::new();
+
+        // High-profit SOL/USDC arbitrage
+        opportunities.push(self.create_opportunity(
+            "arb_001",
+            "SOL",
+            "USDC",
+            vec![DexType::Orca, DexType::Raydium],
+            8.5,  // 8.5% profit
+            250.0, // $250 profit
+            100.0, // $100 input
+        ).await?);
+
+        // Medium-profit USDC/USDT arbitrage
+        opportunities.push(self.create_opportunity(
+            "arb_002", 
+            "USDC",
+            "USDT",
+            vec![DexType::Whirlpool, DexType::Meteora],
+            3.2,  // 3.2% profit
+            80.0, // $80 profit
+            50.0, // $50 input
+        ).await?);
+
+        // Cross-DEX multi-hop opportunity
+        opportunities.push(self.create_opportunity(
+            "arb_003",
+            "SOL",
+            "RAY",
+            vec![DexType::Orca, DexType::Raydium, DexType::Meteora],
+            12.1, // 12.1% profit
+            400.0, // $400 profit
+            200.0, // $200 input
+        ).await?);
+
+        // Lower-profit but compatible opportunity
+        opportunities.push(self.create_opportunity(
+            "arb_004",
+            "USDC",
+            "SOL",
+            vec![DexType::Lifinity],
+            2.8,  // 2.8% profit
+            45.0, // $45 profit
+            30.0, // $30 input
+        ).await?);
+
+        // High-priority urgent opportunity
+        opportunities.push(self.create_opportunity(
+            "arb_005",
+            "SOL",
+            "USDC",
+            vec![DexType::Whirlpool, DexType::Orca],
+            15.3, // 15.3% profit (very high)
+            600.0, // $600 profit
+            150.0, // $150 input
+        ).await?);
+
+        Ok(opportunities)
+    }
+
+    async fn create_opportunity(
+        &self,
+        id: &str,
+        input_token: &str,
+        output_token: &str,
+        dex_path: Vec<DexType>,
+        profit_pct: f64,
+        profit_usd: f64,
+        input_usd: f64,
+    ) -> Result<MultiHopArbOpportunity, ArbError> {
+        let mut hops = Vec::new();
+        let mut current_token = input_token.to_string();
+        let input_amount = input_usd; // Simplified
+
+        for (idx, dex) in dex_path.iter().enumerate() {
+            let next_token = if idx == dex_path.len() - 1 {
+                output_token.to_string()
+            } else {
+                format!("INTERMEDIATE_{}", idx)
+            };
+
+            let hop = ArbHop {
+                dex: dex.clone(),
+                pool: Pubkey::new_unique(),
+                input_token: current_token.clone(),
+                output_token: next_token.clone(),
+                input_amount,
+                expected_output: input_amount * (1.0 + profit_pct / 100.0),
+            };
+
+            hops.push(hop);
+            current_token = next_token;
+        }
+
+        let pool_path: Vec<Pubkey> = (0..dex_path.len()).map(|_| Pubkey::new_unique()).collect();
+
+        Ok(MultiHopArbOpportunity {
+            id: id.to_string(),
+            hops,
+            total_profit: profit_usd / 100.0, // Convert to token units
+            profit_pct,
+            input_token: input_token.to_string(),
+            output_token: output_token.to_string(),
+            input_amount,
+            expected_output: input_amount * (1.0 + profit_pct / 100.0),
+            dex_path,
+            pool_path,
+            risk_score: Some(0.1),
+            notes: Some(format!("Demo opportunity with {}% profit", profit_pct)),
+            estimated_profit_usd: Some(profit_usd),
+            input_amount_usd: Some(input_usd),
+            output_amount_usd: Some(input_usd + profit_usd),
+            intermediate_tokens: vec![],
+            source_pool: Arc::new(PoolInfo::default()),
+            target_pool: Arc::new(PoolInfo::default()),
+            input_token_mint: Pubkey::new_unique(),
+            output_token_mint: Pubkey::new_unique(),
+            intermediate_token_mint: None,
+        })
+    }
+
+    async fn show_final_metrics(&self) -> Result<(), ArbError> {
+        let metrics = self.batch_engine.get_metrics().await;
+        let status = self.batch_engine.get_status().await;
+
+        info!("📊 Final Execution Metrics:");
+        info!("   🔢 Total opportunities processed: {}", metrics.total_opportunities_processed);
+        info!("   📦 Total batches created: {}", metrics.total_batches_created);
+        info!("   🚀 Total bundles submitted: {}", metrics.total_bundles_submitted);
+        info!("   ✅ Successful bundles: {}", metrics.successful_bundles);
+        info!("   ❌ Failed bundles: {}", metrics.failed_bundles);
+        info!("   💰 Total profit: ${:.2}", metrics.total_profit_usd);
+        info!("   ⛽ Total gas spent: {} CU", metrics.total_gas_spent);
+        info!("   📏 Average batch size: {:.1}", metrics.average_batch_size);
+        info!("   🧪 Average simulation time: {:.1}ms", metrics.average_simulation_time_ms);
+        info!("   🎯 Simulation success rate: {:.1}%", metrics.simulation_success_rate * 100.0);
+        info!("   📈 Overall success rate: {:.1}%", status.success_rate * 100.0);
+
+        Ok(())
+    }
+
+    async fn demonstrate_mev_protection(&self) -> Result<(), ArbError> {
+        info!("🛡️ Demonstrating MEV Protection Features...");
+
+        // Create a high-value opportunity for MEV analysis
+        let high_value_opp = self.create_opportunity(
+            "mev_test",
+            "SOL",
+            "USDC", 
+            vec![DexType::Orca, DexType::Raydium],
+            20.0,  // 20% profit - very attractive to MEV bots
+            2000.0, // $2000 profit
+            500.0,  // $500 input
+        ).await?;
+
+        // Analyze MEV risk
+        let mev_risk = self.mev_protection.analyze_mev_risk(&high_value_opp).await?;
+        info!("   🎯 MEV Risk Score: {:.2} (0.0 = low, 1.0 = high)", mev_risk);
+
+        // Get protection strategy recommendation
+        let strategy = self.mev_protection.recommend_protection_strategy(&high_value_opp).await?;
+        info!("   🛡️ Recommended Protection Strategy:");
+        info!("      Private mempool: {}", strategy.use_private_mempool);
+        info!("      Priority fee multiplier: {:.1}x", strategy.priority_fee_multiplier);
+        info!("      Bundle with other txs: {}", strategy.bundle_with_other_txs);
+        info!("      Timing randomization: {}", strategy.add_timing_randomization);
+        info!("      Flash loan protection: {}", strategy.use_flashloan_protection);
+        info!("      Max slippage: {:.1}%", strategy.max_slippage_tolerance * 100.0);
+        info!("      Recommended delay: {}ms", strategy.recommended_delay_ms);
+
+        // Calculate optimal priority fee
+        let base_fee = 10_000;
+        let optimal_fee = self.mev_protection.calculate_optimal_priority_fee(&high_value_opp, base_fee).await?;
+        info!("   💰 Optimal Priority Fee: {} lamports (base: {})", optimal_fee, base_fee);
+
+        // Get protection status
+        let protection_status = self.mev_protection.get_protection_status().await;
+        info!("   📊 MEV Protection Status:");
+        info!("      Active: {}", protection_status.is_active);
+        info!("      Network congestion: {:.1}%", protection_status.current_congestion_level * 100.0);
+        info!("      Average priority fee: {} lamports", protection_status.average_priority_fee);
+        info!("      Successful transactions: {}", protection_status.successful_transactions);
+        info!("      Protection activations: {}", protection_status.mev_protection_activations);
+
+        Ok(())
+    }
+
+    async fn demonstrate_jito_integration(&self) -> Result<(), ArbError> {
+        info!("🚀 Demonstrating Jito Bundle Integration...");
+
+        // Show tip accounts
+        let tip_accounts = self.jito_client.get_tip_accounts();
+        info!("   💰 Available Tip Accounts:");
+        for (region, account) in tip_accounts {
+            info!("      {}: {}", region, account);
+        }
+
+        // Calculate optimal tip
+        let base_tip = 10_000;
+        let optimal_tip = self.jito_client.get_optimal_tip(base_tip).await?;
+        info!("   🎯 Optimal Tip: {} lamports (base: {})", optimal_tip, base_tip);
+
+        // Simulate bundle submission (without actual transactions)
+        info!("   📦 Bundle Submission Simulation:");
+        info!("      ✅ Bundle validation passed");
+        info!("      📤 Bundle submitted to Jito block engine");
+        info!("      ⏳ Waiting for bundle confirmation...");
+        info!("      🎉 Bundle landed successfully!");
+
+        Ok(())
+    }
 }

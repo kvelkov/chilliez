@@ -7,7 +7,6 @@ use crate::{
     metrics::Metrics,
     utils::{PoolInfo},
 };
-use dashmap::DashMap;
 use log::{debug, info, warn};
 use solana_sdk::pubkey::Pubkey;
 use std::{collections::HashMap, sync::Arc, time::Instant};
@@ -118,7 +117,7 @@ impl ArbitrageDetector {
         let start_time = Instant::now();
         info!("🔍 Starting enhanced arbitrage detection on {} pools...", pools.len());
         
-        let mut opportunities = Vec::new();
+        let opportunities = Vec::new();
         let mut detection_metrics = DetectionMetrics::default();
         detection_metrics.total_detection_cycles += 1;
 
@@ -131,31 +130,30 @@ impl ArbitrageDetector {
         let pool_vec: Vec<Arc<PoolInfo>> = pools.values().cloned().collect();
         
         // Strategy 1: Direct 2-hop arbitrage (fastest)
-        let direct_opportunities = self.find_direct_arbitrage_opportunities(&pool_vec, &mut detection_metrics).await;
-        opportunities.extend(direct_opportunities);
+        let mut direct_opportunities = self.find_direct_arbitrage_opportunities(&pool_vec, &mut detection_metrics).await;
         
         // Strategy 2: Multi-hop arbitrage (2-4 hops)
         if self.max_hops > 2 {
             let multihop_opportunities = self.find_multihop_arbitrage_opportunities(&pool_vec, &mut detection_metrics).await;
-            opportunities.extend(multihop_opportunities);
+            direct_opportunities.extend(multihop_opportunities);
         }
         
         // Strategy 3: Cross-DEX arbitrage (if enabled)
         if self.enable_cross_dex_arbitrage {
             let cross_dex_opportunities = self.find_cross_dex_arbitrage_opportunities(&pool_vec, &mut detection_metrics).await;
-            opportunities.extend(cross_dex_opportunities);
+            direct_opportunities.extend(cross_dex_opportunities);
         }
 
         // Sort opportunities by profit percentage (descending)
-        opportunities.sort_by(|a, b| b.profit_pct.partial_cmp(&a.profit_pct).unwrap_or(std::cmp::Ordering::Equal));
+        direct_opportunities.sort_by(|a, b| b.profit_pct.partial_cmp(&a.profit_pct).unwrap_or(std::cmp::Ordering::Equal));
 
         let detection_time = start_time.elapsed();
         let detection_time_ms = detection_time.as_secs_f64() * 1000.0;
         
         // Update metrics
         detection_metrics.average_detection_time_ms = detection_time_ms;
-        detection_metrics.profitable_paths_found = opportunities.len() as u64;
-        if let Some(best) = opportunities.first() {
+        detection_metrics.profitable_paths_found = direct_opportunities.len() as u64;
+        if let Some(best) = direct_opportunities.first() {
             detection_metrics.best_profit_pct = best.profit_pct;
         }
 
@@ -169,7 +167,7 @@ impl ArbitrageDetector {
         }
 
         // Record metrics for external tracking
-        for opportunity in &opportunities {
+        for opportunity in &direct_opportunities {
             if let Err(e) = metrics.record_opportunity_detected(
                 &opportunity.input_token,
                 &opportunity.intermediate_tokens.first().cloned().unwrap_or_default(),
@@ -182,7 +180,7 @@ impl ArbitrageDetector {
             }
         }
 
-        Ok(opportunities)
+        Ok(direct_opportunities)
     }
 
     /// Sprint 2: Find direct 2-hop arbitrage opportunities

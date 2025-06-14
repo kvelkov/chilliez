@@ -1,9 +1,9 @@
-use self::executor::ArbitrageExecutor;
-use self::opportunity::MultiHopArbOpportunity;
-use crate::metrics::Metrics; // This import is fine
+use crate::metrics::Metrics;
 use std::sync::Arc;
-use tokio::sync::{mpsc::{self, Receiver, Sender}, Mutex}; // Added Mutex here
+use tokio::sync::{mpsc::{self, Receiver, Sender}, Mutex};
 use log::{info, error};
+
+// Module declarations
 pub mod engine;
 pub mod calculator;
 pub mod pipeline;
@@ -14,17 +14,29 @@ pub mod dynamic_threshold;
 pub mod detector;
 pub mod path_finder;
 pub mod batch_executor;
+pub mod metrics;
+pub mod tests;
+
+// Sprint 3: Advanced MEV Protection and ML Integration
+pub mod mev_protection;
+pub mod execution_engine;
+pub mod jito_client;
 
 // Re-export key types for easier access
 pub use self::engine::ArbitrageEngine;
 pub use self::detector::ArbitrageDetector;
-pub use self::executor::ExecutorEvent;
-pub use self::opportunity::{ArbHop, AdvancedMultiHopOpportunity, EnhancedArbHop};
+pub use self::executor::{ArbitrageExecutor, ExecutorEvent};
+pub use self::opportunity::{ArbHop, MultiHopArbOpportunity, AdvancedMultiHopOpportunity, EnhancedArbHop};
 pub use self::pipeline::ExecutionPipeline;
 pub use self::dynamic_threshold::DynamicThresholdUpdater;
 pub use self::path_finder::{AdvancedPathFinder, ArbitragePath};
 pub use self::batch_executor::{AdvancedBatchExecutor, BatchExecutionConfig, BatchOpportunity};
-// pub use self::fee_manager::FeeManager; // Uncomment if FeeManager is a key export
+
+// Sprint 3: Re-export new components
+pub use mev_protection::{AdvancedMevProtection, MevProtectionConfig, GasOptimizationMetrics};
+pub use execution_engine::{BatchExecutionEngine, OpportunityBatch, SimulationResult, JitoBundle, BundleExecutionResult, ExecutionMetrics};
+pub use jito_client::{JitoClient, JitoConfig, BundleSubmissionRequest, BundleSubmissionResponse, JitoError, BundleStatus};
+
 /// TradeInstruction is used to convey a new trade that must be executed.
 /// It carries all the metadata required (price, quantity, pool info, fees, slippage, etc.)
 /// to enable the executor to perform the trade.
@@ -37,7 +49,7 @@ pub enum TradeInstruction {
 /// dispatches them immediately to the Executor, and can record the execution results in Metrics.
 pub struct ArbitrageCoordinator {
     executor: Arc<ArbitrageExecutor>,
-    metrics: Arc<Mutex<Metrics>>, // Changed type here
+    metrics: Arc<Mutex<Metrics>>,
     instruction_rx: Receiver<TradeInstruction>,
     instruction_tx: Sender<TradeInstruction>,
 }
@@ -45,7 +57,7 @@ pub struct ArbitrageCoordinator {
 impl ArbitrageCoordinator {
     /// Constructs a new coordinator with the given Executor and Metrics.
     /// It establishes an internal MPSC channel (with a capacity of 100) for trade instructions.
-    pub fn new(executor: Arc<ArbitrageExecutor>, metrics: Arc<Mutex<Metrics>>) -> Self { // Changed parameter type
+    pub fn new(executor: Arc<ArbitrageExecutor>, metrics: Arc<Mutex<Metrics>>) -> Self {
         let (instruction_tx, instruction_rx) = mpsc::channel(100);
         Self {
             executor,

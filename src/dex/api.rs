@@ -8,6 +8,7 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use solana_program::instruction::Instruction;
 use solana_program::pubkey::Pubkey;
+use std::sync::Arc;
 
 // =====================================================================================
 // QUOTE STRUCTURES AND TRAITS
@@ -38,6 +39,13 @@ pub trait DexClient: Send + Sync {
 
     /// Constructs the Solana `Instruction` required to perform the swap.
     fn get_swap_instruction(&self, swap_info: &SwapInfo) -> Result<Instruction>;
+
+    /// Enhanced swap instruction method with simplified interface
+    async fn get_swap_instruction_enhanced(
+        &self,
+        swap_info: &CommonSwapInfo,
+        pool_info: Arc<PoolInfo>,
+    ) -> Result<Instruction, crate::error::ArbError>;
 
     /// Discovers all supported liquidity pools for the DEX.
     async fn discover_pools(&self) -> Result<Vec<PoolInfo>>;
@@ -91,6 +99,27 @@ pub struct SwapInfo<'a> {
     pub market_base_vault: Pubkey,
     pub market_quote_vault: Pubkey,
     pub market_authority: Pubkey,
+}
+
+/// A simplified swap info structure that contains the essential information
+/// needed for building swap instructions across different DEXs.
+/// This provides a cleaner interface compared to the more complex SwapInfo.
+#[derive(Debug, Clone)]
+pub struct CommonSwapInfo {
+    /// User's wallet public key (signer)
+    pub user_wallet_pubkey: Pubkey,
+    /// Source token mint address
+    pub source_token_mint: Pubkey,
+    /// Destination token mint address
+    pub destination_token_mint: Pubkey,
+    /// User's source token account
+    pub user_source_token_account: Pubkey,
+    /// User's destination token account
+    pub user_destination_token_account: Pubkey,
+    /// Input amount for the swap
+    pub input_amount: u64,
+    /// Minimum output amount expected
+    pub minimum_output_amount: u64,
 }
 
 // =====================================================================================

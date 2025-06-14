@@ -67,6 +67,14 @@ redis = { version = "0.25.0", features = ["aio", "tokio-comp", "connection-manag
 rust_decimal = "1.32"
 num-bigint = "0.4"
 num-traits = "0.2"
+# Orca SDK for math utilities (e.g., PriceMath, constants)
+# orca-whirlpools-sdk = "0.8.0"
+orca_whirlpools_core = "2.0.0"
+
+
+# === Optimization & Numerical Methods ===
+argmin = "0.10.0"
+argmin-math = "0.4.0"
 
 # === Other Core Utilities ===
 dashmap = "5.4.0"

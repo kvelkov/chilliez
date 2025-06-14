@@ -26,6 +26,10 @@ pub enum ArbError {
     #[error("RPC Error: {0}")]
     RpcError(String),
     
+    /// Instruction building errors
+    #[error("Instruction Error: {0}")]
+    InstructionError(String),
+    
     /// Parsing errors for pool data
     #[error("Parse Error: {0}")]
     ParseError(String),
@@ -141,6 +145,7 @@ impl ArbError {
             ArbError::SimulationFailed(_) => true, // Simulations can be retried
             ArbError::Unknown(_) => true, // Unknown errors might be recoverable
             ArbError::NonRecoverable(_) => false,
+            ArbError::InstructionError(_) => false, // Instruction errors usually need code fixes
         }
     }
 
@@ -192,6 +197,7 @@ impl ArbError {
             ArbError::SimulationFailed(_) => ErrorCategory::Trading,
             ArbError::Unknown(_) => ErrorCategory::Critical,
             ArbError::NonRecoverable(_) => ErrorCategory::Critical,
+            ArbError::InstructionError(_) => ErrorCategory::Trading, // Instruction building errors
         }
     }
 }

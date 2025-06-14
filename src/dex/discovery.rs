@@ -239,7 +239,7 @@ pub struct PoolDiscoveryService {
     pub pool_cache: Arc<DashMap<Pubkey, Arc<PoolInfo>>>,
     pub dex_clients: Vec<Arc<dyn PoolDiscoverable>>,
     pub validation_config: PoolValidationConfig,
-    pub banned_pairs_manager: BannedPairsManager,
+    pub banned_pairs_manager: Arc<tokio::sync::Mutex<BannedPairsManager>>,
     rpc_client: Arc<SolanaRpcClient>,
     cache: Arc<Cache>,
 }
@@ -259,7 +259,7 @@ impl PoolDiscoveryService {
             pool_cache: Arc::new(DashMap::new()),
             dex_clients,
             validation_config,
-            banned_pairs_manager,
+            banned_pairs_manager: Arc::new(tokio::sync::Mutex::new(banned_pairs_manager)),
             rpc_client,
             cache,
         })
@@ -309,7 +309,9 @@ impl PoolDiscoveryService {
         );
 
         // Filter banned pairs
-        let filtered_pools = self.banned_pairs_manager.filter_banned_pools(all_pools);
+        let banned_pairs_manager = self.banned_pairs_manager.lock().await;
+        let filtered_pools = banned_pairs_manager.filter_banned_pools(all_pools);
+        drop(banned_pairs_manager); // Release lock early
 
         // Validate pools
         let validated_pools = self.validate_pools(filtered_pools).await?;
@@ -361,9 +363,12 @@ impl PoolDiscoveryService {
         }
 
         // Check if pair is banned
-        if self.banned_pairs_manager.is_pair_banned_pubkey(&pool.token_a.mint, &pool.token_b.mint) {
-            debug!("Pool {} has banned token pair", pool.address);
-            return Ok(false);
+        {
+            let banned_pairs_manager = self.banned_pairs_manager.lock().await;
+            if banned_pairs_manager.is_pair_banned_pubkey(&pool.token_a.mint, &pool.token_b.mint) {
+                debug!("Pool {} has banned token pair", pool.address);
+                return Ok(false);
+            }
         }
 
         Ok(true)
@@ -404,7 +409,7 @@ impl PoolDiscoveryService {
 
     /// Clears expired pools from cache based on age.
     pub fn cleanup_expired_pools(&self, max_age_secs: u64) -> usize {
-        let cutoff_time = std::time::SystemTime::now()
+        let _cutoff_time = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs()
@@ -519,7 +524,11 @@ impl PoolDiscoveryService {
     }
 
     /// Find pools containing specific token pairs.
-    pub fn find_pools_for_tokens(&self, token_a: &Pubkey, token_b: &Pubkey) -> Vec<Arc<PoolInfo>> {
+    pub async fn find_pools_for_tokens(&self, token_a: &Pubkey, token_b: &Pubkey) -> Vec<Arc<PoolInfo>> {
+        let banned_pairs_manager = self.banned_pairs_manager.lock().await;
+        let is_banned = banned_pairs_manager.is_pair_banned_pubkey(token_a, token_b);
+        drop(banned_pairs_manager); // Release lock early
+        
         self.pool_cache
             .iter()
             .filter_map(|entry| {
@@ -527,7 +536,7 @@ impl PoolDiscoveryService {
                 let matches = (pool.token_a.mint == *token_a && pool.token_b.mint == *token_b) ||
                              (pool.token_a.mint == *token_b && pool.token_b.mint == *token_a);
                 
-                if matches && !self.banned_pairs_manager.is_pair_banned_pubkey(token_a, token_b) {
+                if matches && !is_banned {
                     Some(pool.clone())
                 } else {
                     None
@@ -537,13 +546,15 @@ impl PoolDiscoveryService {
     }
 
     /// Adds a new banned pair.
-    pub fn ban_pair(&mut self, token_a: &str, token_b: &str) -> Result<()> {
-        self.banned_pairs_manager.ban_pair(token_a, token_b)
+    pub async fn ban_pair(&self, token_a: &str, token_b: &str) -> Result<()> {
+        let mut banned_pairs_manager = self.banned_pairs_manager.lock().await;
+        banned_pairs_manager.ban_pair(token_a, token_b)
     }
 
     /// Checks if a pair is banned.
-    pub fn is_pair_banned(&self, token_a: &Pubkey, token_b: &Pubkey) -> bool {
-        self.banned_pairs_manager.is_pair_banned_pubkey(token_a, token_b)
+    pub async fn is_pair_banned(&self, token_a: &Pubkey, token_b: &Pubkey) -> bool {
+        let banned_pairs_manager = self.banned_pairs_manager.lock().await;
+        banned_pairs_manager.is_pair_banned_pubkey(token_a, token_b)
     }
 }
 

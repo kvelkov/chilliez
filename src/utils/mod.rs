@@ -34,6 +34,11 @@ pub struct PoolInfo {
     pub sqrt_price: Option<u128>,
     pub tick_current_index: Option<i32>,
     pub tick_spacing: Option<u16>,
+    // Orca Whirlpool specific fields for tick arrays and oracle
+    pub tick_array_0: Option<Pubkey>,
+    pub tick_array_1: Option<Pubkey>,
+    pub tick_array_2: Option<Pubkey>,
+    pub oracle: Option<Pubkey>,
 }
 
 impl Default for PoolInfo {
@@ -54,6 +59,10 @@ impl Default for PoolInfo {
             sqrt_price: None,
             tick_current_index: None,
             tick_spacing: None,
+            tick_array_0: None,
+            tick_array_1: None,
+            tick_array_2: None,
+            oracle: None,
         }
     }
 }

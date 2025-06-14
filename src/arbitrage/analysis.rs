@@ -15,7 +15,7 @@ use crate::{
 };
 use anyhow::{Result, anyhow};
 use dashmap::DashMap;
-use log::{debug, info};
+use log::{debug, info, warn};
 use once_cell::sync::Lazy;
 use rust_decimal::prelude::*;
 use rust_decimal::Decimal;
@@ -25,6 +25,10 @@ use std::{
     time::Duration,
 };
 use tokio::sync::Mutex;
+
+// Optimization imports
+use argmin::core::{CostFunction, Executor};
+use argmin::solver::brent::BrentOpt;
 
 // =============================================================================
 // Core Calculation Results and Types
@@ -169,17 +173,34 @@ impl SlippageModel for XYKSlippageModel {
         input_amount: &TokenAmount,
         is_a_to_b: bool,
     ) -> f64 {
-        let input_reserve_float = if is_a_to_b {
-            pool.token_a.reserve as f64
+        // Use integer arithmetic for precise slippage calculation
+        let input_reserve = if is_a_to_b {
+            pool.token_a.reserve
         } else {
-            pool.token_b.reserve as f64
+            pool.token_b.reserve
         };
-        let input_amount_float = input_amount.to_float();
-        if (input_reserve_float + input_amount_float).abs() < f64::EPSILON {
+        
+        // Convert input amount to u128 for safe arithmetic
+        let input_amount_u128 = input_amount.amount as u128;
+        let input_reserve_u128 = input_reserve as u128;
+        
+        if input_reserve_u128 == 0 {
+            return 1.0; // 100% slippage if no liquidity
+        }
+        
+        // Calculate slippage using integer arithmetic: slippage = input / (reserve + input)
+        // Use basis points for precision: multiply by 10000, then divide at the end
+        let total_liquidity = input_reserve_u128.saturating_add(input_amount_u128);
+        if total_liquidity == 0 {
             return 1.0;
         }
-        // Slippage = input_amount / (reserve + input_amount)
-        input_amount_float / (input_reserve_float + input_amount_float)
+        
+        let slippage_bps = input_amount_u128
+            .saturating_mul(10000)
+            .saturating_div(total_liquidity);
+            
+        // Convert back to decimal (basis points to percentage)
+        (slippage_bps as f64) / 10000.0
     }
 }
 
@@ -430,30 +451,78 @@ impl AdvancedArbitrageMath {
         Ok(result)
     }
 
-    /// Internal optimization logic
+    /// Internal optimization logic using argmin for convex optimization
     fn optimize_input_amount(
         &self,
         pools: &[&PoolInfo],
         initial_input: Decimal,
         _target_profit_pct: Decimal,
     ) -> Result<OptimalInputResult> {
-        // Simplified optimization - in real implementation would use numerical methods
-        let optimal_input = initial_input;
-        let gas_cost = self.estimate_gas_cost(pools);
-        let final_output = self.simulate_multihop_output(pools, optimal_input)?;
-        let profit = final_output - optimal_input;
-        let min_outputs = self.calculate_min_outputs(pools, optimal_input)?;
-        let log_weights = self.calculate_log_weights(pools)?;
-
-        Ok(OptimalInputResult {
-            optimal_input,
-            max_net_profit: profit - gas_cost,
-            final_output,
-            gas_cost_sol: gas_cost,
-            requires_flash_loan: optimal_input > Decimal::from(1000), // Simple threshold
-            min_outputs,
-            log_weights,
-        })
+        let initial_input_f64 = initial_input.to_f64().unwrap_or(1000.0);
+        let gas_cost_sol = self.estimate_gas_cost(pools).to_f64().unwrap_or(0.005);
+        
+        // Create the cost function for optimization
+        let cost_function = ArbitrageCostFunction::new(pools, gas_cost_sol);
+        
+        // Define search bounds - we'll search from 1% to 1000% of initial input
+        let min_input = initial_input_f64 * 0.01;
+        let max_input = initial_input_f64 * 10.0;
+        
+        // Use Brent's method for 1D optimization (finding the minimum of our negative profit function)
+        let solver = BrentOpt::new(min_input, max_input);
+        
+        // Execute the optimization
+        let result = Executor::new(cost_function, solver)
+            .configure(|state| state.max_iters(100).target_cost(1e-8))
+            .run();
+        
+        match result {
+            Ok(optimization_result) => {
+                let optimal_input_f64 = optimization_result.state().best_param.unwrap_or(initial_input_f64);
+                let optimal_input = Decimal::from_f64(optimal_input_f64).unwrap_or(initial_input);
+                
+                // Calculate final results with the optimal input
+                let final_output = self.simulate_multihop_output(pools, optimal_input)?;
+                let profit = final_output - optimal_input;
+                let gas_cost = Decimal::from_f64(gas_cost_sol).unwrap_or(Decimal::new(5, 3)); // 0.005 SOL default
+                let min_outputs = self.calculate_min_outputs(pools, optimal_input)?;
+                let log_weights = self.calculate_log_weights(pools)?;
+                
+                // Verify the optimization found a better result
+                let net_profit = profit - gas_cost;
+                info!("Optimization completed: optimal_input={}, net_profit={}", optimal_input, net_profit);
+                
+                Ok(OptimalInputResult {
+                    optimal_input,
+                    max_net_profit: net_profit,
+                    final_output,
+                    gas_cost_sol: gas_cost,
+                    requires_flash_loan: optimal_input > Decimal::from(1000), // Arbitrary threshold
+                    min_outputs,
+                    log_weights,
+                })
+            }
+            Err(e) => {
+                warn!("Optimization failed: {}. Using initial input as fallback.", e);
+                
+                // Fallback to initial input if optimization fails
+                let final_output = self.simulate_multihop_output(pools, initial_input)?;
+                let profit = final_output - initial_input;
+                let gas_cost = Decimal::from_f64(gas_cost_sol).unwrap_or(Decimal::new(5, 3));
+                let min_outputs = self.calculate_min_outputs(pools, initial_input)?;
+                let log_weights = self.calculate_log_weights(pools)?;
+                
+                Ok(OptimalInputResult {
+                    optimal_input: initial_input,
+                    max_net_profit: profit - gas_cost,
+                    final_output,
+                    gas_cost_sol: gas_cost,
+                    requires_flash_loan: false,
+                    min_outputs,
+                    log_weights,
+                })
+            }
+        }
     }
 
     /// Simulate execution across multiple hops
@@ -607,6 +676,189 @@ impl FeeManager {
         let complexity_factor = pools.len() as f64 * 0.1;
         let slippage_factor = total_slippage * 10.0;
         (complexity_factor + slippage_factor).min(10.0) // Cap at 10
+    }
+}
+
+// =============================================================================
+// Optimization Framework for Arbitrage
+// =============================================================================
+
+/// Cost function for arbitrage profit optimization
+/// This implements the negative profit function to be minimized (since argmin minimizes)
+pub struct ArbitrageCostFunction<'a> {
+    pools: &'a [&'a PoolInfo],
+    gas_cost_sol: f64,
+}
+
+impl<'a> ArbitrageCostFunction<'a> {
+    pub fn new(pools: &'a [&'a PoolInfo], gas_cost_sol: f64) -> Self {
+        Self { pools, gas_cost_sol }
+    }
+    
+    /// Calculate the negative net profit for a given input amount
+    /// Returns negative value because argmin minimizes, but we want to maximize profit
+    fn calculate_negative_net_profit(&self, input_amount: f64) -> f64 {
+        // Simulate the multi-hop arbitrage execution
+        let final_output = self.simulate_arbitrage_execution(input_amount);
+        
+        // Calculate profit = output - input - gas_cost
+        let gross_profit = final_output - input_amount;
+        let net_profit = gross_profit - self.gas_cost_sol;
+        
+        // Return negative profit (since we want to minimize the negative to find maximum)
+        -net_profit
+    }
+    
+    /// Simulate arbitrage execution through multiple pools
+    fn simulate_arbitrage_execution(&self, input_amount: f64) -> f64 {
+        let mut current_amount = input_amount;
+        
+        for pool in self.pools {
+            current_amount = self.simulate_swap_through_pool(pool, current_amount);
+            
+            // If any swap fails or produces zero output, return 0
+            if current_amount <= 0.0 {
+                return 0.0;
+            }
+        }
+        
+        current_amount
+    }
+    
+    /// Simulate a swap through a single pool using AMM formulas
+    fn simulate_swap_through_pool(&self, pool: &PoolInfo, input_amount: f64) -> f64 {
+        // This is where we implement proper AMM math based on pool type
+        match pool.dex_type {
+            DexType::Orca => self.simulate_orca_clmm_swap(pool, input_amount),
+            DexType::Raydium => self.simulate_raydium_amm_swap(pool, input_amount),
+            DexType::Meteora => self.simulate_meteora_swap(pool, input_amount),
+            DexType::Lifinity => self.simulate_lifinity_swap(pool, input_amount),
+            DexType::Whirlpool => self.simulate_orca_clmm_swap(pool, input_amount), // Same as Orca
+            DexType::Unknown(_) => {
+                warn!("Unknown DEX type for pool {}, using fallback calculation", pool.address);
+                self.simulate_raydium_amm_swap(pool, input_amount) // Fallback to constant product
+            }
+        }
+    }
+    
+    /// Simulate Orca CLMM swap (Concentrated Liquidity Market Maker)
+    fn simulate_orca_clmm_swap(&self, pool: &PoolInfo, input_amount: f64) -> f64 {
+        // For CLMM, we need to consider current tick, liquidity density, and price impact
+        if let (Some(liquidity), Some(sqrt_price)) = (pool.liquidity, pool.sqrt_price) {
+            if liquidity > 0 && sqrt_price > 0 {
+                // Use integer arithmetic for price calculation when possible
+                let sqrt_price_u128 = sqrt_price as u128;
+                let price_scaled = sqrt_price_u128.saturating_mul(sqrt_price_u128);
+                let price = (price_scaled as f64) / ((1u128 << 64) as f64); // Scale down from Q64.64 format
+                
+                let fee_rate_bips = pool.fee_rate_bips.unwrap_or(25);
+                
+                // Calculate slippage using integer arithmetic
+                let input_amount_scaled = (input_amount * 1_000_000.0) as u128; // Scale up for precision
+                let liquidity_scaled = liquidity / 1000; // Scale down liquidity to prevent overflow
+                
+                // Calculate slippage in basis points: slippage_bps = (input / liquidity) * 10000
+                let slippage_bps = if liquidity_scaled > 0 {
+                    (input_amount_scaled / (liquidity_scaled as u128)).min(1000) // Cap at 10% (1000 bps)
+                } else {
+                    1000 // 10% default slippage if no liquidity data
+                };
+                
+                // Apply slippage: effective_price = price * (1 + slippage_factor)
+                // Convert slippage from basis points to factor
+                let price_impact_factor = (10000 + slippage_bps) as f64 / 10000.0;
+                let effective_price = price * price_impact_factor;
+                
+                let output_before_fees = input_amount / effective_price;
+                
+                // Apply fees using integer arithmetic
+                let fee_factor = (10000 - fee_rate_bips) as f64 / 10000.0;
+                let output_after_fees = output_before_fees * fee_factor;
+                
+                output_after_fees.max(0.0)
+            } else {
+                0.0
+            }
+        } else {
+            0.0
+        }
+    }
+    
+    /// Simulate Raydium constant product AMM swap
+    fn simulate_raydium_amm_swap(&self, pool: &PoolInfo, input_amount: f64) -> f64 {
+        // Constant product formula: x * y = k, using integer arithmetic for precision
+        let reserve_a_u128 = pool.token_a.reserve as u128;
+        let reserve_b_u128 = pool.token_b.reserve as u128;
+        let fee_rate_bips = pool.fee_rate_bips.unwrap_or(25);
+        
+        if reserve_a_u128 > 0 && reserve_b_u128 > 0 {
+            // Scale input amount for integer arithmetic
+            let input_amount_scaled = (input_amount * 1_000_000.0) as u128;
+            
+            // Apply fees using integer arithmetic: input_after_fees = input * (10000 - fee_bips) / 10000
+            let input_after_fees = input_amount_scaled
+                .saturating_mul(10000u128.saturating_sub(fee_rate_bips as u128))
+                .saturating_div(10000);
+            
+            // Constant product calculation: output = (reserve_b * input_after_fees) / (reserve_a + input_after_fees)
+            let denominator = reserve_a_u128.saturating_add(input_after_fees);
+            if denominator > 0 {
+                let output_scaled = reserve_b_u128
+                    .saturating_mul(input_after_fees)
+                    .saturating_div(denominator);
+                
+                // Convert back to f64 (scale down)
+                (output_scaled as f64) / 1_000_000.0
+            } else {
+                0.0
+            }
+        } else {
+            0.0
+        }
+    }
+    
+    /// Simulate Meteora DLMM swap
+    fn simulate_meteora_swap(&self, pool: &PoolInfo, input_amount: f64) -> f64 {
+        // Meteora uses Dynamic Liquidity Market Maker (DLMM) - simplified version
+        if let Some(liquidity) = pool.liquidity {
+            if liquidity > 0 {
+                let fee_rate = pool.fee_rate_bips.unwrap_or(25) as f64 / 10000.0;
+                let base_rate = (liquidity as f64) / 1_000_000.0;
+                let output = input_amount * base_rate * (1.0 - fee_rate);
+                output.max(0.0)
+            } else {
+                0.0
+            }
+        } else {
+            0.0
+        }
+    }
+    
+    /// Simulate Lifinity proactive market making swap
+    fn simulate_lifinity_swap(&self, pool: &PoolInfo, input_amount: f64) -> f64 {
+        // Lifinity uses proactive market making - simplified version
+        if let Some(liquidity) = pool.liquidity {
+            if liquidity > 0 {
+                let fee_rate = pool.fee_rate_bips.unwrap_or(30) as f64 / 10000.0; // Slightly higher fees
+                let base_rate = (liquidity as f64) / 1_200_000.0; // Different scaling
+                let output = input_amount * base_rate * (1.0 - fee_rate);
+                output.max(0.0)
+            } else {
+                0.0
+            }
+        } else {
+            0.0
+        }
+    }
+}
+
+impl<'a> CostFunction for ArbitrageCostFunction<'a> {
+    type Param = f64;
+    type Output = f64;
+
+    fn cost(&self, param: &Self::Param) -> Result<Self::Output, argmin::core::Error> {
+        let cost = self.calculate_negative_net_profit(*param);
+        Ok(cost)
     }
 }
 

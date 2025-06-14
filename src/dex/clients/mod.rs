@@ -9,7 +9,7 @@ pub mod lifinity;
 pub mod phoenix;
 
 // Re-export client structs for easier access
-pub use orca::OrcaClient;
+pub use orca::{OrcaClient, OrcaPoolParser};
 pub use raydium::RaydiumClient;
 pub use meteora::MeteoraClient;
 pub use lifinity::LifinityClient;

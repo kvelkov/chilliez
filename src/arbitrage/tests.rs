@@ -4,7 +4,7 @@ mod tests {
     use crate::arbitrage::opportunity::{ArbHop, MultiHopArbOpportunity};
     use crate::utils::{DexType, PoolInfo, PoolToken};
     use crate::arbitrage::analysis::FeeManager; // Added import for FeeManager
-    use crate::error::ArbError;
+    use crate::error::{ArbError, self};
     use crate::dex::{DexClient, BannedPairsManager};
     use crate::dex::api::{Quote, SwapInfo};
     // use crate::arbitrage::detector::ArbitrageDetector; // TODO: Re-enable when banned pairs are implemented
@@ -14,6 +14,7 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::Arc;
     use tokio::sync::Mutex;
+    use crate::dex::api::CommonSwapInfo; // For get_swap_instruction_enhanced
     use dashmap::DashMap;
     use solana_sdk::{pubkey::Pubkey, instruction::Instruction};
     use std::time::Duration;
@@ -94,6 +95,11 @@ mod tests {
             sqrt_price: None,
             tick_current_index: None,
             tick_spacing: None,
+            // Initialize new Orca-specific fields to None
+            tick_array_0: None,
+            tick_array_1: None,
+            tick_array_2: None,
+            oracle: None,
         };
 
         let pool2 = PoolInfo {
@@ -122,6 +128,11 @@ mod tests {
             sqrt_price: None,
             tick_current_index: None,
             tick_spacing: None,
+            // Initialize new Orca-specific fields to None
+            tick_array_0: None,
+            tick_array_1: None,
+            tick_array_2: None,
+            oracle: None,
         };
 
         let pools = DashMap::new();
@@ -188,6 +199,17 @@ mod tests {
         async fn discover_pools(&self) -> anyhow::Result<Vec<PoolInfo>> {
             Ok(vec![]) // Return empty pool list for tests
         }
+
+        async fn get_swap_instruction_enhanced(
+            &self,
+            _swap_info: &CommonSwapInfo,
+            _pool_info: Arc<PoolInfo>,
+        ) -> Result<Instruction, error::ArbError> {
+            // Return a mock instruction or an error for the stub
+            // For simplicity, let's return an error indicating it's a stub
+            Err(ArbError::InstructionError("MockDexClient get_swap_instruction_enhanced not implemented".to_string()))
+        }
+
     }
 
     #[tokio::test]

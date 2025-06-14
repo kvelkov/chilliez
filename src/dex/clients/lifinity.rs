@@ -1,7 +1,8 @@
 // src/dex/lifinity.rs
 //! Lifinity client and parser for on-chain data and instruction building.
 
-use crate::dex::api::{DexClient, Quote, SwapInfo, PoolDiscoverable};
+use crate::dex::api::{DexClient, Quote, SwapInfo, PoolDiscoverable, CommonSwapInfo};
+use crate::error::ArbError;
 use crate::solana::rpc::SolanaRpcClient;
 use crate::utils::{DexType, PoolInfo, PoolParser as UtilsPoolParser, PoolToken};
 use anyhow::{anyhow, Result as AnyhowResult};
@@ -115,6 +116,8 @@ impl UtilsPoolParser for LifinityPoolParser {
             sqrt_price: Some(state.sqrt_price),
             tick_current_index: Some(state.tick_current),
             tick_spacing: None, // Not explicitly in this struct
+            // Orca-specific fields (not applicable to Lifinity)
+            tick_array_0: None, tick_array_1: None, tick_array_2: None, oracle: None,
         })
     }
 
@@ -139,32 +142,9 @@ impl LifinityClient {
 impl DexClient for LifinityClient {
     fn get_name(&self) -> &str { "Lifinity" }
 
-    fn calculate_onchain_quote(&self, pool: &PoolInfo, input_amount: u64) -> AnyhowResult<Quote> {
-        // Basic quote calculation for Lifinity
-        // This is a simplified version using constant product formula
-        // Real Lifinity implementation would use their proactive market making model
-        
-        warn!("Lifinity quote calculation is using a simplified constant product formula. Real implementation requires their PMM model.");
-        
-        if pool.token_a.reserve == 0 || pool.token_b.reserve == 0 {
-            return Err(anyhow!("Lifinity pool {} has zero reserves.", pool.address));
-        }
-        
-        let fee_rate = 0.003; // 0.3% default fee
-        let input_after_fees = (input_amount as f64 * (1.0 - fee_rate)) as u64;
-        
-        let output_amount = (input_after_fees as u128 * pool.token_b.reserve as u128)
-            .saturating_div(pool.token_a.reserve as u128 + input_after_fees as u128);
-
-        Ok(Quote {
-            input_token: pool.token_a.symbol.clone(),
-            output_token: pool.token_b.symbol.clone(),
-            input_amount,
-            output_amount: output_amount as u64,
-            dex: self.get_name().to_string(),
-            route: vec![pool.address],
-            slippage_estimate: Some(fee_rate),
-        })
+    fn calculate_onchain_quote(&self, _pool: &PoolInfo, _input_amount: u64) -> AnyhowResult<Quote> {
+        warn!("LifinityClient: calculate_onchain_quote is a placeholder.");
+        Err(anyhow!("calculate_onchain_quote not implemented for Lifinity"))
     }
 
     fn get_swap_instruction(&self, swap_info: &SwapInfo) -> AnyhowResult<Instruction> {
@@ -184,40 +164,62 @@ impl DexClient for LifinityClient {
     }
 
     async fn discover_pools(&self) -> AnyhowResult<Vec<PoolInfo>> {
-        warn!("Lifinity pool discovery is using a placeholder implementation.");
-        
-        // Return a mock pool for testing purposes
-        let mock_pools = vec![
-            PoolInfo {
-                address: Pubkey::new_unique(),
-                name: "Lifinity SOL/USDC".to_string(),
-                dex_type: DexType::Lifinity,
-                token_a: PoolToken {
-                    mint: solana_sdk::pubkey!("So11111111111111111111111111111111111111112"), // SOL
-                    symbol: "SOL".to_string(),
-                    decimals: 9,
-                    reserve: 2_000_000_000_000, // 2000 SOL
-                },
-                token_b: PoolToken {
-                    mint: solana_sdk::pubkey!("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"), // USDC
-                    symbol: "USDC".to_string(),
-                    decimals: 6,
-                    reserve: 150_000_000_000, // 150k USDC
-                },
-                token_a_vault: Pubkey::new_unique(),
-                token_b_vault: Pubkey::new_unique(),
-                fee_numerator: Some(30),
-                fee_denominator: Some(10000),
-                fee_rate_bips: Some(30),
-                last_update_timestamp: 0,
-                liquidity: Some(15_000_000_000),
-                sqrt_price: None,
-                tick_current_index: None,
-                tick_spacing: None,
-            }
+        warn!("LifinityClient: discover_pools is a placeholder.");
+        // Implement discovery logic, e.g., from a Lifinity API or on-chain registry
+        Ok(Vec::new())
+    }
+
+    async fn get_swap_instruction_enhanced(
+        &self,
+        swap_info: &CommonSwapInfo,
+        pool_info: Arc<PoolInfo>,
+    ) -> Result<Instruction, crate::error::ArbError> {
+        info!(
+            "LifinityClient: Building swap instruction for pool {} ({} -> {})",
+            pool_info.address, swap_info.source_token_mint, swap_info.destination_token_mint
+        );
+        warn!("LifinityClient: get_swap_instruction_enhanced is a placeholder. DEX-specific logic required.");
+
+        // PoolInfo for Lifinity should contain:
+        // - Specific vault accounts, config accounts, oracle accounts if used.
+        //   Example fields: pool_config, token_a_vault, token_b_vault, oracle_account
+
+        // Example:
+        // let token_a_vault = pool_info.token_a_vault.ok_or_else(|| ArbError::InstructionError("Missing Lifinity token_a_vault".to_string()))?;
+        // let token_b_vault = pool_info.token_b_vault.ok_or_else(|| ArbError::InstructionError("Missing Lifinity token_b_vault".to_string()))?;
+        // let oracle_account = pool_info.lifinity_oracle.ok_or_else(|| ArbError::InstructionError("Missing Lifinity oracle_account".to_string()))?;
+
+        let accounts = vec![
+            // AccountMetas depend heavily on the Lifinity program's swap instruction
+            solana_sdk::instruction::AccountMeta::new_readonly(spl_token::id(), false),
+            solana_sdk::instruction::AccountMeta::new_readonly(swap_info.user_wallet_pubkey, true), // Signer
+            solana_sdk::instruction::AccountMeta::new(pool_info.address, false), // Pool address
+            solana_sdk::instruction::AccountMeta::new(swap_info.user_source_token_account, false),
+            solana_sdk::instruction::AccountMeta::new(swap_info.user_destination_token_account, false),
+            // ... other Lifinity-specific accounts from pool_info ...
+            // AccountMeta::new(token_a_vault, false),
+            // AccountMeta::new(token_b_vault, false),
+            // AccountMeta::new_readonly(oracle_account, false), // If oracle is used
         ];
-        
-        Ok(mock_pools)
+
+        // Instruction data will be specific to Lifinity's swap instruction.
+        let mut instruction_data = Vec::new();
+        // instruction_data.push(LIFINITY_SWAP_DISCRIMINATOR); // Replace with actual
+        // instruction_data.extend_from_slice(&swap_info.input_amount.to_le_bytes());
+        // instruction_data.extend_from_slice(&swap_info.minimum_output_amount.to_le_bytes());
+        // ... other Lifinity-specific instruction params ...
+
+        if instruction_data.is_empty() {
+            return Err(crate::error::ArbError::InstructionError(
+                "Lifinity swap instruction data not implemented".to_string(),
+            ));
+        }
+
+        Ok(Instruction {
+            program_id: LIFINITY_PROGRAM_ID,
+            accounts,
+            data: instruction_data,
+        })
     }
 }
 
@@ -226,10 +228,11 @@ impl PoolDiscoverable for LifinityClient {
     async fn discover_pools(&self) -> AnyhowResult<Vec<PoolInfo>> {
         <Self as DexClient>::discover_pools(self).await
     }
-    async fn fetch_pool_data(&self, pool_address: Pubkey) -> AnyhowResult<PoolInfo> {
-        Err(anyhow!("fetch_pool_data not yet implemented for LifinityClient. Pool address: {}", pool_address))
+    async fn fetch_pool_data(&self, _pool_address: Pubkey) -> AnyhowResult<PoolInfo> {
+        Err(anyhow!("fetch_pool_data not implemented for LifinityClient"))
     }
-    fn dex_name(&self) -> &str {
-        self.get_name()
+    
+    fn dex_name(&self) -> &str { 
+        self.get_name() 
     }
 }

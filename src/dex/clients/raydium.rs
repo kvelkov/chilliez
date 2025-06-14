@@ -3,13 +3,13 @@
 //! This implementation follows the official Raydium V4 layout for maximum accuracy.
 //! Includes Raydium API data models.
 
-use crate::dex::api::{DexClient, Quote, SwapInfo, PoolDiscoverable};
+use crate::dex::api::{DexClient, Quote, SwapInfo, PoolDiscoverable, CommonSwapInfo};
 use crate::solana::rpc::SolanaRpcClient;
 use crate::utils::{DexType, PoolInfo, PoolParser as UtilsPoolParser, PoolToken};
 use anyhow::{anyhow, Result as AnyhowResult};
 use async_trait::async_trait;
 use bytemuck::{Pod, Zeroable};
-use log::info;
+use log::{info, warn};
 use serde::{Deserialize, Serialize};
 use solana_sdk::{
     instruction::{AccountMeta, Instruction},
@@ -147,6 +147,8 @@ impl UtilsPoolParser for RaydiumPoolParser {
             fee_rate_bips: Some((pool_state.swap_fee_numerator * 10000 / pool_state.swap_fee_denominator) as u16),
             last_update_timestamp: pool_state.pool_open_time,
             liquidity: None, sqrt_price: None, tick_current_index: None, tick_spacing: None,
+            // Orca-specific fields (not applicable to Raydium)
+            tick_array_0: None, tick_array_1: None, tick_array_2: None, oracle: None,
         })
     }
 
@@ -236,10 +238,22 @@ impl DexClient for RaydiumClient {
                 token_b: PoolToken { mint: quote_mint, symbol: pool.quote_symbol.unwrap_or_default(), decimals: pool.quote_decimals.unwrap_or(0), reserve: 0 },
                 token_a_vault: base_vault, token_b_vault: quote_vault, fee_numerator: Some(25), fee_denominator: Some(10000), fee_rate_bips: Some(25), last_update_timestamp: 0,
                 sqrt_price: None, liquidity: None, tick_current_index: None, tick_spacing: None,
+                // Orca-specific fields (not applicable to Raydium)
+                tick_array_0: None, tick_array_1: None, tick_array_2: None, oracle: None,
             })
         }).collect();
         info!("Successfully parsed {} Raydium pools from API response.", pools.len());
         Ok(pools)
+    }
+
+    async fn get_swap_instruction_enhanced(
+        &self,
+        _swap_info: &CommonSwapInfo,
+        _pool_info: Arc<PoolInfo>,
+    ) -> Result<Instruction, crate::error::ArbError> {
+        // Stub implementation - replace with actual Raydium swap logic
+        warn!("RaydiumClient::get_swap_instruction_enhanced is not implemented yet");
+        Err(crate::error::ArbError::InstructionError("Raydium enhanced swap instruction not implemented".to_string()))
     }
 }
 #[async_trait]

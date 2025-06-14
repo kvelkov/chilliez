@@ -1,5 +1,6 @@
 // src/arbitrage/mev.rs
 //! MEV Protection and Jito Integration Module
+//!
 //! 
 //! This module consolidates MEV protection strategies and Jito bundle submission
 //! functionality into a unified interface for atomic transaction execution.
@@ -7,13 +8,15 @@
 use crate::{
     arbitrage::opportunity::MultiHopArbOpportunity,
     error::ArbError,
+    solana::rpc::SolanaRpcClient as LocalSolanaRpcClient, // Renamed to avoid conflict
 };
-use log::{info, warn, debug};
+use log::{info, warn, debug, error};
 use solana_sdk::{
     compute_budget::ComputeBudgetInstruction,
     instruction::Instruction,
     transaction::Transaction,
-    signature::Signature,
+    hash::Hash as SolanaHash, // Alias to avoid conflict if Hash is defined elsewhere
+    signature::{Signature, Keypair},
     pubkey::Pubkey,
     signer::Signer,
 };
@@ -24,6 +27,7 @@ use std::{
     time::{Duration, Instant},
 };
 use tokio::{sync::Mutex, time::timeout};
+use solana_client::nonblocking::rpc_client::RpcClient as NonBlockingRpcClient;
 
 // ========================================================================================
 // Configuration Structures
@@ -251,13 +255,20 @@ pub struct JitoHandler {
     priority_fee_history: Arc<Mutex<Vec<(Instant, u64)>>>,
     http_client: reqwest::Client,
     request_id_counter: std::sync::atomic::AtomicU64,
+    rpc_client: Arc<NonBlockingRpcClient>, // For fetching recent blockhash
 }
 
 impl JitoHandler {
     /// Create a new JitoHandler with MEV protection
-    pub fn new(mev_config: MevProtectionConfig, jito_config: JitoConfig) -> Self {
+    pub fn new(
+        mev_config: MevProtectionConfig, 
+        jito_config: JitoConfig,
+        rpc_url: String, // URL for the RPC client
+    ) -> Self {
         info!("🛡️ Initializing MEV Protection & Jito Handler");
         info!("   🔒 Private mempool: {}", mev_config.enable_private_mempool);
+        // ... (other info logs)
+
         info!("   💰 Dynamic fee adjustment: {}", mev_config.dynamic_fee_adjustment);
         info!("   📦 Transaction bundling: {}", mev_config.bundle_transactions);
         info!("   🎲 Randomized timing: {}", mev_config.randomize_execution_timing);
@@ -270,6 +281,9 @@ impl JitoHandler {
             .build()
             .expect("Failed to create HTTP client");
 
+        let rpc_client = Arc::new(NonBlockingRpcClient::new_with_commitment(
+            rpc_url, solana_sdk::commitment_config::CommitmentConfig::confirmed()));
+
         Self {
             mev_config,
             jito_config,
@@ -279,6 +293,7 @@ impl JitoHandler {
             priority_fee_history: Arc::new(Mutex::new(Vec::new())),
             http_client,
             request_id_counter: std::sync::atomic::AtomicU64::new(1),
+            rpc_client,
         }
     }
 
@@ -462,6 +477,7 @@ impl JitoHandler {
         &self,
         opportunities: Vec<MultiHopArbOpportunity>,
         instructions_per_opportunity: Vec<Vec<Instruction>>,
+        payer_signer: Arc<Keypair>, // The wallet that pays for and signs the arbitrage transactions
         tip_lamports: Option<u64>,
     ) -> Result<JitoBundleResult, ArbError> {
         let tip_amount = tip_lamports.unwrap_or(self.jito_config.default_tip_lamports);
@@ -472,7 +488,8 @@ impl JitoHandler {
         // Create MEV-protected bundle
         let bundle_transactions = self.create_mev_protected_bundle(
             opportunities, 
-            instructions_per_opportunity
+            instructions_per_opportunity,
+            payer_signer,
         ).await?;
 
         // Submit bundle to Jito
@@ -484,6 +501,7 @@ impl JitoHandler {
         &self,
         opportunities: Vec<MultiHopArbOpportunity>,
         instructions_per_opportunity: Vec<Vec<Instruction>>,
+        payer_signer: Arc<Keypair>, // The wallet that pays for and signs the arbitrage transactions
     ) -> Result<Vec<Transaction>, ArbError> {
         if !self.mev_config.bundle_transactions {
             return Err(ArbError::ConfigError("Transaction bundling is disabled".to_string()));
@@ -494,6 +512,7 @@ impl JitoHandler {
         let mut bundle_transactions = Vec::new();
         let mut total_compute_units = 0u32;
         const MAX_COMPUTE_UNITS_PER_TX: u32 = 1_400_000;
+        let recent_blockhash = self.get_recent_blockhash().await?;
 
         for (i, (opportunity, instructions)) in opportunities.iter().zip(instructions_per_opportunity.iter()).enumerate() {
             // Calculate compute units needed for this opportunity
@@ -529,11 +548,13 @@ impl JitoHandler {
                 tx_instructions.extend(randomization_instructions);
             }
 
-            // Create a placeholder transaction (would need real wallet and recent blockhash in production)
-            let transaction = Transaction::new_with_payer(
+            let mut transaction = Transaction::new_with_payer(
                 &tx_instructions,
-                None, // payer would be set from wallet in production
+                Some(&payer_signer.pubkey()),
             );
+            
+            // Sign the transaction
+            transaction.sign(&[&payer_signer], recent_blockhash);
             
             bundle_transactions.push(transaction);
             total_compute_units += estimated_cu;
@@ -569,7 +590,10 @@ impl JitoHandler {
         self.validate_bundle(&transactions)?;
 
         // Create tip transaction
-        let tip_transaction = self.create_tip_transaction(tip_amount).await?;
+        let tip_payer_keypair = self.jito_config.auth_keypair_path.as_ref()
+            .ok_or_else(|| ArbError::ConfigError("Jito auth_keypair_path not configured for tip".to_string()))
+            .and_then(|path| solana_sdk::signer::keypair::read_keypair_file(path).map_err(|e| ArbError::ConfigError(format!("Failed to read Jito auth keypair: {}", e))))?;
+        let tip_transaction = self.create_tip_transaction(tip_amount, Arc::new(tip_payer_keypair)).await?;
         
         // Combine transactions with tip
         let mut bundle_transactions = transactions;
@@ -659,18 +683,18 @@ impl JitoHandler {
     }
 
     /// Create a tip transaction
-    async fn create_tip_transaction(&self, tip_lamports: u64) -> Result<Transaction, ArbError> {
+    async fn create_tip_transaction(&self, tip_lamports: u64, tip_payer_signer: Arc<Keypair>) -> Result<Transaction, ArbError> {
         debug!("💰 Creating tip transaction: {} lamports", tip_lamports);
 
         let tip_account = self.jito_config.tip_accounts.get("ny")
             .or_else(|| self.jito_config.tip_accounts.values().next())
             .ok_or_else(|| ArbError::ConfigError("No tip accounts configured".to_string()))?;
 
-        let keypair_path = self.jito_config.auth_keypair_path.as_ref()
-            .ok_or_else(|| ArbError::ConfigError("Missing auth_keypair_path".to_string()))?;
+        let payer = tip_payer_signer;
 
-        let payer = solana_sdk::signer::keypair::read_keypair_file(keypair_path)
-            .map_err(|e| ArbError::ConfigError(format!("Failed to read keypair: {}", e)))?;
+        // Add compute budget for the tip transaction itself, as recommended by Jito
+        let cu_limit_ix = ComputeBudgetInstruction::set_compute_unit_limit(200_000); // Generous limit for a simple transfer
+        let cu_price_ix = ComputeBudgetInstruction::set_compute_unit_price(1); // Minimal price for the tip tx
 
         let instruction = solana_sdk::system_instruction::transfer(&payer.pubkey(), tip_account, tip_lamports);
         let message = solana_sdk::message::Message::new(&[instruction], Some(&payer.pubkey()));
@@ -678,7 +702,12 @@ impl JitoHandler {
 
         let transaction = Transaction::new(&[&payer], message, recent_blockhash);
 
-        debug!("💰 Created signed tip transaction to: {}", tip_account);
+        // Jito recommends the tip transaction be the *last* transaction in the bundle.
+        // The actual bundle assembly will handle this. Here we just create the signed tip tx.
+        let mut tip_tx_with_budget = Transaction::new_with_payer(&[cu_limit_ix, cu_price_ix, instruction], Some(&payer.pubkey()));
+        tip_tx_with_budget.sign(&[payer.as_ref()], recent_blockhash);
+
+        debug!("💰 Created signed tip transaction to: {} from {}", tip_account, payer.pubkey());
         Ok(transaction)
     }
 
@@ -839,21 +868,14 @@ impl JitoHandler {
     }
 
     /// Fetch recent blockhash from Solana RPC
-    async fn get_recent_blockhash(&self) -> Result<solana_sdk::hash::Hash, ArbError> {
-        use solana_client::nonblocking::rpc_client::RpcClient;
-        use solana_sdk::commitment_config::CommitmentConfig;
-
-        let rpc = RpcClient::new_with_commitment(
-            "https://api.mainnet-beta.solana.com".to_string(),
-            CommitmentConfig::confirmed(),
-        );
-
-        let blockhash = rpc
+    async fn get_recent_blockhash(&self) -> Result<SolanaHash, ArbError> {
+        self.rpc_client
             .get_latest_blockhash()
             .await
-            .map_err(|e| ArbError::NetworkError(format!("Failed to get recent blockhash: {}", e)))?;
-
-        Ok(blockhash)
+            .map_err(|e| {
+                error!("Failed to get recent blockhash: {}", e);
+                ArbError::RpcError(format!("Failed to get recent blockhash: {}", e))
+            })
     }
 
     /// Estimate compute units needed for a set of instructions
@@ -1050,7 +1072,11 @@ mod tests {
     async fn test_jito_handler_initialization() {
         let mev_config = MevProtectionConfig::default();
         let jito_config = JitoConfig::default();
-        let handler = JitoHandler::new(mev_config, jito_config);
+        let handler = JitoHandler::new(
+            mev_config, 
+            jito_config, 
+            "https://api.mainnet-beta.solana.com".to_string()
+        );
         
         let metrics = handler.get_metrics().await;
         assert_eq!(metrics.successful_transactions, 0);
@@ -1062,7 +1088,11 @@ mod tests {
         let mev_config = MevProtectionConfig::default();
         let max_fee = mev_config.max_priority_fee_lamports;
         let jito_config = JitoConfig::default();
-        let handler = JitoHandler::new(mev_config, jito_config);
+        let handler = JitoHandler::new(
+            mev_config, 
+            jito_config,
+            "https://api.mainnet-beta.solana.com".to_string()
+        );
         
         let opportunity = MultiHopArbOpportunity {
             estimated_profit_usd: Some(100.0),
@@ -1080,7 +1110,11 @@ mod tests {
     async fn test_mev_risk_analysis() {
         let mev_config = MevProtectionConfig::default();
         let jito_config = JitoConfig::default();
-        let handler = JitoHandler::new(mev_config, jito_config);
+        let handler = JitoHandler::new(
+            mev_config, 
+            jito_config,
+            "https://api.mainnet-beta.solana.com".to_string()
+        );
         
         let high_profit_opportunity = MultiHopArbOpportunity {
             estimated_profit_usd: Some(1500.0),
@@ -1120,7 +1154,11 @@ mod tests {
     async fn test_bundle_validation() {
         let mev_config = MevProtectionConfig::default();
         let jito_config = JitoConfig::default();
-        let handler = JitoHandler::new(mev_config, jito_config);
+        let handler = JitoHandler::new(
+            mev_config, 
+            jito_config,
+            "https://api.mainnet-beta.solana.com".to_string()
+        );
 
         // Test empty bundle
         let empty_bundle = vec![];
@@ -1128,7 +1166,11 @@ mod tests {
 
         // Test valid bundle
         use solana_sdk::message::Message;
-        let message = Message::new(&[], None);
+        // Add a compute budget instruction to make it valid for Jito
+        let cu_limit_ix = ComputeBudgetInstruction::set_compute_unit_limit(200_000);
+        let cu_price_ix = ComputeBudgetInstruction::set_compute_unit_price(1);
+        let message = Message::new(&[cu_limit_ix, cu_price_ix], None);
+
         let transaction = Transaction::new_unsigned(message);
         let valid_bundle = vec![transaction];
         
@@ -1139,7 +1181,11 @@ mod tests {
     async fn test_optimal_tip_calculation() {
         let mev_config = MevProtectionConfig::default();
         let jito_config = JitoConfig::default();
-        let handler = JitoHandler::new(mev_config, jito_config);
+        let handler = JitoHandler::new(
+            mev_config, 
+            jito_config,
+            "https://api.mainnet-beta.solana.com".to_string()
+        );
         
         let base_tip = handler.get_optimal_tip(15_000).await;
         assert!(base_tip.is_ok());

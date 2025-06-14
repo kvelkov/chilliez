@@ -2,7 +2,6 @@ pub mod arbitrage;
 pub mod metrics;
 pub mod config;
 pub mod dex;
-pub mod discovery;
 pub mod solana;
 pub mod utils;
 pub mod error;

@@ -42,6 +42,11 @@ mod meteora_tests {
             sqrt_price: None,
             tick_current_index: None,
             tick_spacing: None,
+            // Initialize Orca-specific optional fields
+            tick_array_0: None,
+            tick_array_1: None,
+            tick_array_2: None,
+            oracle: None,
         }
     }
 
@@ -72,6 +77,11 @@ mod meteora_tests {
             sqrt_price: None,
             tick_current_index: None,
             tick_spacing: None,
+            // Initialize Orca-specific optional fields
+            tick_array_0: None,
+            tick_array_1: None,
+            tick_array_2: None,
+            oracle: None,
         }
     }
 
@@ -272,6 +282,11 @@ mod orca_tests {
             sqrt_price: Some(1000000000000000000), // Mock sqrt price
             tick_current_index: Some(-1000),
             tick_spacing: Some(64),
+            // Initialize Orca-specific optional fields
+            tick_array_0: None,
+            tick_array_1: None,
+            tick_array_2: None,
+            oracle: None,
         }
     }
 
@@ -341,6 +356,11 @@ mod raydium_tests {
             sqrt_price: None,
             tick_current_index: None,
             tick_spacing: None,
+            // Initialize Orca-specific optional fields
+            tick_array_0: None,
+            tick_array_1: None,
+            tick_array_2: None,
+            oracle: None,
         }
     }
 

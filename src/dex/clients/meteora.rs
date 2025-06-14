@@ -1,7 +1,7 @@
 // src/dex/meteora.rs
 //! Meteora DEX integration supporting both Dynamic AMM and DLMM pool types.
 
-use crate::dex::api::{DexClient, Quote, SwapInfo, PoolDiscoverable};
+use crate::dex::api::{DexClient, Quote, SwapInfo, PoolDiscoverable, CommonSwapInfo};
 use crate::solana::rpc::SolanaRpcClient;
 use crate::utils::{DexType, PoolInfo, PoolParser as UtilsPoolParser, PoolToken};
 use anyhow::{anyhow, Result as AnyhowResult};
@@ -162,132 +162,101 @@ impl MeteoraClient { pub fn new() -> Self { Self::default() } }
 impl DexClient for MeteoraClient {
     fn get_name(&self) -> &str { "Meteora" }
 
-    fn calculate_onchain_quote(&self, pool: &PoolInfo, input_amount: u64) -> AnyhowResult<Quote> {
-        info!("Calculating Meteora quote for pool {}", pool.address);
-
-        // --- <<< NEW: Dispatch calculation based on pool type ---
-        if pool.tick_current_index.is_some() {
-            // This is a DLMM pool, use CLMM math
-            let liquidity = pool.liquidity.ok_or_else(|| anyhow!("Liquidity not available for Meteora DLMM pool {}", pool.address))?;
-            let _sqrt_price = pool.sqrt_price.ok_or_else(|| anyhow!("Sqrt_price not available for Meteora DLMM pool {}", pool.address))?;
-            
-            let output_amount = calculate_dlmm_output(
-                input_amount,
-                0, // active_bin_id - placeholder
-                10, // bin_step - placeholder
-                liquidity,
-                30, // fee_rate - placeholder (0.3%)
-            )?;
-            
-            warn!("Meteora DLMM quote is an estimate. For perfect quotes, bin_array fetching must be implemented.");
-            
-            Ok(Quote {
-                output_amount,
-                // ... other fields
-                input_token: pool.token_a.symbol.clone(),
-                output_token: pool.token_b.symbol.clone(),
-                input_amount,
-                dex: self.get_name().to_string(),
-                route: vec![pool.address],
-                slippage_estimate: None,
-            })
-        } else {
-            // This is a Dynamic AMM pool, use constant product formula
-            if pool.token_a.reserve == 0 || pool.token_b.reserve == 0 {
-                return Err(anyhow!("Meteora AMM pool {} has zero reserves.", pool.address));
-            }
-            let fee_rate = pool.fee_rate_bips.unwrap_or(0) as f64 / 10000.0;
-            let input_after_fees = (input_amount as f64 * (1.0 - fee_rate)) as u64;
-            
-            let output_amount = (input_after_fees as u128 * pool.token_b.reserve as u128)
-                .saturating_div(pool.token_a.reserve as u128 + input_after_fees as u128);
-
-            Ok(Quote {
-                output_amount: output_amount as u64,
-                // ... other fields
-                input_token: pool.token_a.symbol.clone(),
-                output_token: pool.token_b.symbol.clone(),
-                input_amount,
-                dex: self.get_name().to_string(),
-                route: vec![pool.address],
-                slippage_estimate: Some(fee_rate),
-            })
-        }
+    fn calculate_onchain_quote(&self, _pool: &PoolInfo, _input_amount: u64) -> AnyhowResult<Quote> {
+        warn!("MeteoraClient: calculate_onchain_quote is a placeholder.");
+        Err(anyhow!("calculate_onchain_quote not implemented for Meteora"))
     }
 
     fn get_swap_instruction(&self, swap_info: &SwapInfo) -> AnyhowResult<Instruction> {
-        // Basic swap instruction implementation for Meteora
-        // This is a simplified version - in production you'd need proper account resolution
+        warn!("get_swap_instruction for Meteora is a basic implementation. Production use requires proper pool type identification and account resolution.");
         
-        let program_id = if swap_info.pool.tick_current_index.is_some() {
-            METEORA_DLMM_PROGRAM_ID  // DLMM pool
-        } else {
-            METEORA_DYNAMIC_AMM_PROGRAM_ID  // Dynamic AMM pool
-        };
-        
-        // For now, return a basic instruction structure
-        // In production, you'd need to:
-        // 1. Determine the correct instruction discriminator
-        // 2. Serialize the instruction data with swap parameters
-        // 3. Include all required accounts (pool, vaults, user accounts, etc.)
-        
-        warn!("get_swap_instruction for Meteora is a basic implementation. Production use requires proper instruction building.");
-        
+        // This is the legacy method that uses the complex SwapInfo structure
+        // For now, return a placeholder instruction
         Ok(Instruction {
-            program_id,
+            program_id: METEORA_DYNAMIC_AMM_PROGRAM_ID,
             accounts: vec![
-                solana_program::instruction::AccountMeta::new(swap_info.user_wallet, true),
-                solana_program::instruction::AccountMeta::new(swap_info.pool_account, false),
-                solana_program::instruction::AccountMeta::new(swap_info.user_source_token_account, false),
-                solana_program::instruction::AccountMeta::new(swap_info.user_destination_token_account, false),
+                solana_sdk::instruction::AccountMeta::new(swap_info.user_wallet, true),
+                solana_sdk::instruction::AccountMeta::new(swap_info.pool_account, false),
+                solana_sdk::instruction::AccountMeta::new(swap_info.user_source_token_account, false),
+                solana_sdk::instruction::AccountMeta::new(swap_info.user_destination_token_account, false),
             ],
             data: vec![0], // Placeholder instruction data
         })
     }
 
-    async fn discover_pools(&self) -> AnyhowResult<Vec<PoolInfo>> {
-        warn!("Meteora pool discovery is using a placeholder implementation.");
-        
-        // Return a few mock pools for testing purposes
-        // In production, this would fetch real pools via getProgramAccounts calls
-        let mock_pools = vec![
-            PoolInfo {
-                address: Pubkey::new_unique(),
-                name: "Meteora SOL/USDC".to_string(),
-                dex_type: DexType::Meteora,
-                token_a: PoolToken {
-                    mint: solana_sdk::pubkey!("So11111111111111111111111111111111111111112"), // SOL
-                    symbol: "SOL".to_string(),
-                    decimals: 9,
-                    reserve: 1_000_000_000_000, // 1000 SOL
-                },
-                token_b: PoolToken {
-                    mint: solana_sdk::pubkey!("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"), // USDC
-                    symbol: "USDC".to_string(),
-                    decimals: 6,
-                    reserve: 100_000_000_000, // 100k USDC
-                },
-                token_a_vault: Pubkey::new_unique(),
-                token_b_vault: Pubkey::new_unique(),
-                fee_numerator: Some(30),
-                fee_denominator: Some(10000),
-                fee_rate_bips: Some(30),
-                last_update_timestamp: 0,
-                liquidity: Some(10_000_000_000),
-                sqrt_price: None,
-                tick_current_index: None,
-                tick_spacing: None,
-            }
+    async fn get_swap_instruction_enhanced(
+        &self,
+        swap_info: &CommonSwapInfo,
+        pool_info: Arc<PoolInfo>,
+    ) -> Result<Instruction, crate::error::ArbError> {
+        info!(
+            "MeteoraClient: Building swap instruction for pool {} ({} -> {})",
+            pool_info.address, swap_info.source_token_mint, swap_info.destination_token_mint
+        );
+        warn!("MeteoraClient: get_swap_instruction_enhanced is a placeholder. DEX-specific logic required.");
+
+        // PoolInfo for Meteora should contain:
+        // - Pool type identifier (e.g., Dynamic AMM, DLMM)
+        // - Relevant accounts for that pool type (e.g., vaults, config accounts, bin arrays for DLMM)
+        //   Example fields: pool_config_account, token_a_vault, token_b_vault, admin_authority etc.
+
+        // Example:
+        // let pool_config_account = pool_info.meteora_config_account.ok_or_else(|| ArbError::InstructionError("Missing Meteora pool_config_account".to_string()))?;
+        // let token_a_vault = pool_info.token_a_vault.ok_or_else(|| ArbError::InstructionError("Missing Meteora token_a_vault".to_string()))?;
+        // let token_b_vault = pool_info.token_b_vault.ok_or_else(|| ArbError::InstructionError("Missing Meteora token_b_vault".to_string()))?;
+
+        let accounts = vec![
+            // AccountMetas depend heavily on the specific Meteora pool type and instruction
+            solana_sdk::instruction::AccountMeta::new_readonly(spl_token::id(), false),
+            solana_sdk::instruction::AccountMeta::new_readonly(swap_info.user_wallet_pubkey, true), // Signer
+            solana_sdk::instruction::AccountMeta::new(pool_info.address, false), // Pool address
+            solana_sdk::instruction::AccountMeta::new(swap_info.user_source_token_account, false),
+            solana_sdk::instruction::AccountMeta::new(swap_info.user_destination_token_account, false),
+            // ... other Meteora-specific accounts from pool_info ...
+            // AccountMeta::new(token_a_vault, false),
+            // AccountMeta::new(token_b_vault, false),
+            // AccountMeta::new_readonly(pool_config_account, false),
         ];
-        
-        Ok(mock_pools)
+
+        // Instruction data will be specific to Meteora's swap instruction for the given pool type.
+        // This will likely involve an instruction discriminator and serialized arguments.
+        let mut instruction_data = Vec::new();
+        // instruction_data.push(METEORA_SWAP_DISCRIMINATOR); // Replace with actual
+        // instruction_data.extend_from_slice(&swap_info.input_amount.to_le_bytes());
+        // instruction_data.extend_from_slice(&swap_info.minimum_output_amount.to_le_bytes());
+        // ... other Meteora-specific instruction params ...
+
+        if instruction_data.is_empty() {
+            return Err(crate::error::ArbError::InstructionError(
+                "Meteora swap instruction data not implemented".to_string(),
+            ));
+        }
+
+        Ok(Instruction {
+            program_id: METEORA_DYNAMIC_AMM_PROGRAM_ID, // This might vary based on pool type
+            accounts,
+            data: instruction_data,
+        })
+    }
+
+    async fn discover_pools(&self) -> AnyhowResult<Vec<PoolInfo>> {
+        warn!("MeteoraClient: discover_pools is a placeholder.");
+        // Implement discovery logic, e.g., from a Meteora API or on-chain registry
+        Ok(Vec::new())
     }
 }
 
 #[async_trait]
 impl PoolDiscoverable for MeteoraClient {
-    // ... trait implementation remains the same ...
-    async fn discover_pools(&self) -> AnyhowResult<Vec<PoolInfo>> { <Self as DexClient>::discover_pools(self).await }
-    async fn fetch_pool_data(&self, pool_address: Pubkey) -> AnyhowResult<PoolInfo> { Err(anyhow!("fetch_pool_data not yet implemented for MeteoraClient. Pool address: {}", pool_address)) }
-    fn dex_name(&self) -> &str { self.get_name() }
+    async fn discover_pools(&self) -> AnyhowResult<Vec<PoolInfo>> {
+        <Self as DexClient>::discover_pools(self).await
+    }
+    
+    async fn fetch_pool_data(&self, _pool_address: Pubkey) -> AnyhowResult<PoolInfo> {
+        Err(anyhow!("fetch_pool_data not implemented for MeteoraClient"))
+    }
+    
+    fn dex_name(&self) -> &str { 
+        self.get_name() 
+    }
 }

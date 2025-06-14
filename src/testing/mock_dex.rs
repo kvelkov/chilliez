@@ -7,7 +7,7 @@
 //! - Performance testing capabilities
 
 use crate::{
-    dex::api::{DexClient, PoolDiscoverable, Quote, SwapInfo},
+    dex::api::{DexClient, PoolDiscoverable, Quote, SwapInfo, CommonSwapInfo},
     utils::{PoolInfo, PoolToken, DexType},
     error::ArbError,
     arbitrage::opportunity::MultiHopArbOpportunity,
@@ -21,7 +21,7 @@ use std::{
 };
 use rand::{Rng, thread_rng};
 use serde::{Deserialize, Serialize};
-use log::{info, debug};
+use log::{info, debug, warn};
 
 /// Configuration for mock DEX behavior
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -213,6 +213,8 @@ impl MockDex {
                 sqrt_price: Some(Self::calculate_sqrt_price(token_a_reserve, token_b_reserve)),
                 tick_current_index: Some(rng.gen_range(-100000..100000)),
                 tick_spacing: Some(64),
+                // Orca-specific fields (not applicable to mock pools)
+                tick_array_0: None, tick_array_1: None, tick_array_2: None, oracle: None,
             };
 
             pools.insert(pool_address, pool);
@@ -420,6 +422,16 @@ impl DexClient for MockDex {
     async fn discover_pools(&self) -> anyhow::Result<Vec<PoolInfo>> {
         let pools = self.pools.lock().unwrap();
         Ok(pools.values().cloned().collect())
+    }
+
+    async fn get_swap_instruction_enhanced(
+        &self,
+        _swap_info: &crate::dex::api::CommonSwapInfo,
+        _pool_info: Arc<PoolInfo>,
+    ) -> Result<Instruction, crate::error::ArbError> {
+        // Stub implementation for testing
+        warn!("MockDex::get_swap_instruction_enhanced is a test stub");
+        Err(crate::error::ArbError::InstructionError("MockDex enhanced swap instruction not implemented".to_string()))
     }
 }
 

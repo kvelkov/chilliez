@@ -15,6 +15,9 @@ pub mod discovery;
 /// Advanced mathematical calculations for CLMM and AMM pools
 pub mod math;
 
+/// Live update manager for real-time pool data updates
+pub mod live_update_manager;
+
 /// DEX client implementations
 pub mod clients;
 
@@ -32,7 +35,7 @@ pub mod integration_test;
 
 // Core API exports
 pub use api::{
-    DexClient, PoolDiscoverable, Quote, SwapInfo, 
+    DexClient, PoolDiscoverable, Quote, SwapInfo, CommonSwapInfo,
     QuotingEngineOperations
 };
 
@@ -41,6 +44,12 @@ pub use discovery::{
     PoolDiscoveryService, PoolValidationConfig, BannedPairsManager,
     find_dex_client_for_pool, group_pools_by_dex, find_pools_for_pair,
     validate_pools, validate_single_pool, POOL_PARSER_REGISTRY
+};
+
+// Live update management exports
+pub use live_update_manager::{
+    LiveUpdateManager, LiveUpdateManagerBuilder, LiveUpdateConfig, 
+    LiveUpdateMetrics, LiveUpdateEvent, UpdateSource
 };
 
 // Client exports

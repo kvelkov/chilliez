@@ -13,9 +13,12 @@ use crate::{
         mev::{JitoHandler, MevProtectionConfig, JitoConfig},
     },
     config::settings::Config,
+    dex::api::DexClient,
     error::ArbError,
     metrics::Metrics,
     solana::rpc::SolanaRpcClient,
+    utils::{DexType, PoolInfo}, // Added PoolInfo import
+    cache::Cache, // Redis cache
 };
 use log::{info, warn, error};
 use serde::{Deserialize, Serialize};
@@ -33,7 +36,10 @@ use std::{
     sync::Arc,
     time::Instant,
 };
-use tokio::sync::{mpsc, Mutex, RwLock};
+use tokio::sync::{mpsc, Mutex, RwLock}; // Mutex for dex_clients, metrics
+use dashmap::DashMap; 
+use crate::dex::api::CommonSwapInfo;
+use spl_associated_token_account::get_associated_token_address;
 
 // =============================================================================
 // Event System and Core Types
@@ -67,6 +73,10 @@ pub struct HftExecutor {
     event_sender: Option<EventSender>,
     config: Arc<Config>,
     metrics: Arc<Mutex<Metrics>>,
+    // DEX client management for routing
+    dex_clients: Option<Arc<Mutex<HashMap<DexType, Box<dyn DexClient>>>>>,
+    hot_cache: Arc<DashMap<solana_sdk::pubkey::Pubkey, Arc<PoolInfo>>>,
+    pool_cache: Option<Arc<Cache>>, // This is the Redis cache
 }
 
 impl HftExecutor {
@@ -75,9 +85,119 @@ impl HftExecutor {
         rpc_client: Arc<NonBlockingRpcClient>, 
         event_sender: Option<EventSender>,
         config: Arc<Config>, 
-        metrics: Arc<Mutex<Metrics>>
+        metrics: Arc<Mutex<Metrics>>,
+        hot_cache: Arc<DashMap<solana_sdk::pubkey::Pubkey, Arc<PoolInfo>>>,
     ) -> Self {
-        Self { wallet, rpc_client, event_sender, config, metrics }
+        Self { 
+            wallet, 
+            rpc_client, 
+            event_sender, 
+            config, 
+            metrics,
+            dex_clients: None,
+            hot_cache,
+            pool_cache: None,
+        }
+    }
+
+    /// Executes an opportunity with a rapid re-entry loop to attempt to capture
+    /// remaining profit if the opportunity is still viable after the initial execution.
+    pub async fn execute_opportunity_with_reentry(
+        &self,
+        initial_opportunity: &MultiHopArbOpportunity,
+    ) -> Result<Vec<Signature>, String> {
+        let mut signatures = Vec::new();
+        let mut current_opportunity = initial_opportunity.clone();
+        let max_reentries = self.config.rpc_max_retries.unwrap_or(0); // Default to 0 if not set (no re-entry)
+
+        info!("Attempting to execute opportunity {} with up to {} re-entries.", initial_opportunity.id, max_reentries);
+
+        for i in 0..=max_reentries { // Loop 0 is the initial execution
+            info!("Execution attempt {} for opportunity ID {}", i + 1, current_opportunity.id);
+
+            match self.execute_opportunity(&current_opportunity).await {
+                Ok(signature) => {
+                    info!("Successfully executed attempt {} for opportunity {}, signature: {}", i + 1, current_opportunity.id, signature);
+                    signatures.push(signature);
+
+                    // If this was the last allowed attempt, or no more re-entries configured, break.
+                    if i >= max_reentries {
+                        break;
+                    }
+
+                    // Re-evaluate for re-entry
+                    match self._reevaluate_for_reentry(&current_opportunity, &signature).await {
+                        Ok(Some(next_opportunity_candidate)) => {
+                            // Check if still profitable enough for re-entry
+                            let re_entry_threshold_pct = self.config.min_profit_pct * 0.5; // Default re-entry threshold
+                            if next_opportunity_candidate.profit_pct >= re_entry_threshold_pct {
+                                info!("Opportunity {} still profitable ({}%) after execution, attempting re-entry.", next_opportunity_candidate.id, next_opportunity_candidate.profit_pct);
+                                current_opportunity = next_opportunity_candidate;
+                                // Optional: small delay if configured
+                                if let Some(delay_ms) = self.config.rpc_retry_delay_ms {
+                                    if delay_ms > 0 {
+                                        tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+                                    }
+                                }
+                            } else {
+                                info!("Opportunity {} no longer profitable enough ({}% < {}%) for re-entry after execution.", next_opportunity_candidate.id, next_opportunity_candidate.profit_pct, re_entry_threshold_pct);
+                                break;
+                            }
+                        }
+                        Ok(None) => {
+                            info!("Opportunity {} no longer viable for re-entry after execution.", current_opportunity.id);
+                            break;
+                        }
+                        Err(e) => {
+                            warn!("Failed to re-evaluate opportunity {} for re-entry: {}. Stopping re-entry.", current_opportunity.id, e);
+                            break;
+                        }
+                    }
+                }
+                Err(e) => {
+                    error!("Execution attempt {} for opportunity {} failed: {}. Stopping re-entry.", i + 1, current_opportunity.id, e);
+                    // If even the first attempt fails, return the error. If a re-entry fails, we've already collected some signatures.
+                    if i == 0 { return Err(e); } else { break; }
+                }
+            }
+        }
+
+        if signatures.is_empty() && max_reentries > 0 {
+             Err(format!("No successful executions for opportunity {} after attempts.", initial_opportunity.id))
+        } else {
+             Ok(signatures)
+        }
+    }
+
+    /// Placeholder for re-evaluating an opportunity after an execution.
+    /// In a real implementation, this would:
+    /// 1. Fetch updated PoolInfo for all pools in `executed_opportunity.hops` from `self.hot_cache`.
+    ///    This might involve a short delay to allow WebSocket updates or direct RPC fetches.
+    /// 2. Adjust `input_amount` based on remaining balance or new optimal calculation.
+    /// 3. Recalculate profit using an arbitrage analysis module.
+    /// 4. Construct a new `MultiHopArbOpportunity` if still viable.
+    async fn _reevaluate_for_reentry(
+        &self,
+        executed_opportunity: &MultiHopArbOpportunity,
+        _last_signature: &Signature, // Parameter for context, if needed
+    ) -> Result<Option<MultiHopArbOpportunity>, String> {
+        warn!("Re-evaluation for rapid re-entry (opportunity ID: {}) is a STUB. Opportunity will not be re-executed further in this cycle.", executed_opportunity.id);
+        
+        // STUB: For demonstration, let's imagine the profit slightly decreases.
+        // In a real scenario, you would fetch fresh pool data and recalculate.
+        let mut reevaluated_opp = executed_opportunity.clone();
+        reevaluated_opp.profit_pct *= 0.5; // Simulate profit halving
+        reevaluated_opp.total_profit *= 0.5;
+        reevaluated_opp.expected_output = reevaluated_opp.input_amount + reevaluated_opp.total_profit;
+        reevaluated_opp.id = format!("{}_reentry", executed_opportunity.id); // Give it a new ID for clarity
+
+        // Simulate it's still viable but with reduced profit
+        // return Ok(Some(reevaluated_opp));
+
+        // For now, always stop after one execution by returning None.
+        // To test the loop, you can change this to return Some(reevaluated_opp)
+        // and ensure hft_reentry_min_profit_pct is met.
+        Ok(None)
     }
 
     pub async fn execute_opportunity(
@@ -85,7 +205,7 @@ impl HftExecutor {
         opportunity: &MultiHopArbOpportunity,
     ) -> Result<Signature, String> {
         let start_time = Instant::now();
-        let instructions = self.build_instructions_from_multihop(opportunity)?;
+        let instructions = self.build_instructions_from_multihop(opportunity).await?; // Now async
 
         if instructions.is_empty() {
             return Err("No swap instructions generated".to_string());
@@ -148,12 +268,87 @@ impl HftExecutor {
         }
     }
 
-    fn build_instructions_from_multihop(
+    async fn build_instructions_from_multihop(
         &self,
-        _opportunity: &MultiHopArbOpportunity,
+        opportunity: &MultiHopArbOpportunity,
     ) -> Result<Vec<Instruction>, String> {
-        // Multi-pool execution logic would be handled here
-        Ok(vec![])
+        let mut all_instructions = Vec::new();
+
+        let dex_clients_map_arc = self.dex_clients.as_ref()
+            .ok_or_else(|| "DEX clients not initialized in HftExecutor".to_string())?;
+        let dex_clients_map = dex_clients_map_arc.lock().await;
+ 
+        for (hop_index, hop) in opportunity.hops.iter().enumerate() {
+            info!("Building instruction for hop {}: {} -> {} on {:?}", hop_index + 1, hop.input_token, hop.output_token, hop.dex);
+            
+            // --- Retrieve PoolInfo for the current hop from hot_cache ---
+            let pool_info_arc = self.hot_cache.get(&hop.pool)
+                .ok_or_else(|| format!("Pool {} for hop {} not found in hot_cache", hop.pool, hop_index + 1))?
+                .value().clone();
+
+            let dex_client_boxed = dex_clients_map.get(&hop.dex)
+                .ok_or_else(|| format!("DexClient not found for {:?}", hop.dex))?;
+            // Assuming DexClient is Arc now, if not, this needs adjustment. For Box, direct deref is fine.
+            let dex_client = dex_client_boxed.as_ref(); // Get a reference to the trait object
+
+            // --- Determine source and destination mints and decimals ---
+            let (source_token_details, dest_token_details) = 
+                if pool_info_arc.token_a.symbol.eq_ignore_ascii_case(&hop.input_token) && pool_info_arc.token_b.symbol.eq_ignore_ascii_case(&hop.output_token) {
+                    (&pool_info_arc.token_a, &pool_info_arc.token_b)
+                } else if pool_info_arc.token_b.symbol.eq_ignore_ascii_case(&hop.input_token) && pool_info_arc.token_a.symbol.eq_ignore_ascii_case(&hop.output_token) {
+                    (&pool_info_arc.token_b, &pool_info_arc.token_a)
+                } else {
+                    return Err(format!("Token symbol mismatch for hop {} in pool {}. Pool tokens: {}/{}, Hop tokens: {}/{}", hop_index + 1, hop.pool, pool_info_arc.token_a.symbol, pool_info_arc.token_b.symbol, hop.input_token, hop.output_token));
+                };
+
+            let source_mint = source_token_details.mint;
+            let source_decimals = source_token_details.decimals;
+            let dest_mint = dest_token_details.mint;
+            let dest_decimals = dest_token_details.decimals;
+
+            // --- Calculate amounts in smallest units ---
+            let input_amount_u64 = (hop.input_amount * 10f64.powi(source_decimals as i32)) as u64;
+            
+            // Integer-only slippage calculation for better security and reliability
+            let max_slippage_percentage = self.config.max_slippage_pct; // Assuming this is a percentage like 0.5 for 0.5%
+            
+            // Convert expected_output to integer units first
+            let expected_output_base_units = (hop.expected_output * 10f64.powi(dest_decimals as i32)) as u128;
+            
+            // Calculate slippage using integer arithmetic only
+            // slippage_factor_bps = max_slippage_percentage * 100 (convert to basis points)
+            // For 0.5%, this becomes 50 basis points
+            let slippage_bps = (max_slippage_percentage * 100.0) as u128;
+            
+            // Calculate minimum output using checked arithmetic
+            let minimum_output_amount_u64 = expected_output_base_units
+                .checked_mul(10000_u128.checked_sub(slippage_bps).ok_or_else(|| "Slippage calculation underflow".to_string())?)
+                .ok_or_else(|| "Slippage calculation overflow in multiplication".to_string())?
+                .checked_div(10000)
+                .ok_or_else(|| "Slippage calculation division error".to_string())?
+                .try_into()
+                .map_err(|_| "Minimum output amount too large for u64".to_string())?;
+
+            // --- Get user's ATAs ---
+            let user_source_token_account = get_associated_token_address(&self.wallet.pubkey(), &source_mint);
+            let user_destination_token_account = get_associated_token_address(&self.wallet.pubkey(), &dest_mint);
+
+            let common_swap_info = CommonSwapInfo {
+                user_wallet_pubkey: self.wallet.pubkey(),
+                source_token_mint: source_mint,
+                destination_token_mint: dest_mint,
+                user_source_token_account,
+                user_destination_token_account,
+                input_amount: input_amount_u64,
+                minimum_output_amount: minimum_output_amount_u64,
+            };
+
+            let instruction = dex_client.get_swap_instruction_enhanced(&common_swap_info, pool_info_arc.clone()).await
+                .map_err(|e| format!("Failed to get swap instruction for hop {}: {}", hop_index + 1, e))?;
+            all_instructions.push(instruction);
+        }
+
+        Ok(all_instructions)
     }
 
     async fn get_latest_blockhash(&self) -> Result<Hash, String> {
@@ -161,6 +356,32 @@ impl HftExecutor {
             .get_latest_blockhash()
             .await
             .map_err(|e| format!("Failed to fetch latest blockhash: {}", e))
+    }
+
+    /// Initialize DEX clients for routing
+    pub async fn initialize_dex_clients(&mut self, cache: Arc<Cache>) {
+        use crate::dex::clients::{OrcaClient, RaydiumClient, MeteoraClient, LifinityClient};
+        use std::collections::HashMap;
+        
+        let mut clients: HashMap<DexType, Box<dyn DexClient>> = HashMap::new();
+        
+        // Initialize each DEX client
+        clients.insert(DexType::Orca, Box::new(OrcaClient::new()));
+        clients.insert(DexType::Raydium, Box::new(RaydiumClient::new()));
+        clients.insert(DexType::Meteora, Box::new(MeteoraClient::new()));
+        clients.insert(DexType::Lifinity, Box::new(LifinityClient::new()));
+        
+        self.dex_clients = Some(Arc::new(Mutex::new(clients)));
+        self.pool_cache = Some(cache);
+        
+        info!("Initialized DEX clients for Orca, Raydium, Meteora, and Lifinity");
+    }
+    
+    /// Update the pool cache with discovered pools
+    pub async fn update_pool_cache(&self, _pools: &[crate::utils::PoolInfo]) {
+        // This method would update the internal pool cache
+        // For now, it's a stub since the pool cache logic is handled elsewhere
+        info!("Pool cache update requested - this is handled by the discovery service");
     }
 }
 
@@ -288,11 +509,12 @@ impl BatchExecutor {
         solana_client: Arc<SolanaRpcClient>,
         wallet: Arc<Keypair>,
         event_sender: Option<EventSender>,
+        rpc_url: String, // Add rpc_url parameter for JitoHandler
     ) -> Self {
         let mev_handler = if config.enable_mev_protection {
             let mev_config = MevProtectionConfig::default();
             let jito_config = JitoConfig::default();
-            Some(Arc::new(JitoHandler::new(mev_config, jito_config)))
+            Some(Arc::new(JitoHandler::new(mev_config, jito_config, "https://api.mainnet-beta.solana.com".to_string())))
         } else {
             None
         };

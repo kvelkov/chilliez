@@ -346,52 +346,8 @@ impl DexClient for LifinityClient {
 #[async_trait]
 impl PoolDiscoverable for LifinityClient {
     async fn discover_pools(&self) -> AnyhowResult<Vec<PoolInfo>> {
-        // Create sample Lifinity pools for demonstration
-        // In production, this would query Lifinity's API or scan on-chain accounts
-        let mut pools = Vec::new();
-
-        // Sample USDC-SOL pool with oracle pricing
-        let usdc_sol_pool = PoolInfo {
-            address: Pubkey::new_unique(),
-            name: "Lifinity USDC-SOL Pool".to_string(),
-            token_a: PoolToken {
-                mint: solana_sdk::pubkey!("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"), // USDC
-                symbol: "USDC".to_string(),
-                decimals: 6,
-                reserve: 5_000_000_000, // 5M USDC
-            },
-            token_b: PoolToken {
-                mint: solana_sdk::pubkey!("So11111111111111111111111111111111111111112"), // SOL
-                symbol: "SOL".to_string(),
-                decimals: 9,
-                reserve: 50_000_000_000, // 50K SOL
-            },
-            token_a_vault: Pubkey::new_unique(),
-            token_b_vault: Pubkey::new_unique(),
-            fee_numerator: Some(30),
-            fee_denominator: Some(10000),
-            fee_rate_bips: Some(30), // 0.3% base fee
-            last_update_timestamp: chrono::Utc::now().timestamp() as u64,
-            dex_type: DexType::Lifinity,
-            liquidity: Some(1_000_000_000_000),
-            sqrt_price: Some(15840000000000), // Approximate sqrt price
-            tick_current_index: Some(0),
-            tick_spacing: Some(64),
-            tick_array_0: None,
-            tick_array_1: None,
-            tick_array_2: None,
-            oracle: Some(Pubkey::new_unique()), // Oracle for proactive market making
-        };
-
-        // Calculate and log oracle price
-        if let Some(oracle_price) = self.calculate_oracle_price(&usdc_sol_pool) {
-            warn!("Lifinity pool {} has oracle price: {:.6}", usdc_sol_pool.name, oracle_price);
-        }
-
-        pools.push(usdc_sol_pool);
-
-        warn!("Lifinity discovered {} sample pools. In production, this would query the Lifinity API.", pools.len());
-        Ok(pools)
+        // Delegate to DexClient implementation to avoid duplication
+        <Self as DexClient>::discover_pools(self).await
     }
 
     async fn fetch_pool_data(&self, pool_address: Pubkey) -> AnyhowResult<PoolInfo> {

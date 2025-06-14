@@ -509,7 +509,7 @@ impl BatchExecutor {
         solana_client: Arc<SolanaRpcClient>,
         wallet: Arc<Keypair>,
         event_sender: Option<EventSender>,
-        rpc_url: String, // Add rpc_url parameter for JitoHandler
+        _rpc_url: String, // Add rpc_url parameter for JitoHandler
     ) -> Self {
         let mev_handler = if config.enable_mev_protection {
             let mev_config = MevProtectionConfig::default();

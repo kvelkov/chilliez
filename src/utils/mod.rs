@@ -1,40 +1,35 @@
-// src/utils/mod.rs
-use crate::solana::rpc::SolanaRpcClient;
-use solana_sdk::{
-    pubkey::Pubkey,
-    signature::{Keypair, read_keypair_file},
-};
+//! Common utility structures, enums, traits, and functions used throughout the arbitrage application.
+
+use solana_sdk::{pubkey::Pubkey, signature::Keypair};
+use solana_sdk::signature::read_keypair_file;
+use serde::{Deserialize, Serialize};
+use log::{error, info};
 use std::error::Error as StdError;
-use log::{info, error};
 use async_trait::async_trait;
-use serde::{Serialize, Deserialize};
+use crate::solana::rpc::SolanaRpcClient;
+use anyhow::Result;
 use std::sync::Arc;
 
-// Removed modules that have been moved to dex folder:
-// - pool_validation -> moved to dex/pool_management.rs
-// - dex_routing -> moved to dex/routing.rs
-
+/// Represents information about a liquidity pool on a DEX.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PoolInfo {
     pub address: Pubkey,
     pub name: String,
     pub token_a: PoolToken,
     pub token_b: PoolToken,
-    // Vaults are relevant for many DEXs, including Orca
     pub token_a_vault: Pubkey,
     pub token_b_vault: Pubkey,
-    // Fee structure: AMMs might use numerator/denominator, CLMMs like Orca use bips
     pub fee_numerator: Option<u64>,
     pub fee_denominator: Option<u64>,
-    pub fee_rate_bips: Option<u16>, // Basis points (0.01%)
+    pub fee_rate_bips: Option<u16>,
     pub last_update_timestamp: u64,
     pub dex_type: DexType,
-    // CLMM specific fields (like Orca Whirlpools)
+    // CLMM specific fields
     pub liquidity: Option<u128>,
     pub sqrt_price: Option<u128>,
     pub tick_current_index: Option<i32>,
     pub tick_spacing: Option<u16>,
-    // Orca Whirlpool specific fields for tick arrays and oracle
+    // Orca Whirlpool specific fields
     pub tick_array_0: Option<Pubkey>,
     pub tick_array_1: Option<Pubkey>,
     pub tick_array_2: Option<Pubkey>,
@@ -45,16 +40,16 @@ impl Default for PoolInfo {
     fn default() -> Self {
         Self {
             address: Pubkey::default(),
-            name: "Default Pool".to_string(),
+            name: String::new(),
             token_a: PoolToken::default(),
             token_b: PoolToken::default(),
             token_a_vault: Pubkey::default(),
             token_b_vault: Pubkey::default(),
-            fee_numerator: Some(0), // Default for AMMs
-            fee_denominator: Some(10000), // Default for AMMs, non-zero
+            fee_numerator: None,
+            fee_denominator: None,
             fee_rate_bips: None,
             last_update_timestamp: 0,
-            dex_type: DexType::Unknown("Default".to_string()),
+            dex_type: DexType::Unknown("Unknown".to_string()),
             liquidity: None,
             sqrt_price: None,
             tick_current_index: None,
@@ -67,6 +62,7 @@ impl Default for PoolInfo {
     }
 }
 
+/// Represents a token within a liquidity pool.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PoolToken {
     pub mint: Pubkey,
@@ -79,13 +75,14 @@ impl Default for PoolToken {
     fn default() -> Self {
         Self {
             mint: Pubkey::default(),
-            symbol: "DEFAULT".to_string(),
-            decimals: 0,
+            symbol: String::new(),
+            decimals: 6,
             reserve: 0,
         }
     }
 }
 
+/// Program configuration structure
 #[derive(Debug, Clone)]
 pub struct ProgramConfig {
     pub name: String,
@@ -93,15 +90,13 @@ pub struct ProgramConfig {
 }
 
 impl ProgramConfig {
-    pub fn new(name: String, version: String) -> Self {
-        Self { name, version }
-    }
-
+    #[allow(dead_code)] // Used for debugging/logging purposes
     pub fn log_details(&self) {
-        info!("ProgramConfig Details: Name={}, Version={}", self.name, self.version);
+        info!("Program: {} v{}", self.name, self.version);
     }
 }
 
+/// Setup logging for the application
 pub fn setup_logging() -> Result<(), fern::InitError> {
     fern::Dispatch::new()
         .format(|out, message, record| {
@@ -121,7 +116,7 @@ pub fn setup_logging() -> Result<(), fern::InitError> {
     Ok(())
 }
 
-#[allow(dead_code)]
+#[allow(dead_code)] // Utility function for development/testing
 pub fn load_keypair(path: &str) -> Result<Keypair, Box<dyn StdError>> {
     match read_keypair_file(path) {
         Ok(kp) => {
@@ -136,29 +131,32 @@ pub fn load_keypair(path: &str) -> Result<Keypair, Box<dyn StdError>> {
     }
 }
 
+/// Represents a token amount with its associated decimals.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-pub struct TokenAmount{
+pub struct TokenAmount {
     pub amount: u64,
     pub decimals: u8,
 }
 
 impl TokenAmount {
+    /// Create a new TokenAmount with the specified amount and decimals
     pub fn new(amount: u64, decimals: u8) -> Self {
         Self { amount, decimals }
     }
 
+    /// Convert the token amount to a floating-point representation
     pub fn to_float(&self) -> f64 {
-        self.amount as f64 / 10f64.powi(self.decimals as i32)
+        self.amount as f64 / 10_f64.powi(self.decimals as i32)
     }
 
-    pub fn from_float(float_amount: f64, decimals: u8) -> Self {
-        Self {
-            amount: (float_amount * 10f64.powi(decimals as i32)) as u64,
-            decimals,
-        }
+    /// Create a TokenAmount from a floating-point value
+    pub fn from_float(value: f64, decimals: u8) -> Self {
+        let amount = (value * 10_f64.powi(decimals as i32)) as u64;
+        Self { amount, decimals }
     }
 }
 
+/// Represents the type of decentralized exchange (DEX).
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum DexType {
     Orca,
@@ -169,82 +167,66 @@ pub enum DexType {
     Unknown(String),
 }
 
+/// Trait for parsing pool data from different DEXs.
 #[async_trait]
 pub trait PoolParser: Send + Sync {
+    /// Parse pool data asynchronously and return a PoolInfo struct.
+    /// Updated to use Arc<SolanaRpcClient> to match implementation expectations
     async fn parse_pool_data(
         &self,
-        address: Pubkey,
+        pool_address: Pubkey,
         data: &[u8],
         rpc_client: &Arc<SolanaRpcClient>,
-    ) -> anyhow::Result<PoolInfo>;
+    ) -> Result<PoolInfo>;
 
-    /// Synchronous version for CPU-bound parallel processing
-    /// Default implementation calls the async version in a blocking context
+    /// Parse pool data synchronously (fallback method)
+    #[allow(dead_code)] // Fallback method for synchronous parsing
     fn parse_pool_data_sync(
         &self,
-        address: Pubkey,
+        _pool_address: Pubkey,
         _data: &[u8],
-    ) -> anyhow::Result<PoolInfo> {
-        // For now, provide a basic implementation that doesn't require RPC
-        // Individual parsers can override this for better performance
-        let mut pool_info = PoolInfo::default();
-        pool_info.address = address;
-        pool_info.last_update_timestamp = chrono::Utc::now().timestamp_millis() as u64;
-        
-        // Basic parsing logic would go here
-        // This is a placeholder - real implementations should parse the actual data
-        Ok(pool_info)
+        _rpc_client: &Arc<SolanaRpcClient>,
+    ) -> Result<PoolInfo> {
+        // Default implementation - should be overridden by specific parsers
+        Err(anyhow::anyhow!("Synchronous parsing not implemented"))
     }
 
+    /// Get the program ID of the DEX
+    #[allow(dead_code)] // Used by pool discovery systems
     fn get_program_id(&self) -> Pubkey;
 }
 
+/// Calculate output amount for a swap given pool information
+#[allow(dead_code)] // Utility function for quote calculations
 pub fn calculate_output_amount(
     pool: &PoolInfo,
-    input_amount: TokenAmount,
+    input_amount: u64,
     is_a_to_b: bool,
-) -> TokenAmount {
-    let (input_reserve_val, output_reserve_val, output_decimals_val) = if is_a_to_b {
-        (
-            pool.token_a.reserve,
-            pool.token_b.reserve,
-            pool.token_b.decimals,
-        )
+) -> Result<u64> {
+    let (input_reserve, output_reserve) = if is_a_to_b {
+        (pool.token_a.reserve, pool.token_b.reserve)
     } else {
-        (
-            pool.token_b.reserve,
-            pool.token_a.reserve,
-            pool.token_a.decimals,
-        )
+        (pool.token_b.reserve, pool.token_a.reserve)
     };
 
-    // Use fee_numerator and fee_denominator for AMM-style calculation
-    // For CLMMs, this function might need to be adapted or a different one used.
-    let fee_num = pool.fee_numerator.unwrap_or(0); // Default to 0 if not present
-    let fee_den = pool.fee_denominator.unwrap_or(1); // Default to 1 to avoid div by zero if not present
-
-    if input_reserve_val == 0
-        || output_reserve_val == 0
-        || input_amount.amount == 0
-        || fee_den == 0
-    {
-        return TokenAmount::new(0, output_decimals_val);
+    if input_reserve == 0 || output_reserve == 0 {
+        return Err(anyhow::anyhow!("Pool has zero reserves"));
     }
 
-    let fee_rate = fee_num as f64 / fee_den as f64;
-    let input_amount_after_fee = input_amount.amount as f64 * (1.0 - fee_rate);
+    // Simple constant product formula: x * y = k
+    // output = (output_reserve * input_amount) / (input_reserve + input_amount)
+    let fee_rate = pool.fee_rate_bips.unwrap_or(25) as f64 / 10000.0;
+    let input_after_fee = (input_amount as f64) * (1.0 - fee_rate);
+    
+    let output_amount = (output_reserve as f64 * input_after_fee) 
+        / (input_reserve as f64 + input_after_fee);
 
-    if input_reserve_val as f64 + input_amount_after_fee == 0.0 {
-        return TokenAmount::new(0, output_decimals_val);
-    }
-    let output_amount_precise = (output_reserve_val as f64 * input_amount_after_fee)
-        / (input_reserve_val as f64 + input_amount_after_fee);
-
-    TokenAmount::new(output_amount_precise.floor() as u64, output_decimals_val)
+    Ok(output_amount as u64)
 }
 
-// Test struct to check if field definitions work
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Test struct to verify PoolInfo field definitions
+#[cfg(test)]
+#[derive(Debug, Clone)]
 pub struct TestPoolInfo {
     pub address: Pubkey,
     pub name: String,
@@ -261,6 +243,39 @@ pub struct TestPoolInfo {
     pub sqrt_price: Option<u128>,
     pub tick_current_index: Option<i32>,
     pub tick_spacing: Option<u16>,
+    pub tick_array_0: Option<Pubkey>,
+    pub tick_array_1: Option<Pubkey>,
+    pub tick_array_2: Option<Pubkey>,
+    pub oracle: Option<Pubkey>,
 }
 
-// ---- Original PoolInfo for comparison ----
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_token_amount_conversion() {
+        let amount = TokenAmount { amount: 1000000, decimals: 6 };
+        assert_eq!(amount.to_float(), 1.0);
+
+        let from_float = TokenAmount::from_float(1.5, 6);
+        assert_eq!(from_float.amount, 1500000);
+        assert_eq!(from_float.decimals, 6);
+    }
+
+    #[test]
+    fn test_dex_type_equality() {
+        assert_eq!(DexType::Orca, DexType::Orca);
+        assert_ne!(DexType::Orca, DexType::Raydium);
+        assert_eq!(DexType::Unknown("Test".to_string()), DexType::Unknown("Test".to_string()));
+    }
+
+    #[test]
+    fn test_pool_info_default() {
+        let pool = PoolInfo::default();
+        assert_eq!(pool.address, Pubkey::default());
+        assert_eq!(pool.name, "");
+        assert_eq!(pool.token_a.decimals, 6);
+        assert_eq!(pool.token_b.decimals, 6);
+    }
+}

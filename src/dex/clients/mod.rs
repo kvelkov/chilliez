@@ -11,7 +11,6 @@ pub mod phoenix;
 // Re-export client structs for easier access
 pub use orca::{OrcaClient, OrcaPoolParser};
 pub use raydium::RaydiumClient;
-pub use meteora::MeteoraClient;
-pub use lifinity::LifinityClient;
-// Phoenix client is currently disabled/commented out
-// pub use phoenix::PhoenixClient;
+pub use meteora::{MeteoraClient, MeteoraPoolParser};
+pub use lifinity::{LifinityClient, LifinityPoolParser};
+pub use phoenix::{PhoenixClient, PhoenixPoolParser};

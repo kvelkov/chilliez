@@ -1,5 +1,5 @@
 // src/dex/api.rs
-//! DEX API infrastructure: DexClient trait, Quote structures, and quoting engine.
+//! DEX API infrastructure: DexClient trait, Quote structures, and enhanced swap interfaces.
 //! Consolidates quote.rs and quoting_engine.rs for better organization.
 
 use crate::utils::PoolInfo;
@@ -49,6 +49,20 @@ pub trait DexClient: Send + Sync {
 
     /// Discovers all supported liquidity pools for the DEX.
     async fn discover_pools(&self) -> Result<Vec<PoolInfo>>;
+
+    /// Health check for the DEX client
+    async fn health_check(&self) -> Result<DexHealthStatus, crate::error::ArbError>;
+}
+
+/// Health status for a DEX client
+#[derive(Debug, Clone)]
+pub struct DexHealthStatus {
+    pub is_healthy: bool,
+    pub last_successful_request: Option<std::time::Instant>,
+    pub error_count: u32,
+    pub response_time_ms: Option<u64>,
+    pub pool_count: Option<usize>,
+    pub status_message: String,
 }
 
 /// Separate trait for pool discovery to maintain object safety of DexClient
@@ -106,36 +120,13 @@ pub struct SwapInfo<'a> {
 /// This provides a cleaner interface compared to the more complex SwapInfo.
 #[derive(Debug, Clone)]
 pub struct CommonSwapInfo {
-    /// User's wallet public key (signer)
     pub user_wallet_pubkey: Pubkey,
-    /// Source token mint address
-    pub source_token_mint: Pubkey,
-    /// Destination token mint address
-    pub destination_token_mint: Pubkey,
-    /// User's source token account
     pub user_source_token_account: Pubkey,
-    /// User's destination token account
     pub user_destination_token_account: Pubkey,
-    /// Input amount for the swap
+    pub source_token_mint: Pubkey,
+    pub destination_token_mint: Pubkey,
     pub input_amount: u64,
-    /// Minimum output amount expected
     pub minimum_output_amount: u64,
-}
-
-// =====================================================================================
-// QUOTING ENGINE
-// =====================================================================================
-
-/// Trait defining the operations for a quoting engine.
-/// This allows for mocking `AdvancedQuotingEngine` in tests.
-#[async_trait]
-pub trait QuotingEngineOperations: Send + Sync {
-    async fn calculate_best_quote(
-        &self,
-        input_mint: Pubkey,
-        output_mint: Pubkey,
-        amount_in: u64,
-    ) -> Result<Option<Quote>>;
 }
 
 // =====================================================================================
@@ -143,46 +134,53 @@ pub trait QuotingEngineOperations: Send + Sync {
 // =====================================================================================
 
 impl Quote {
-    pub fn profit(&self) -> i64 { 
-        self.output_amount as i64 - self.input_amount as i64 
+    /// Calculate profit from the quote
+    pub fn profit(&self) -> i64 {
+        self.output_amount as i64 - self.input_amount as i64
     }
-    
+
+    /// Calculate profit percentage
     pub fn profit_pct(&self) -> f64 {
-        if self.input_amount == 0 { 
-            0.0 
-        } else { 
-            (self.output_amount as f64 - self.input_amount as f64) / self.input_amount as f64 * 100.0 
+        if self.input_amount == 0 {
+            return 0.0;
         }
+        ((self.output_amount as f64 - self.input_amount as f64) / self.input_amount as f64) * 100.0
     }
-    
-    pub fn output_as_float(&self, decimals: u8) -> f64 { 
-        self.output_amount as f64 / 10f64.powi(decimals as i32) 
+
+    /// Convert output amount to float with given decimals
+    pub fn output_as_float(&self, decimals: u8) -> f64 {
+        self.output_amount as f64 / 10_f64.powi(decimals as i32)
     }
-    
-    pub fn input_as_float(&self, decimals: u8) -> f64 { 
-        self.input_amount as f64 / 10f64.powi(decimals as i32) 
+
+    /// Convert input amount to float with given decimals
+    pub fn input_as_float(&self, decimals: u8) -> f64 {
+        self.input_amount as f64 / 10_f64.powi(decimals as i32)
     }
 }
 
 impl PoolInfo {
-    // These helpers are useful for CLMM pools
-    pub fn get_sqrt_price(&self) -> u128 { 
-        self.sqrt_price.unwrap_or(0) 
+    /// Get sqrt price for CLMM pools
+    pub fn get_sqrt_price(&self) -> u128 {
+        self.sqrt_price.unwrap_or(0)
     }
-    
-    pub fn get_liquidity(&self) -> u128 { 
-        self.liquidity.unwrap_or(0) 
+
+    /// Get liquidity for CLMM pools
+    pub fn get_liquidity(&self) -> u128 {
+        self.liquidity.unwrap_or(0)
     }
-    
-    pub fn get_tick_current_index(&self) -> i32 { 
-        self.tick_current_index.unwrap_or(0) 
+
+    /// Get current tick index for CLMM pools
+    pub fn get_tick_current_index(&self) -> i32 {
+        self.tick_current_index.unwrap_or(0)
     }
-    
-    pub fn get_tick_spacing(&self) -> u16 { 
-        self.tick_spacing.unwrap_or(1) 
+
+    /// Get tick spacing for CLMM pools
+    pub fn get_tick_spacing(&self) -> u16 {
+        self.tick_spacing.unwrap_or(1)
     }
-    
-    pub fn get_fee_rate_bips(&self) -> u16 { 
-        self.fee_rate_bips.unwrap_or(30) 
+
+    /// Get fee rate in basis points
+    pub fn get_fee_rate_bips(&self) -> u16 {
+        self.fee_rate_bips.unwrap_or(30)
     }
 }

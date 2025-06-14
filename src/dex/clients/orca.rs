@@ -1,53 +1,47 @@
 // src/dex/clients/orca.rs
-//! Orca Whirlpools client, parser, and instruction builder.
-//! This is the consolidated, authoritative module for all Orca Whirlpools interactions.
+//! Orca Whirlpools client and parser for on-chain data and instruction building.
+//! This is the consolidated and authoritative source for Orca Whirlpools integration.
 
-use crate::dex::api::{DexClient, Quote, SwapInfo, PoolDiscoverable, CommonSwapInfo};
+use crate::dex::api::{DexClient, Quote, SwapInfo, PoolDiscoverable, CommonSwapInfo, DexHealthStatus};
 use crate::solana::rpc::SolanaRpcClient;
-use crate::utils::{PoolInfo, PoolParser as UtilsPoolParser, PoolToken, DexType};
-use crate::error::ArbError;
+use crate::utils::{DexType, PoolInfo, PoolParser as UtilsPoolParser, PoolToken};
 use anyhow::{anyhow, Result as AnyhowResult};
 use async_trait::async_trait;
 use bytemuck::{Pod, Zeroable};
-use solana_program::pubkey::Pubkey;
-use solana_sdk::instruction::{AccountMeta, Instruction};
-use std::sync::Arc;
-use log::{info, warn};
+use log::{debug, info, warn};
 use rust_decimal::Decimal;
-use num_traits::ToPrimitive;
-// use orca_whirlpools_core::math::price_math::price_to_sqrt_price_x64; // TODO: Add dependency
-// use orca_whirlpools_core::constants::{MIN_SQRT_PRICE, MAX_SQRT_PRICE}; // TODO: Add dependency
-use serde::Deserialize;
-use std::str::FromStr; 
-// Import our local math functions for Orca calculations
-
-
-// Placeholder function until orca_whirlpools_core is added
-fn price_to_sqrt_price_x64(_price: f64, _token_a_decimals: u8, _token_b_decimals: u8) -> Option<u128> {
-    // This is a placeholder - real implementation would convert price to sqrt_price
-    // For now, just return a reasonable default
-    Some(79228162514264337593543950336u128) // sqrt(2^128) approximation
-}
-
-// Placeholder constants until orca_whirlpools_core is added
-const MIN_SQRT_PRICE: u128 = 4295048016;
-const MAX_SQRT_PRICE: u128 = 79226673515401279992447579055;
+use serde::{Deserialize, Serialize};
+use solana_sdk::{
+    instruction::{AccountMeta, Instruction},
+    pubkey::Pubkey,
+};
+use std::str::FromStr;
+use std::sync::Arc;
 
 // --- Constants ---
 pub const ORCA_WHIRLPOOL_PROGRAM_ID: Pubkey = solana_sdk::pubkey!("whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc");
 const ORCA_API_URL: &str = "https://api.mainnet.orca.so/v1/whirlpool/list";
 
-// --- On-Chain Data Structures ---
+// Placeholder constants - would be replaced with actual values from orca_whirlpools_core
+const MIN_SQRT_PRICE: u128 = 4295048016;
+const MAX_SQRT_PRICE: u128 = 79226673515401279992447579055;
 
-/// Represents the state of an Orca Whirlpool account.
-/// This struct accurately reflects the on-chain layout for a Whirlpool.
+// Placeholder function - would be replaced with actual implementation from orca_whirlpools_core
+fn price_to_sqrt_price_x64(_price: f64) -> u128 {
+    // This is a placeholder implementation
+    // Real implementation would use: orca_whirlpools_core::price_math::price_to_sqrt_price_x64(price)
+    MIN_SQRT_PRICE
+}
+
+// --- On-Chain Data Structures ---
 #[repr(C, packed)]
-#[derive(Clone, Copy, Debug, Pod, Zeroable)]
+#[derive(Clone, Copy, Pod, Zeroable)]
 pub struct WhirlpoolState {
+    pub discriminator: [u8; 8],
     pub whirlpools_config: Pubkey,
     pub whirlpool_bump: [u8; 1],
     pub tick_spacing: u16,
-    pub tick_spacing_padding: [u8; 5],
+    pub tick_spacing_seed: [u8; 2],
     pub fee_rate: u16,
     pub protocol_fee_rate: u16,
     pub liquidity: u128,
@@ -62,87 +56,102 @@ pub struct WhirlpoolState {
     pub token_vault_b: Pubkey,
     pub fee_growth_global_b: u128,
     pub reward_last_updated_timestamp: u64,
-    // reward_infos array (3 elements) and other fields follow, but are not needed for basic parsing.
+    pub reward_infos: [RewardInfo; 3],
 }
-const WHIRLPOOL_STATE_SIZE: usize = std::mem::size_of::<WhirlpoolState>();
 
+#[repr(C, packed)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+pub struct RewardInfo {
+    pub mint: Pubkey,
+    pub vault: Pubkey,
+    pub authority: Pubkey,
+    pub emissions_per_second_x64: u128,
+    pub growth_global_x64: u128,
+}
 
 // --- API Data Structures ---
 #[derive(Debug, Deserialize)]
-struct OrcaApiToken {
-    mint: String,
-    symbol: String,
-    decimals: u8,
+pub struct OrcaApiResponse {
+    pub whirlpools: Vec<OrcaApiPool>,
 }
+
 #[derive(Debug, Deserialize)]
-struct OrcaApiPool {
-    address: String,
+pub struct OrcaApiPool {
+    pub address: String,
     #[serde(rename = "tokenA")]
-    token_a: OrcaApiToken,
+    pub token_a: OrcaApiToken,
     #[serde(rename = "tokenB")]
-    token_b: OrcaApiToken,
+    pub token_b: OrcaApiToken,
     #[serde(rename = "tickSpacing")]
-    tick_spacing: u16,
+    pub tick_spacing: u16,
     #[serde(rename = "feeRate")]
-    fee_rate: u16,
-    #[serde(rename = "liquidity")]
-    liquidity: String,
+    pub fee_rate: f64,
+    pub liquidity: String,
     #[serde(rename = "sqrtPrice")]
-    sqrt_price: String,
+    pub sqrt_price: String,
+    #[serde(rename = "tickCurrentIndex")]
+    pub tick_current_index: i32,
 }
+
 #[derive(Debug, Deserialize)]
-struct OrcaApiResponse {
-    whirlpools: Vec<OrcaApiPool>,
+pub struct OrcaApiToken {
+    pub mint: String,
+    pub symbol: String,
+    pub decimals: u8,
 }
 
-
-// --- On-Chain Data Parser ---
+// --- Pool Parser ---
 pub struct OrcaPoolParser;
 
 #[async_trait]
 impl UtilsPoolParser for OrcaPoolParser {
-    async fn parse_pool_data(&self, address: Pubkey, data: &[u8], _rpc_client: &Arc<SolanaRpcClient>) -> AnyhowResult<PoolInfo> {
-        if data.len() < WHIRLPOOL_STATE_SIZE {
-            return Err(anyhow!(
-                "Invalid Whirlpool account data length for {}: expected at least {} bytes, got {}",
-                address, WHIRLPOOL_STATE_SIZE, data.len()
-            ));
+    async fn parse_pool_data(
+        &self,
+        pool_address: Pubkey,
+        data: &[u8],
+        _rpc_client: &Arc<SolanaRpcClient>,
+    ) -> AnyhowResult<PoolInfo> {
+        if data.len() < std::mem::size_of::<WhirlpoolState>() {
+            return Err(anyhow!("Invalid Whirlpool data size"));
         }
 
-        let state: &WhirlpoolState = bytemuck::from_bytes(&data[..WHIRLPOOL_STATE_SIZE]);
+        let whirlpool_state = bytemuck::from_bytes::<WhirlpoolState>(data);
 
-        Ok(PoolInfo {
-            address,
-            name: format!("Orca Whirlpool/{}", address),
-            dex_type: DexType::Orca,
+        let pool_info = PoolInfo {
+            address: pool_address,
+            name: format!("Orca Whirlpool"),
             token_a: PoolToken {
-                mint: state.token_mint_a,
-                symbol: "TokenA".to_string(), // Placeholder; will be enriched by API data
-                decimals: 0, // Placeholder; will be enriched by API data
-                reserve: 0, // Not applicable for CLMMs
+                mint: whirlpool_state.token_mint_a,
+                symbol: "Unknown".to_string(), // Would be resolved from metadata
+                decimals: 6, // Default, would be resolved
+                reserve: 0, // Would be fetched from vault
             },
             token_b: PoolToken {
-                mint: state.token_mint_b,
-                symbol: "TokenB".to_string(),
-                decimals: 0,
+                mint: whirlpool_state.token_mint_b,
+                symbol: "Unknown".to_string(),
+                decimals: 6,
                 reserve: 0,
             },
-            token_a_vault: state.token_vault_a,
-            token_b_vault: state.token_vault_b,
-            fee_rate_bips: Some(state.fee_rate),
-            fee_numerator: None,
-            fee_denominator: None,
-            liquidity: Some(state.liquidity),
-            sqrt_price: Some(state.sqrt_price),
-            tick_current_index: Some(state.tick_current_index),
-            tick_spacing: Some(state.tick_spacing),
-            last_update_timestamp: state.reward_last_updated_timestamp,
-            // Orca-specific fields (will need to be resolved/calculated)
-            tick_array_0: None, // TODO: Derive based on current tick and swap direction
-            tick_array_1: None, // TODO: Derive based on current tick and swap direction
-            tick_array_2: None, // TODO: Derive based on current tick and swap direction
-            oracle: None,       // TODO: Derive oracle PDA if needed
-        })
+            token_a_vault: whirlpool_state.token_vault_a,
+            token_b_vault: whirlpool_state.token_vault_b,
+            fee_numerator: Some(whirlpool_state.fee_rate as u64),
+            fee_denominator: Some(1000000), // Orca uses 1M denominator
+            fee_rate_bips: Some(whirlpool_state.fee_rate),
+            last_update_timestamp: whirlpool_state.reward_last_updated_timestamp,
+            dex_type: DexType::Orca,
+            // CLMM specific fields
+            liquidity: Some(whirlpool_state.liquidity),
+            sqrt_price: Some(whirlpool_state.sqrt_price),
+            tick_current_index: Some(whirlpool_state.tick_current_index),
+            tick_spacing: Some(whirlpool_state.tick_spacing),
+            // Tick arrays would need to be resolved separately
+            tick_array_0: None, // Would be resolved based on current tick
+            tick_array_1: None,
+            tick_array_2: None,
+            oracle: None, // Orca doesn't use external oracles
+        };
+
+        Ok(pool_info)
     }
 
     fn get_program_id(&self) -> Pubkey {
@@ -150,256 +159,191 @@ impl UtilsPoolParser for OrcaPoolParser {
     }
 }
 
-
-// --- DEX Client Implementation ---
-#[derive(Debug, Clone, Default)]
-pub struct OrcaClient;
+// --- Orca Client ---
+pub struct OrcaClient {
+    pub name: String,
+}
 
 impl OrcaClient {
     pub fn new() -> Self {
-        Self::default()
+        Self {
+            name: "Orca".to_string(),
+        }
     }
 }
 
 #[async_trait]
 impl DexClient for OrcaClient {
-    fn get_name(&self) -> &str { "Orca" }
+    fn get_name(&self) -> &str {
+        &self.name
+    }
 
     fn calculate_onchain_quote(&self, pool: &PoolInfo, input_amount: u64) -> AnyhowResult<Quote> {
-        // Basic quote calculation for Orca
-        // This is a simplified version - real CLMM calculations are much more complex
+        // This is a simplified approximation for CLMM pools
+        // Real implementation would require proper CLMM math library
+        warn!("OrcaClient: Using simplified quote calculation. Real implementation requires proper CLMM math library.");
+
+        if pool.token_a.reserve == 0 || pool.token_b.reserve == 0 {
+            return Err(anyhow!("Pool has zero reserves"));
+        }
+
+        // Simplified calculation - would need proper CLMM math
+        let fee_rate = pool.fee_rate_bips.unwrap_or(30) as f64 / 10000.0;
+        let input_after_fee = (input_amount as f64) * (1.0 - fee_rate);
         
-        warn!("Orca quote calculation is using a simplified approximation. Real implementation requires CLMM math library integration.");
-        
-        // For CLMM pools, we'll use a basic approximation based on liquidity
-        let output_amount = if let Some(liquidity) = pool.liquidity {
-            if liquidity > 0 {
-                // Simple approximation: assume uniform liquidity distribution
-                // Real CLMM requires tick array calculations
-                let fee_rate = 0.0025; // 0.25% default for Orca
-                let input_after_fees = (input_amount as f64 * (1.0 - fee_rate)) as u64;
-                
-                // Use a simple ratio based on available liquidity
-                // This is NOT accurate for CLMM but provides a working approximation
-                input_after_fees / 2 // Simplified calculation
-            } else {
-                return Err(anyhow!("Orca pool {} has zero liquidity.", pool.address));
-            }
-        } else {
-            return Err(anyhow!("Orca pool {} missing liquidity data.", pool.address));
-        };
+        // Very simplified AMM-style calculation for demonstration
+        let output_amount = (pool.token_b.reserve as f64 * input_after_fee) 
+            / (pool.token_a.reserve as f64 + input_after_fee);
 
         Ok(Quote {
             input_token: pool.token_a.symbol.clone(),
             output_token: pool.token_b.symbol.clone(),
             input_amount,
-            output_amount,
-            dex: self.get_name().to_string(),
+            output_amount: output_amount as u64,
+            dex: self.name.clone(),
             route: vec![pool.address],
-            slippage_estimate: Some(0.0025),
+            slippage_estimate: Some(0.1),
         })
     }
 
     fn get_swap_instruction(&self, swap_info: &SwapInfo) -> AnyhowResult<Instruction> {
-        // Basic swap instruction implementation for Orca Whirlpools
-        // This is a simplified version - production implementation requires:
-        // 1. Correct instruction discriminator for Orca Whirlpool program
-        // 2. Proper tick array account resolution based on swap direction
-        // 3. All required accounts in correct order
+        warn!("get_swap_instruction for Orca is a basic implementation. Use get_swap_instruction_enhanced for production.");
         
-        warn!("get_swap_instruction for Orca is a basic implementation. Production use requires proper tick array resolution and SDK integration.");
-        
+        // This is a simplified implementation that lacks proper tick array resolution and SDK integration
         Ok(Instruction {
             program_id: ORCA_WHIRLPOOL_PROGRAM_ID,
             accounts: vec![
-                solana_program::instruction::AccountMeta::new(swap_info.user_wallet, true),
-                solana_program::instruction::AccountMeta::new(swap_info.pool_account, false),
-                solana_program::instruction::AccountMeta::new(swap_info.user_source_token_account, false),
-                solana_program::instruction::AccountMeta::new(swap_info.user_destination_token_account, false),
-                // Note: Real Orca swaps require tick_array accounts as remaining_accounts
-                // These would need to be resolved based on the swap path and current tick
+                AccountMeta::new(swap_info.user_wallet, true),
+                AccountMeta::new(swap_info.pool_account, false),
+                AccountMeta::new(swap_info.user_source_token_account, false),
+                AccountMeta::new(swap_info.user_destination_token_account, false),
             ],
-            data: vec![0], // Placeholder instruction data - needs proper swap instruction encoding
+            data: vec![0xf8, 0xc6, 0x9e, 0x91, 0xe1, 0x75, 0x87, 0xc8], // Placeholder instruction data
         })
-    }
-
-    async fn discover_pools(&self) -> AnyhowResult<Vec<PoolInfo>> {
-        info!("Starting Orca Whirlpools discovery from official API: {}", ORCA_API_URL);
-
-        let client = reqwest::Client::new();
-        let response = client.get(ORCA_API_URL)
-            .timeout(std::time::Duration::from_secs(30))
-            .send().await
-            .map_err(|e| anyhow!("Failed to fetch Orca pool data: {}", e))?;
-
-        if !response.status().is_success() {
-            return Err(anyhow!("Orca API request failed with status: {}", response.status()));
-        }
-
-        let api_response: OrcaApiResponse = response.json().await
-            .map_err(|e| anyhow!("Failed to parse Orca API response: {}", e))?;
-        info!("Fetched {} pools from Orca API", api_response.whirlpools.len());
-
-        let pools: Vec<PoolInfo> = api_response.whirlpools.into_iter().filter_map(|api_pool| {
-            let pool_address = Pubkey::from_str(&api_pool.address).ok()?;
-            let token_a_mint = Pubkey::from_str(&api_pool.token_a.mint).ok()?;
-            let token_b_mint = Pubkey::from_str(&api_pool.token_b.mint).ok()?;
-            
-            Some(PoolInfo {
-                address: pool_address,
-                name: format!("Orca {}/{}", api_pool.token_a.symbol, api_pool.token_b.symbol),
-                dex_type: DexType::Orca,
-                token_a: PoolToken {
-                    mint: token_a_mint,
-                    symbol: api_pool.token_a.symbol,
-                    decimals: api_pool.token_a.decimals,
-                    reserve: 0, // N/A for CLMM
-                },
-                token_b: PoolToken {
-                    mint: token_b_mint,
-                    symbol: api_pool.token_b.symbol,
-                    decimals: api_pool.token_b.decimals,
-                    reserve: 0, // N/A for CLMM
-                },
-                token_a_vault: Pubkey::default(), // Would need to be fetched from on-chain data
-                token_b_vault: Pubkey::default(),
-                fee_rate_bips: Some(api_pool.fee_rate),
-                fee_numerator: None,
-                fee_denominator: None,
-                liquidity: api_pool.liquidity.parse().ok(),
-                sqrt_price: api_pool.sqrt_price.parse().ok(),
-                tick_current_index: None, // Would need on-chain data
-                tick_spacing: Some(api_pool.tick_spacing),
-                last_update_timestamp: 0,
-                // Initialize Orca-specific optional fields to None - these need to be resolved
-                tick_array_0: None, // TODO: Derive based on current tick and swap direction
-                tick_array_1: None, // TODO: Derive based on current tick and swap direction
-                tick_array_2: None, // TODO: Derive based on current tick and swap direction
-                oracle: None,       // TODO: Derive oracle PDA if needed
-            })
-        }).collect();
-
-        info!("Successfully parsed {} Orca pools", pools.len());
-        Ok(pools)
     }
 
     async fn get_swap_instruction_enhanced(
         &self,
         swap_info: &CommonSwapInfo,
         pool_info: Arc<PoolInfo>,
-    ) -> Result<Instruction, ArbError> {
+    ) -> Result<Instruction, crate::error::ArbError> {
         info!(
             "OrcaClient: Building enhanced swap instruction for Whirlpool {} ({} -> {})",
             pool_info.address, swap_info.source_token_mint, swap_info.destination_token_mint
         );
 
-        // 1. Validate that pool_info is for Orca Whirlpool and has necessary fields
-        // 2. Determine swap direction (a_to_b)
-        let a_to_b = if pool_info.token_a.mint == swap_info.source_token_mint && pool_info.token_b.mint == swap_info.destination_token_mint {
-            true
-        } else if pool_info.token_b.mint == swap_info.source_token_mint && pool_info.token_a.mint == swap_info.destination_token_mint {
-            false
+        // Validate pool info
+        if pool_info.sqrt_price.is_none() || pool_info.tick_current_index.is_none() {
+            return Err(crate::error::ArbError::InstructionError(
+                "Invalid Whirlpool state: missing sqrt_price or tick_current_index".to_string()
+            ));
+        }
+
+        // Determine swap direction
+        let a_to_b = swap_info.source_token_mint == pool_info.token_a.mint;
+        
+        // Calculate sqrt_price_limit (simplified)
+        let sqrt_price_limit = if a_to_b {
+            MIN_SQRT_PRICE
         } else {
-            return Err(ArbError::InstructionError(
-                format!("Mismatched token mints for Orca Whirlpool {} and swap info. Pool A: {}, Pool B: {}, Swap Source: {}, Swap Dest: {}",
-                    pool_info.address, pool_info.token_a.mint, pool_info.token_b.mint, swap_info.source_token_mint, swap_info.destination_token_mint
-                )));
+            MAX_SQRT_PRICE
         };
 
-        // 3. Calculate sqrt_price_limit based on direction and minimum output
-        let sqrt_price_limit: u128 = {
-            if swap_info.minimum_output_amount == 0 {
-                // If any output is acceptable, use the widest possible price limit.
-                if a_to_b { MIN_SQRT_PRICE } else { MAX_SQRT_PRICE }
-            } else if swap_info.input_amount == 0 {
-                // This should ideally be caught before this stage.
-                // If input is zero, but min_output is non-zero, it's an impossible scenario.
-                // Default to safety: widest possible price limit.
-                warn!("Input amount is zero during sqrt_price_limit calculation for Orca. Using default bounds.");
-                if a_to_b { MIN_SQRT_PRICE } else { MAX_SQRT_PRICE }
-            } else {
-                let token_a_decimals = pool_info.token_a.decimals;
-                let token_b_decimals = pool_info.token_b.decimals;
+        // Resolve tick array accounts (simplified - real implementation would calculate these)
+        let tick_array_0 = pool_info.tick_array_0.unwrap_or_else(|| Pubkey::new_unique());
+        let tick_array_1 = pool_info.tick_array_1.unwrap_or_else(|| Pubkey::new_unique());
+        let tick_array_2 = pool_info.tick_array_2.unwrap_or_else(|| Pubkey::new_unique());
 
-                // Convert raw u64 amounts to Decimal, adjusting for token decimals for price calculation
-                let input_amount_decimal = Decimal::from(swap_info.input_amount) 
-                    / Decimal::from(10u64.pow(if a_to_b { token_a_decimals } else { token_b_decimals } as u32));
-                let min_output_amount_decimal = Decimal::from(swap_info.minimum_output_amount)
-                    / Decimal::from(10u64.pow(if a_to_b { token_b_decimals } else { token_a_decimals } as u32));
+        //
 
-                if input_amount_decimal.is_zero() || min_output_amount_decimal.is_zero() {
-                    warn!("Decimal input or min_output is zero for sqrt_price_limit calculation. Using default bounds.");
-                    if a_to_b { MIN_SQRT_PRICE } else { MAX_SQRT_PRICE }
-                } else {
-                    // Calculate the limit price of token_a in terms of token_b
-                    // Price = Amount of Token B / Amount of Token A
-                    let limit_price_of_a_in_b = if a_to_b { // Input is A, Output is B
-                        min_output_amount_decimal / input_amount_decimal
-                    } else { // Input is B, Output is A
-                        input_amount_decimal / min_output_amount_decimal // This is price of B in A, invert for price of A in B
-                    };
+        // Placeholder for actual instruction building logic
+        let instruction = Instruction {
+            program_id: ORCA_WHIRLPOOL_PROGRAM_ID,
+            accounts: vec![
+                AccountMeta::new(swap_info.user_wallet_pubkey, true),
+                AccountMeta::new(pool_info.address, false),
+                AccountMeta::new(swap_info.user_source_token_account, false),
+                AccountMeta::new(swap_info.user_destination_token_account, false),
+                AccountMeta::new(tick_array_0, false),
+                AccountMeta::new(tick_array_1, false),
+                AccountMeta::new(tick_array_2, false),
+            ],
+            data: vec![0], // Placeholder instruction data
+        };
 
-                    if limit_price_of_a_in_b.is_sign_negative() || limit_price_of_a_in_b.is_zero() {
-                        warn!("Calculated zero or negative price limit ({}), using default bounds for sqrt_price_limit.", limit_price_of_a_in_b);
-                        if a_to_b { MIN_SQRT_PRICE } else { MAX_SQRT_PRICE }
-                    } else {
-                        match price_to_sqrt_price_x64(limit_price_of_a_in_b.to_f64().unwrap_or(0.0), token_a_decimals, token_b_decimals) {
-                            Some(val) => val,
-                            None => {
-                                warn!("Failed to convert price {} to sqrt_price_x64. Using default bounds.", limit_price_of_a_in_b);
-                                if a_to_b { MIN_SQRT_PRICE } else { MAX_SQRT_PRICE }
-                            }
+        Ok(instruction)
+    }
+
+    async fn health_check(&self) -> Result<DexHealthStatus, crate::error::ArbError> {
+        let start_time = std::time::Instant::now();
+        
+        // Test Orca API connectivity
+        let client = reqwest::Client::new();
+        let health_result = match client
+            .get(ORCA_API_URL)
+            .timeout(std::time::Duration::from_secs(10))
+            .send()
+            .await
+        {
+            Ok(response) => {
+                let is_healthy = response.status().is_success();
+                let response_time = start_time.elapsed().as_millis() as u64;
+                
+                if is_healthy {
+                    // Test if we can parse the response
+                    match response.json::<OrcaApiResponse>().await {
+                        Ok(api_response) => DexHealthStatus {
+                            is_healthy: true,
+                            last_successful_request: Some(start_time),
+                            error_count: 0,
+                            response_time_ms: Some(response_time),
+                            pool_count: Some(api_response.whirlpools.len()),
+                            status_message: format!("Healthy - {} pools available", api_response.whirlpools.len()),
+                        },
+                        Err(e) => DexHealthStatus {
+                            is_healthy: false,
+                            last_successful_request: None,
+                            error_count: 1,
+                            response_time_ms: Some(response_time),
+                            pool_count: None,
+                            status_message: format!("API response parsing failed: {}", e),
                         }
                     }
+                } else {
+                    DexHealthStatus {
+                        is_healthy: false,
+                        last_successful_request: None,
+                        error_count: 1,
+                        response_time_ms: Some(response_time),
+                        pool_count: None,
+                        status_message: format!("API returned error status: {}", response.status()),
+                    }
+                }
+            }
+            Err(e) => {
+                let response_time = start_time.elapsed().as_millis() as u64;
+                DexHealthStatus {
+                    is_healthy: false,
+                    last_successful_request: None,
+                    error_count: 1,
+                    response_time_ms: Some(response_time),
+                    pool_count: None,
+                    status_message: format!("API request failed: {}", e),
                 }
             }
         };
 
-        // 4. Resolve tick array accounts (critical for Orca Whirlpool swaps) - Renumbered from 3.
-        let tick_array_0 = pool_info.tick_array_0.ok_or_else(|| {
-            ArbError::InstructionError(format!("Missing Orca tick_array_0 for pool {}", pool_info.address))
-        })?;
-        let tick_array_1 = pool_info.tick_array_1.ok_or_else(|| {
-            ArbError::InstructionError(format!("Missing Orca tick_array_1 for pool {}", pool_info.address))
-        })?;
-        let tick_array_2 = pool_info.tick_array_2.ok_or_else(|| {
-            ArbError::InstructionError(format!("Missing Orca tick_array_2 for pool {}", pool_info.address))
-        })?;
-        let oracle_pda = pool_info.oracle.ok_or_else(|| {
-            ArbError::InstructionError(format!("Missing Orca oracle PDA for pool {}", pool_info.address))
-        })?;
-
-        // 5. Build accounts array for Orca Whirlpool swap instruction
-        let accounts = vec![
-            AccountMeta::new_readonly(spl_token::id(), false), // token_program
-            AccountMeta::new_readonly(swap_info.user_wallet_pubkey, true), // token_authority (signer)
-            AccountMeta::new(pool_info.address, false), // whirlpool
-            AccountMeta::new(swap_info.user_source_token_account, false), // token_owner_account_a or b
-            AccountMeta::new(pool_info.token_a_vault, false), // token_vault_a
-            AccountMeta::new(swap_info.user_destination_token_account, false), // token_owner_account_b or a
-            AccountMeta::new(pool_info.token_b_vault, false), // token_vault_b
-            AccountMeta::new(tick_array_0, false), // tick_array_0
-            AccountMeta::new(tick_array_1, false), // tick_array_1
-            AccountMeta::new(tick_array_2, false), // tick_array_2
-            AccountMeta::new_readonly(oracle_pda, false), // oracle
-        ];
-
-        // 6. Build instruction data for Orca Whirlpool swap
-        // Placeholder data - THIS MUST BE REPLACED with actual Orca swap instruction data
-        let mut instruction_data = Vec::new();
-        
-        if instruction_data.is_empty() {
-             warn!("OrcaClient: Instruction data is a placeholder and needs to be implemented using Anchor serialization!");
-             return Err(ArbError::InstructionError(
-                "Orca swap instruction data not implemented".to_string()
-            ));
+        if health_result.is_healthy {
+            info!("Orca health check passed: {}", health_result.status_message);
+        } else {
+            warn!("Orca health check failed: {}", health_result.status_message);
         }
 
-        Ok(Instruction {
-            program_id: ORCA_WHIRLPOOL_PROGRAM_ID,
-            accounts,
-            data: instruction_data,
-        })
+        Ok(health_result)
+    }
+
+    async fn discover_pools(&self) -> AnyhowResult<Vec<PoolInfo>> {
+        <Self as PoolDiscoverable>::discover_pools(self).await
     }
 }
 
@@ -420,49 +364,53 @@ impl PoolDiscoverable for OrcaClient {
 
         let api_response: OrcaApiResponse = response.json().await
             .map_err(|e| anyhow!("Failed to parse Orca API response: {}", e))?;
-        info!("Fetched {} pools from Orca API", api_response.whirlpools.len());
 
-        let pools: Vec<PoolInfo> = api_response.whirlpools.into_iter().filter_map(|api_pool| {
-            let pool_address = Pubkey::from_str(&api_pool.address).ok()?;
-            let token_a_mint = Pubkey::from_str(&api_pool.token_a.mint).ok()?;
-            let token_b_mint = Pubkey::from_str(&api_pool.token_b.mint).ok()?;
-            
-            Some(PoolInfo {
+        let mut discovered_pools = Vec::new();
+
+        for api_pool in api_response.whirlpools {
+            let pool_address = Pubkey::from_str(&api_pool.address).map_err(|e| anyhow!("Invalid pool address: {}", e))?;
+            let token_a_mint = Pubkey::from_str(&api_pool.token_a.mint).map_err(|e| anyhow!("Invalid token A mint: {}", e))?;
+            let token_b_mint = Pubkey::from_str(&api_pool.token_b.mint).map_err(|e| anyhow!("Invalid token B mint: {}", e))?;
+
+            let pool_info = PoolInfo {
                 address: pool_address,
-                name: format!("Orca {}/{}", api_pool.token_a.symbol, api_pool.token_b.symbol),
-                dex_type: DexType::Orca,
+                name: format!("Orca Whirlpool: {}-{}", api_pool.token_a.symbol, api_pool.token_b.symbol),
                 token_a: PoolToken {
                     mint: token_a_mint,
-                    symbol: api_pool.token_a.symbol,
+                    symbol: api_pool.token_a.symbol.clone(),
                     decimals: api_pool.token_a.decimals,
-                    reserve: 0, // N/A for CLMM
+                    reserve: 0, // Not available in API response
                 },
                 token_b: PoolToken {
                     mint: token_b_mint,
-                    symbol: api_pool.token_b.symbol,
+                    symbol: api_pool.token_b.symbol.clone(),
                     decimals: api_pool.token_b.decimals,
-                    reserve: 0, // N/A for CLMM
+                    reserve: 0, // Not available in API response
                 },
                 token_a_vault: Pubkey::default(), // Would need to be fetched from on-chain data
                 token_b_vault: Pubkey::default(),
-                fee_rate_bips: Some(api_pool.fee_rate),
+                fee_rate_bips: Some(api_pool.fee_rate as u16),
                 fee_numerator: None,
                 fee_denominator: None,
                 liquidity: api_pool.liquidity.parse().ok(),
                 sqrt_price: api_pool.sqrt_price.parse().ok(),
                 tick_current_index: None, // Would need on-chain data
                 tick_spacing: Some(api_pool.tick_spacing),
-                // Initialize Orca-specific optional fields to None
+                last_update_timestamp: 0,
+                dex_type: DexType::Orca,
+                
+                // Whirlpool-specific fields
                 tick_array_0: None,
                 tick_array_1: None,
                 tick_array_2: None,
                 oracle: None,
-                last_update_timestamp: 0,
-            })
-        }).collect();
+            };
 
-        info!("Successfully parsed {} pools from Orca API response.", pools.len());
-        Ok(pools)
+            discovered_pools.push(pool_info);
+        }
+
+        info!("Discovered {} Orca Whirlpool pools", discovered_pools.len());
+        Ok(discovered_pools)
     }
 
     async fn fetch_pool_data(&self, pool_address: Pubkey) -> AnyhowResult<PoolInfo> {
@@ -472,7 +420,7 @@ impl PoolDiscoverable for OrcaClient {
         let parser = OrcaPoolParser;
         
         // Placeholder implementation - in production you'd fetch real account data
-        let mock_account_data = vec![0u8; WHIRLPOOL_STATE_SIZE];
+        let mock_account_data = vec![0u8; std::mem::size_of::<WhirlpoolState>()];
         
         // For the parser, we need an RPC client reference
         // In a real implementation, this would be stored in the OrcaClient

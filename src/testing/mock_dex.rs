@@ -7,7 +7,7 @@
 //! - Performance testing capabilities
 
 use crate::{
-    dex::api::{DexClient, PoolDiscoverable, Quote, SwapInfo, CommonSwapInfo},
+    dex::api::{DexClient, PoolDiscoverable, Quote, SwapInfo},
     utils::{PoolInfo, PoolToken, DexType},
     error::ArbError,
     arbitrage::opportunity::MultiHopArbOpportunity,
@@ -432,6 +432,24 @@ impl DexClient for MockDex {
         // Stub implementation for testing
         warn!("MockDex::get_swap_instruction_enhanced is a test stub");
         Err(crate::error::ArbError::InstructionError("MockDex enhanced swap instruction not implemented".to_string()))
+    }
+
+    async fn health_check(&self) -> Result<crate::dex::api::DexHealthStatus, crate::error::ArbError> {
+        let start_time = std::time::Instant::now();
+        let response_time = start_time.elapsed().as_millis() as u64;
+        
+        let health_result = crate::dex::api::DexHealthStatus {
+            is_healthy: true,
+            last_successful_request: Some(start_time),
+            error_count: 0,
+            response_time_ms: Some(response_time),
+            pool_count: Some(self.pools.lock().unwrap().len()),
+            status_message: format!("MockDex '{}' health check passed - {} pools available", 
+                                  self.name, self.pools.lock().unwrap().len()),
+        };
+
+        info!("MockDex health check: {}", health_result.status_message);
+        Ok(health_result)
     }
 }
 

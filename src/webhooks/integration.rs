@@ -731,11 +731,11 @@ impl PoolMonitoringCoordinator {
             monitored_pools: Arc::new(RwLock::new(HashMap::new())),
             validation_config: PoolValidationConfig::default(),
             banned_pairs_manager: Arc::new(
-                BannedPairsManager::new(std::path::Path::new("banned_pairs_log.csv"))
+                BannedPairsManager::new("banned_pairs_log.csv".to_string())
                     .unwrap_or_else(|e| {
                         warn!("Failed to load banned pairs: {}, creating empty manager", e);
                         // Since we can't create manually due to private fields, just use the Path method
-                        BannedPairsManager::new(std::path::Path::new("/dev/null")).unwrap_or_else(|_| panic!("Cannot create BannedPairsManager"))
+                        BannedPairsManager::new("/dev/null".to_string()).unwrap_or_else(|_| panic!("Cannot create BannedPairsManager"))
                     })
             ),
             active_webhooks: Arc::new(RwLock::new(HashMap::new())),
@@ -895,12 +895,9 @@ impl PoolMonitoringCoordinator {
                     info!("🆕 New pool detected: {}", pool_address);
                     
                     // Validate the pool before adding it to monitoring
-                    match validate_single_pool(&pool_info, &validation_config, &banned_pairs_manager).await {
-                        Ok(false) | Err(_) => {
-                            warn!("🚫 Pool {} failed validation, not adding to monitoring", pool_address);
-                            continue;
-                        }
-                        Ok(true) => {}
+                    if !validate_single_pool(&pool_info, &validation_config) {
+                        warn!("🚫 Pool {} failed validation, not adding to monitoring", pool_address);
+                        continue;
                     }
                     
                     info!("✅ Pool {} passed validation, adding to monitoring", pool_address);

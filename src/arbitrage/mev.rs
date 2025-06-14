@@ -697,7 +697,7 @@ impl JitoHandler {
         let cu_price_ix = ComputeBudgetInstruction::set_compute_unit_price(1); // Minimal price for the tip tx
 
         let instruction = solana_sdk::system_instruction::transfer(&payer.pubkey(), tip_account, tip_lamports);
-        let message = solana_sdk::message::Message::new(&[instruction], Some(&payer.pubkey()));
+        let message = solana_sdk::message::Message::new(&[instruction.clone()], Some(&payer.pubkey()));
         let recent_blockhash = self.get_recent_blockhash().await?;
 
         let transaction = Transaction::new(&[&payer], message, recent_blockhash);

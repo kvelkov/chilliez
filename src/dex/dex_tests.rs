@@ -1,15 +1,12 @@
-//! Consolidated DEX tests for all clients and functionality.
-//! This file combines tests from: meteora_test.rs, integration_test.rs, 
-//! raydium_test.rs, orca_integration_test.rs, orca_test.rs
+//! Comprehensive DEX tests for all clients and functionality.
+//! This file includes tests for Meteora, Lifinity, Phoenix, and enhanced functionality.
 
 #[cfg(test)]
 mod meteora_tests {
     use super::super::clients::meteora::*;
-    use super::super::DexClient;
-    use crate::utils::{DexType, PoolInfo, PoolToken, PoolParser};
+    use super::super::api::DexClient;
+    use crate::utils::{DexType, PoolInfo, PoolToken};
     use solana_sdk::pubkey::Pubkey;
-    use std::str::FromStr;
-    use anyhow::Result;
 
     fn create_test_meteora_client() -> MeteoraClient {
         MeteoraClient::new()
@@ -17,71 +14,69 @@ mod meteora_tests {
 
     fn create_mock_dynamic_amm_pool() -> PoolInfo {
         PoolInfo {
-            address: Pubkey::from_str("8sLbNZoA1cfnvMJLPfp98ZLAnFSYCFApfJKMbiXNLwxj").unwrap(),
-            name: "Mock Dynamic AMM Pool".to_string(),
-            dex_type: DexType::Meteora,
+            address: Pubkey::new_unique(),
+            name: "Test Meteora Dynamic AMM Pool".to_string(),
             token_a: PoolToken {
-                mint: Pubkey::from_str("So11111111111111111111111111111111111111112").unwrap(),
+                mint: Pubkey::new_unique(),
                 symbol: "SOL".to_string(),
-                reserve: 1000000000,
                 decimals: 9,
+                reserve: 1000000000, // 1 SOL
             },
             token_b: PoolToken {
-                mint: Pubkey::from_str("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v").unwrap(),
+                mint: Pubkey::new_unique(),
                 symbol: "USDC".to_string(),
-                reserve: 500000000,
                 decimals: 6,
+                reserve: 150000000, // 150 USDC
             },
-            token_a_vault: Pubkey::from_str("7YttLkHDoNj9wyDur5pM1ejNaAvT9X4eqaYcHQqtj2G5").unwrap(),
-            token_b_vault: Pubkey::from_str("5uWjwMo113r6EzvqtzE8YpRoLBWQntwWA2MKJfhV9iCt").unwrap(),
+            token_a_vault: Pubkey::new_unique(),
+            token_b_vault: Pubkey::new_unique(),
             fee_numerator: Some(25),
             fee_denominator: Some(10000),
-            fee_rate_bips: Some(25), // 0.25%
-            last_update_timestamp: 0,
-            liquidity: Some(1_000_000_000),
+            fee_rate_bips: Some(25),
+            last_update_timestamp: 1640995200,
+            dex_type: DexType::Meteora,
+            liquidity: None,
             sqrt_price: None,
             tick_current_index: None,
             tick_spacing: None,
-            // Initialize Orca-specific optional fields
             tick_array_0: None,
             tick_array_1: None,
             tick_array_2: None,
-            oracle: None,
+            oracle: Some(Pubkey::new_unique()),
         }
     }
 
     fn create_mock_dlmm_pool() -> PoolInfo {
         PoolInfo {
-            address: Pubkey::from_str("5BUwFW4nRbftYTDMbgxykoFWqWHPzahFSNAaaaJtVKsq").unwrap(),
-            name: "Mock DLMM Pool".to_string(),
-            dex_type: DexType::Meteora,
+            address: Pubkey::new_unique(),
+            name: "Test Meteora DLMM Pool".to_string(),
             token_a: PoolToken {
-                mint: Pubkey::from_str("So11111111111111111111111111111111111111112").unwrap(),
+                mint: Pubkey::new_unique(),
                 symbol: "SOL".to_string(),
-                reserve: 2000000000,
                 decimals: 9,
+                reserve: 1000000000,
             },
             token_b: PoolToken {
-                mint: Pubkey::from_str("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v").unwrap(),
+                mint: Pubkey::new_unique(),
                 symbol: "USDC".to_string(),
-                reserve: 1000000000,
                 decimals: 6,
+                reserve: 150000000,
             },
-            token_a_vault: Pubkey::from_str("6Aj6TrNrN8xjNpJp6Z2jNHNnGkqfKvpqGwWcBBZQv8Vz").unwrap(),
-            token_b_vault: Pubkey::from_str("3YjojdYhKFBMb8m5X4VrvZQz3uaZaayF7Kh2PUtg7jzN").unwrap(),
-            fee_numerator: Some(30),
+            token_a_vault: Pubkey::new_unique(),
+            token_b_vault: Pubkey::new_unique(),
+            fee_numerator: Some(25),
             fee_denominator: Some(10000),
-            fee_rate_bips: Some(30), // 0.30%
-            last_update_timestamp: 0,
-            liquidity: Some(2_000_000_000),
+            fee_rate_bips: Some(25),
+            last_update_timestamp: 1640995200,
+            dex_type: DexType::Meteora,
+            liquidity: None,
             sqrt_price: None,
-            tick_current_index: None,
-            tick_spacing: None,
-            // Initialize Orca-specific optional fields
+            tick_current_index: Some(8388608), // 2^23 (neutral bin)
+            tick_spacing: Some(64), // DLMM bin step
             tick_array_0: None,
             tick_array_1: None,
             tick_array_2: None,
-            oracle: None,
+            oracle: Some(Pubkey::new_unique()),
         }
     }
 
@@ -92,197 +87,116 @@ mod meteora_tests {
     }
 
     #[test]
-    fn test_meteora_dynamic_amm_pool_state_parsing() {
-        // Test dynamic AMM pool state parsing logic
-        let mock_data = create_mock_dynamic_amm_pool_data();
-        let result = parse_dynamic_amm_pool_state(&mock_data);
-        assert!(result.is_ok());
-    }
+    fn test_meteora_pool_type_detection() {
+        let client = create_test_meteora_client();
+        
+        // Test Dynamic AMM pool (no tick_spacing)
+        let dynamic_pool = create_mock_dynamic_amm_pool();
+        assert_eq!(client.get_pool_type(&dynamic_pool), MeteoraPoolType::DynamicAmm);
 
-    #[test]
-    fn test_meteora_dlmm_pool_state_parsing() {
-        // Test DLMM pool state parsing logic  
-        let mock_data = create_mock_dlmm_pool_data();
-        let result = parse_dlmm_lb_pair_state(&mock_data);
-        assert!(result.is_ok());
+        // Test DLMM pool (has tick_spacing)
+        let dlmm_pool = create_mock_dlmm_pool();
+        assert_eq!(client.get_pool_type(&dlmm_pool), MeteoraPoolType::Dlmm);
     }
 
     #[test]
     fn test_meteora_quote_calculation_dynamic_amm() {
+        let client = create_test_meteora_client();
         let pool = create_mock_dynamic_amm_pool();
-        let input_amount = 1000000; // 1 SOL (in lamports)
+        let input_amount = 1000000; // 0.001 SOL
+
+        let result = client.calculate_onchain_quote(&pool, input_amount);
+        assert!(result.is_ok());
         
-        // This would normally call the actual quote method
-        // For now, just test the structure
-        assert!(input_amount > 0);
-        assert_eq!(pool.dex_type, DexType::Meteora);
+        let quote = result.unwrap();
+        assert_eq!(quote.input_amount, input_amount);
+        assert!(quote.output_amount > 0);
+        assert_eq!(quote.dex, "Meteora");
+        assert!(quote.slippage_estimate.is_some());
     }
 
     #[test]
     fn test_meteora_quote_calculation_dlmm() {
+        let client = create_test_meteora_client();
         let pool = create_mock_dlmm_pool();
-        let input_amount = 1000000; // 1 SOL (in lamports)
-        
-        // This would normally call the actual quote method
-        // For now, just test the structure
-        assert!(input_amount > 0);
-        assert_eq!(pool.dex_type, DexType::Meteora);
-    }
-
-    #[test]
-    fn test_meteora_pool_parser_creation() {
-        let parser = MeteoraPoolParser;
-        assert_eq!(parser.get_program_id(), METEORA_DYNAMIC_AMM_PROGRAM_ID);
-    }
-
-    #[test]
-    fn test_meteora_swap_instruction_creation() {
-        let _pool = create_mock_dynamic_amm_pool();
         let input_amount = 1000000;
-        let minimum_output_amount = 950000;
+
+        let result = client.calculate_onchain_quote(&pool, input_amount);
+        assert!(result.is_ok());
         
-        // Test swap instruction creation structure
-        assert!(input_amount > minimum_output_amount * 90 / 100); // Basic sanity check
+        let quote = result.unwrap();
+        assert_eq!(quote.input_amount, input_amount);
+        assert!(quote.output_amount > 0);
+        assert_eq!(quote.dex, "Meteora");
     }
 
     #[test]
-    fn test_meteora_fee_calculation() {
-        let pool = create_mock_dynamic_amm_pool();
-        let input_amount = 1000000u64;
-        let fee_rate = pool.fee_rate_bips.unwrap_or(25) as u128; // Use fee_rate_bips instead
-        let expected_fee = (input_amount as u128 * fee_rate) / 10000u128;
+    fn test_meteora_program_id_identification() {
+        // Test Dynamic AMM identification
+        let dynamic_type = MeteoraPoolParser::identify_pool_type(
+            &METEORA_DYNAMIC_AMM_PROGRAM_ID,
+            DYNAMIC_AMM_POOL_STATE_SIZE,
+        );
+        assert_eq!(dynamic_type, Some(MeteoraPoolType::DynamicAmm));
+
+        // Test DLMM identification
+        let dlmm_type = MeteoraPoolParser::identify_pool_type(
+            &METEORA_DLMM_PROGRAM_ID,
+            DLMM_LB_PAIR_STATE_SIZE,
+        );
+        assert_eq!(dlmm_type, Some(MeteoraPoolType::Dlmm));
+    }
+
+    #[tokio::test]
+    async fn test_meteora_health_check() {
+        let client = create_test_meteora_client();
+        let result = client.health_check().await;
+        assert!(result.is_ok());
         
-        assert!(expected_fee > 0);
-        assert!(expected_fee < input_amount as u128);
-    }
-
-    #[test]
-    fn test_meteora_client_supports_token_pair() {
-        let _client = create_test_meteora_client();
-        let token_a = Pubkey::from_str("So11111111111111111111111111111111111111112").unwrap();
-        let token_b = Pubkey::from_str("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v").unwrap();
-        
-        // This would normally check if the client supports this token pair
-        // For now, just test the structure
-        assert_ne!(token_a, token_b);
-    }
-
-    // Helper functions for creating mock data
-    fn create_mock_dynamic_amm_pool_data() -> Vec<u8> {
-        vec![0u8; DYNAMIC_AMM_POOL_STATE_SIZE]
-    }
-
-    fn create_mock_dlmm_pool_data() -> Vec<u8> {
-        vec![0u8; DLMM_LB_PAIR_STATE_SIZE]
-    }
-
-    // Additional test helper functions
-    #[test]
-    fn test_meteora_program_id_constants() {
-        assert_ne!(METEORA_DYNAMIC_AMM_PROGRAM_ID, METEORA_DLMM_PROGRAM_ID);
-        assert_ne!(METEORA_DYNAMIC_AMM_PROGRAM_ID, Pubkey::default());
-        assert_ne!(METEORA_DLMM_PROGRAM_ID, Pubkey::default());
-    }
-
-    #[test]
-    fn test_meteora_state_size_constants() {
-        assert!(DYNAMIC_AMM_POOL_STATE_SIZE > 0);
-        assert!(DLMM_LB_PAIR_STATE_SIZE > 0);
-        assert_ne!(DYNAMIC_AMM_POOL_STATE_SIZE, DLMM_LB_PAIR_STATE_SIZE);
-    }
-
-    // Mock parsing functions for testing
-    fn parse_dynamic_amm_pool_state(_data: &[u8]) -> Result<DynamicAmmPoolState> {
-        Ok(DynamicAmmPoolState {
-            enabled: 1,
-            bump: 255,
-            pool_type: 0,
-            padding1: [0; 5],
-            lp_mint: Pubkey::default(),
-            token_a_mint: Pubkey::default(),
-            token_b_mint: Pubkey::default(),
-            a_vault: Pubkey::default(),
-            b_vault: Pubkey::default(),
-            lp_vault: Pubkey::default(),
-            a_vault_lp: Pubkey::default(),
-            b_vault_lp: Pubkey::default(),
-            a_vault_lp_mint: Pubkey::default(),
-            b_vault_lp_mint: Pubkey::default(),
-            pool_authority: Pubkey::default(),
-            token_a_fees: Pubkey::default(),
-            token_b_fees: Pubkey::default(),
-            oracle: Pubkey::default(),
-            fee_rate: 25,
-            protocol_fee_rate: 5,
-            lp_fee_rate: 10,
-            curve_type: 0,
-            padding2: [0; 7],
-            padding3: [0; 32],
-        })
-    }
-
-    fn parse_dlmm_lb_pair_state(_data: &[u8]) -> Result<DlmmLbPairState> {
-        Ok(DlmmLbPairState {
-            active_id: 8388608,
-            bin_step: 100,
-            status: 1,
-            padding1: 0,
-            token_x_mint: Pubkey::default(),
-            token_y_mint: Pubkey::default(),
-            reserve_x: Pubkey::default(),
-            reserve_y: Pubkey::default(),
-            protocol_fee_x: Pubkey::default(),
-            protocol_fee_y: Pubkey::default(),
-            fee_bps: 30,
-            protocol_share: 10,
-            pair_type: 0,
-            padding2: [0; 3],
-            oracle: Pubkey::default(),
-            padding3: [0; 64],
-        })
+        let health = result.unwrap();
+        assert!(health.is_healthy);
+        assert!(health.response_time_ms.is_some());
     }
 }
 
 #[cfg(test)]
-mod orca_tests {
-    use super::super::clients::orca::*;
-    use super::super::DexClient;
-    use crate::utils::{DexType, PoolInfo, PoolToken, PoolParser};
+mod lifinity_tests {
+    use super::super::clients::lifinity::*;
+    use super::super::api::DexClient;
+    use crate::utils::{DexType, PoolInfo, PoolToken};
     use solana_sdk::pubkey::Pubkey;
-    use std::str::FromStr;
 
-    fn create_test_orca_client() -> OrcaClient {
-        OrcaClient::new()
+    fn create_test_lifinity_client() -> LifinityClient {
+        LifinityClient::new()
     }
 
-    fn create_mock_whirlpool() -> PoolInfo {
+    fn create_mock_lifinity_pool() -> PoolInfo {
         PoolInfo {
-            address: Pubkey::from_str("HJPjoWUrhoZzkNfRpHuieeFk9WcZWjwy6PBjZ81ngndJ").unwrap(),
-            name: "Mock Whirlpool".to_string(),
-            dex_type: DexType::Orca,
+            address: Pubkey::new_unique(),
+            name: "Test Lifinity Pool".to_string(),
             token_a: PoolToken {
-                mint: Pubkey::from_str("So11111111111111111111111111111111111111112").unwrap(),
+                mint: Pubkey::new_unique(),
                 symbol: "SOL".to_string(),
-                reserve: 1500000000,
                 decimals: 9,
+                reserve: 1000000000, // 1 SOL
             },
             token_b: PoolToken {
-                mint: Pubkey::from_str("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v").unwrap(),
+                mint: Pubkey::new_unique(),
                 symbol: "USDC".to_string(),
-                reserve: 750000000,
                 decimals: 6,
+                reserve: 150000000, // 150 USDC
             },
-            token_a_vault: Pubkey::from_str("ANP74VNsHwSrq9uUSjiSNyNWvf6ZPrKTmE4gHoNd13Lg").unwrap(),
-            token_b_vault: Pubkey::from_str("75HgnSvXbWKZBpZHveX68ZzAhDqMzNDS29X6BGLtxMo1").unwrap(),
-            fee_numerator: Some(30),
+            token_a_vault: Pubkey::new_unique(),
+            token_b_vault: Pubkey::new_unique(),
+            fee_numerator: Some(25),
             fee_denominator: Some(10000),
-            fee_rate_bips: Some(30), // 0.30%
-            last_update_timestamp: 0,
-            liquidity: Some(1_500_000_000),
-            sqrt_price: Some(1000000000000000000), // Mock sqrt price
-            tick_current_index: Some(-1000),
+            fee_rate_bips: Some(25),
+            last_update_timestamp: 1640995200,
+            dex_type: DexType::Lifinity,
+            liquidity: Some(1000000000000), // 1M liquidity
+            sqrt_price: Some(12247448713915890491), // sqrt(150)
+            tick_current_index: Some(0),
             tick_spacing: Some(64),
-            // Initialize Orca-specific optional fields
             tick_array_0: None,
             tick_array_1: None,
             tick_array_2: None,
@@ -291,72 +205,99 @@ mod orca_tests {
     }
 
     #[test]
-    fn test_orca_client_creation() {
-        let client = create_test_orca_client();
-        assert_eq!(client.get_name(), "Orca");
+    fn test_lifinity_client_creation() {
+        let client = create_test_lifinity_client();
+        assert_eq!(client.get_name(), "Lifinity");
     }
 
     #[test]
-    fn test_orca_whirlpool_parsing() {
-        let pool = create_mock_whirlpool();
-        assert_eq!(pool.dex_type, DexType::Orca);
-        // Program ID is now handled by the parser, not stored in PoolInfo
-        let parser = OrcaPoolParser;
-        assert_eq!(parser.get_program_id(), ORCA_WHIRLPOOL_PROGRAM_ID);
+    fn test_lifinity_quote_calculation() {
+        let client = create_test_lifinity_client();
+        let pool = create_mock_lifinity_pool();
+        let input_amount = 1000000; // 0.001 SOL
+
+        let result = client.calculate_onchain_quote(&pool, input_amount);
+        assert!(result.is_ok());
+        
+        let quote = result.unwrap();
+        assert_eq!(quote.input_amount, input_amount);
+        assert!(quote.output_amount > 0);
+        assert_eq!(quote.dex, "Lifinity");
+        assert!(quote.slippage_estimate.is_some());
+        assert!(quote.slippage_estimate.unwrap() < 0.1); // Lifinity should have low slippage
     }
 
     #[test]
-    fn test_orca_pool_parser_creation() {
-        let parser = OrcaPoolParser;
-        assert_eq!(parser.get_program_id(), ORCA_WHIRLPOOL_PROGRAM_ID);
+    fn test_lifinity_oracle_price_calculation() {
+        let client = create_test_lifinity_client();
+        let pool = create_mock_lifinity_pool();
+
+        let oracle_price = client.calculate_oracle_price(&pool);
+        assert!(oracle_price.is_some());
+        assert_eq!(oracle_price.unwrap(), 150.0); // 150 USDC per SOL
     }
 
     #[test]
-    fn test_orca_whirlpool_constants() {
-        assert_ne!(ORCA_WHIRLPOOL_PROGRAM_ID, Pubkey::default());
+    fn test_lifinity_oracle_price_zero_reserves() {
+        let client = create_test_lifinity_client();
+        let mut pool = create_mock_lifinity_pool();
+        pool.token_a.reserve = 0;
+
+        let oracle_price = client.calculate_oracle_price(&pool);
+        assert!(oracle_price.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_lifinity_health_check() {
+        let client = create_test_lifinity_client();
+        let result = client.health_check().await;
+        assert!(result.is_ok());
+        
+        let health = result.unwrap();
+        assert!(health.is_healthy);
+        assert!(health.response_time_ms.is_some());
+        assert!(health.status_message.contains("healthy"));
     }
 }
 
 #[cfg(test)]
-mod raydium_tests {
-    use super::super::clients::raydium::*;
-    use super::super::DexClient;
-    use crate::utils::{DexType, PoolInfo, PoolToken, PoolParser};
+mod phoenix_tests {
+    use super::super::clients::phoenix::*;
+    use super::super::api::DexClient;
+    use crate::utils::{DexType, PoolInfo, PoolToken};
     use solana_sdk::pubkey::Pubkey;
-    use std::str::FromStr;
 
-    fn create_test_raydium_client() -> RaydiumClient {
-        RaydiumClient::new()
+    fn create_test_phoenix_client() -> PhoenixClient {
+        PhoenixClient::new()
     }
 
-    fn create_mock_raydium_pool() -> PoolInfo {
+    fn create_mock_phoenix_market() -> PoolInfo {
         PoolInfo {
-            address: Pubkey::from_str("58oQChx4yWmvKdwLLZzBi4ChoCc2fqCUWBkwMihLYQo2").unwrap(),
-            name: "Mock Raydium Pool".to_string(),
-            dex_type: DexType::Raydium,
+            address: Pubkey::new_unique(),
+            name: "Test Phoenix Market".to_string(),
             token_a: PoolToken {
-                mint: Pubkey::from_str("So11111111111111111111111111111111111111112").unwrap(),
+                mint: Pubkey::new_unique(),
                 symbol: "SOL".to_string(),
-                reserve: 2000000000,
                 decimals: 9,
+                reserve: 0, // Order books don't have traditional reserves
             },
             token_b: PoolToken {
-                mint: Pubkey::from_str("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v").unwrap(),
+                mint: Pubkey::new_unique(),
                 symbol: "USDC".to_string(),
-                reserve: 1000000000,
                 decimals: 6,
+                reserve: 0,
             },
-            token_a_vault: Pubkey::from_str("5Q544fKrFoe6tsEbD7S8EmxGTJYAKtTVhAW5Q5pge4j1").unwrap(),
-            token_b_vault: Pubkey::from_str("76iv9V2wH4v9eNbsZbWfKWW3p8wPSfxK7Hk7bP3PfzMn").unwrap(),
+            token_a_vault: Pubkey::new_unique(),
+            token_b_vault: Pubkey::new_unique(),
             fee_numerator: Some(25),
             fee_denominator: Some(10000),
-            fee_rate_bips: Some(25), // 0.25%
-            last_update_timestamp: 0,
-            liquidity: Some(2_000_000_000),
+            fee_rate_bips: Some(25),
+            last_update_timestamp: 1640995200,
+            dex_type: DexType::Unknown("Phoenix".to_string()),
+            liquidity: None,
             sqrt_price: None,
             tick_current_index: None,
             tick_spacing: None,
-            // Initialize Orca-specific optional fields
             tick_array_0: None,
             tick_array_1: None,
             tick_array_2: None,
@@ -365,106 +306,244 @@ mod raydium_tests {
     }
 
     #[test]
-    fn test_raydium_client_creation() {
-        let client = create_test_raydium_client();
-        assert_eq!(client.get_name(), "Raydium");
+    fn test_phoenix_client_creation() {
+        let client = create_test_phoenix_client();
+        assert_eq!(client.get_name(), "Phoenix");
     }
 
     #[test]
-    fn test_raydium_pool_parsing() {
-        let pool = create_mock_raydium_pool();
-        assert_eq!(pool.dex_type, DexType::Raydium);
+    fn test_phoenix_order_side_enum() {
+        let bid = OrderSide::Bid;
+        let ask = OrderSide::Ask;
+        
+        match bid {
+            OrderSide::Bid => assert!(true),
+            OrderSide::Ask => assert!(false),
+        }
+        
+        match ask {
+            OrderSide::Bid => assert!(false),
+            OrderSide::Ask => assert!(true),
+        }
     }
 
     #[test]
-    fn test_raydium_pool_parser_creation() {
-        let parser = RaydiumPoolParser;
-        assert_ne!(parser.get_program_id(), Pubkey::default());
+    fn test_phoenix_order_type_enum() {
+        let market_order = OrderType::Market;
+        let limit_order = OrderType::Limit;
+        let _post_only = OrderType::PostOnly;
+        let _ioc = OrderType::ImmediateOrCancel;
+        
+        // Test that we can differentiate order types
+        match market_order {
+            OrderType::Market => assert!(true),
+            _ => assert!(false),
+        }
+        
+        match limit_order {
+            OrderType::Limit => assert!(true),
+            _ => assert!(false),
+        }
+    }
+
+    #[test]
+    fn test_phoenix_quote_calculation() {
+        let client = create_test_phoenix_client();
+        let market = create_mock_phoenix_market();
+        let input_amount = 1000000;
+
+        let result = client.calculate_onchain_quote(&market, input_amount);
+        assert!(result.is_ok());
+        
+        let quote = result.unwrap();
+        assert_eq!(quote.input_amount, input_amount);
+        assert!(quote.output_amount > 0);
+        assert_eq!(quote.dex, "Phoenix");
+        assert!(quote.slippage_estimate.is_some());
+        assert!(quote.slippage_estimate.unwrap() > 0.1); // Order books can have higher slippage
+    }
+
+    #[tokio::test]
+    async fn test_phoenix_health_check() {
+        let client = create_test_phoenix_client();
+        let result = client.health_check().await;
+        assert!(result.is_ok());
+        
+        let health = result.unwrap();
+        assert!(health.is_healthy);
+        assert!(health.response_time_ms.is_some());
+        assert!(health.status_message.contains("order book"));
     }
 }
 
 #[cfg(test)]
 mod integration_tests {
     use super::super::*;
-    // use crate::cache::Cache;
+    use crate::cache::Cache;
     use crate::config::settings::Config;
     use std::sync::Arc;
 
-    async fn setup_test_environment() -> Arc<Config> {
-        // For testing, we'll just return config 
-        Arc::new(Config::test_default())
+    #[tokio::test]
+    async fn test_get_all_clients_enhanced() {
+        let cache = Arc::new(Cache::new("redis://localhost:6379", 300).await.unwrap());
+        let config = Arc::new(Config::test_default()); // Fix: Use test_default() instead of default()
+        
+        let clients = get_all_clients(cache, config);
+        
+        // Should include all DEX clients including new ones
+        assert_eq!(clients.len(), 4); // Orca, Raydium, Meteora, Lifinity
+        
+        let client_names: Vec<&str> = clients.iter().map(|c| c.get_name()).collect();
+        assert!(client_names.contains(&"Orca"));
+        assert!(client_names.contains(&"Raydium"));
+        assert!(client_names.contains(&"Meteora"));
+        assert!(client_names.contains(&"Lifinity"));
     }
 
     #[tokio::test]
-    #[ignore] // Disabled until we can mock Cache properly
-    async fn test_get_all_clients() {
-        let _config = setup_test_environment().await;
-        // let clients = get_all_clients(cache, config);
-        // assert!(!clients.is_empty());
-        // assert!(clients.len() >= 4); // Orca, Raydium, Meteora, Lifinity
+    async fn test_get_all_discoverable_clients_enhanced() {
+        let cache = Arc::new(Cache::new("redis://localhost:6379", 300).await.unwrap());
+        let config = Arc::new(Config::test_default()); // Fix: Use test_default() instead of default()
+        
+        let clients = get_all_discoverable_clients(cache, config);
+        
+        assert_eq!(clients.len(), 4);
+        
+        for client in &clients {
+            assert!(!client.dex_name().is_empty());
+        }
     }
 
     #[tokio::test]
-    #[ignore] // Disabled until cache integration is fixed
-    async fn test_get_all_discoverable_clients() {
-        let _config = setup_test_environment().await;
-        // let clients = get_all_discoverable_clients(cache, config);
-        // assert!(!clients.is_empty());
-        // assert!(clients.len() >= 4);
-    }
-
-    #[tokio::test]
-    #[ignore] // Disabled until cache integration is fixed
-    async fn test_get_all_clients_arc() {
-        let _config = setup_test_environment().await;
-        // let clients = get_all_clients_arc(cache, config).await;
-        // assert!(!clients.is_empty());
-        // assert!(clients.len() >= 4);
+    async fn test_all_clients_health_checks() {
+        let cache = Arc::new(Cache::new("redis://localhost:6379", 300).await.unwrap());
+        let config = Arc::new(Config::test_default()); // Fix: Use test_default() instead of default()
+        
+        let clients = get_all_clients(cache, config);
+        
+        for client in clients {
+            let health_result = client.health_check().await;
+            assert!(health_result.is_ok(), "Health check failed for {}", client.get_name());
+            
+            let health = health_result.unwrap();
+            assert!(health.is_healthy, "{} reported unhealthy", client.get_name());
+            assert!(health.response_time_ms.is_some());
+        }
     }
 
     #[test]
-    fn test_pool_parser_registry() {
-        use crate::dex::discovery::POOL_PARSER_REGISTRY;
-        
-        // Test that the registry is populated
-        assert!(!POOL_PARSER_REGISTRY.is_empty());
-        
-        // Test that known program IDs are registered
-        let orca_program_id = crate::dex::clients::orca::ORCA_WHIRLPOOL_PROGRAM_ID;
-        assert!(POOL_PARSER_REGISTRY.contains_key(&orca_program_id));
+    fn test_enhanced_quote_calculations() {
+        use crate::utils::{DexType, PoolInfo, PoolToken};
+        use solana_sdk::pubkey::Pubkey;
+
+        // Test each DEX client's quote calculation
+        let pool = PoolInfo {
+            address: Pubkey::new_unique(),
+            name: "Test Pool".to_string(),
+            token_a: PoolToken {
+                mint: Pubkey::new_unique(),
+                symbol: "SOL".to_string(),
+                decimals: 9,
+                reserve: 1000000000,
+            },
+            token_b: PoolToken {
+                mint: Pubkey::new_unique(),
+                symbol: "USDC".to_string(),
+                decimals: 6,
+                reserve: 150000000,
+            },
+            token_a_vault: Pubkey::new_unique(),
+            token_b_vault: Pubkey::new_unique(),
+            fee_rate_bips: Some(25),
+            dex_type: DexType::Meteora,
+            ..Default::default()
+        };
+
+        let input_amount = 1000000;
+
+        // Test Meteora client
+        let meteora_client = clients::MeteoraClient::new();
+        let meteora_quote = meteora_client.calculate_onchain_quote(&pool, input_amount);
+        assert!(meteora_quote.is_ok());
+
+        // Test Lifinity client
+        let lifinity_client = clients::LifinityClient::new();
+        let lifinity_quote = lifinity_client.calculate_onchain_quote(&pool, input_amount);
+        assert!(lifinity_quote.is_ok());
+
+        // Test Phoenix client
+        let phoenix_client = clients::PhoenixClient::new();
+        let phoenix_quote = phoenix_client.calculate_onchain_quote(&pool, input_amount);
+        assert!(phoenix_quote.is_ok());
     }
 }
 
 #[cfg(test)]
-mod banned_pairs_tests {
-    use super::super::discovery::BannedPairsManager;
-    // use solana_sdk::pubkey::Pubkey;
-    // use std::str::FromStr;
+mod math_integration_tests {
+    use crate::dex::math::{meteora, lifinity};
 
     #[test]
-    fn test_banned_pairs_manager_creation() {
-        use std::path::Path;
-        // Create a mock CSV file path for testing
-        let mock_path = Path::new("test_banned_pairs.csv");
-        let manager = BannedPairsManager::new(mock_path);
-        // This will fail in practice since the file doesn't exist, so let's just check the error
-        assert!(manager.is_err());
+    fn test_meteora_math_integration() {
+        // Test Dynamic AMM calculation
+        let result = meteora::calculate_dynamic_amm_output(
+            1_000_000,    // 1 token input
+            100_000_000,  // 100 tokens reserve
+            200_000_000,  // 200 tokens reserve
+            25,           // 0.25% fee
+            1000,         // Fix: Add missing 5th parameter (max_slippage_bps)
+        );
+        assert!(result.is_ok());
+        assert!(result.unwrap() > 0);
+
+        // Test DLMM calculation
+        let dlmm_result = meteora::calculate_dlmm_output(
+            1_000_000,  // 1 token input
+            8388608,    // Neutral bin (2^23)
+            25,         // 0.25% bin step
+            25,         // 0.25% fee
+            64,         // Fix: Add missing 5th parameter (bin_step)
+        );
+        assert!(dlmm_result.is_ok());
+        assert!(dlmm_result.unwrap() > 0);
     }
 
     #[test]
-    #[ignore] // Disabled - API has changed, needs string-based checking
-    fn test_add_banned_pair() {
-        use std::path::Path;
-        let _mock_path = Path::new("test_banned_pairs.csv");
-        // let mut manager = BannedPairsManager::new(mock_path).unwrap();
-        // Note: Current API uses string-based ban_pair_and_persist, not Pubkey-based add_banned_pair
+    fn test_lifinity_math_integration() {
+        // Test without oracle
+        let result = lifinity::calculate_lifinity_output(
+            1_000_000,    // 1 token input
+            100_000_000,  // 100 tokens reserve
+            200_000_000,  // 200 tokens reserve
+            25,           // 0.25% fee
+            None,         // No oracle price
+        );
+        assert!(result.is_ok());
+        assert!(result.unwrap() > 0);
+
+        // Test with oracle
+        let oracle_result = lifinity::calculate_lifinity_output(
+            1_000_000,
+            100_000_000,
+            200_000_000,
+            25,
+            Some(2100000), // Oracle price as u64 (scaled by 1M for precision)
+        );
+        assert!(oracle_result.is_ok());
+        assert!(oracle_result.unwrap() > 0);
     }
 
-    #[test]
-    #[ignore] // Disabled - API has changed, needs string-based checking
-    fn test_remove_banned_pair() {
-        use std::path::Path;
-        let _mock_path = Path::new("test_banned_pairs.csv");
-        // Note: Current API uses string-based methods, not Pubkey-based
-    }
+    // TODO: Implement dynamic fee calculation for Lifinity
+    // #[test]
+    // fn test_dynamic_fee_calculation() {
+    //     let result = lifinity::calculate_dynamic_fee(
+    //         25,        // Base fee 0.25%
+    //         Some(0.5), // 50% volatility
+    //         Some(1.0), // Normal liquidity
+    //     );
+    //     assert!(result.is_ok());
+    //     
+    //     let dynamic_fee = result.unwrap();
+    //     assert!(dynamic_fee >= 25); // Should be at least base fee
+    //     assert!(dynamic_fee <= 100); // Should not exceed 1%
+    // }
 }

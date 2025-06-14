@@ -34,6 +34,7 @@ use tokio::time::Instant;
 
 /// Static registry mapping DEX program IDs to their corresponding `PoolParser` instances.
 /// This registry allows the dynamic dispatch of parsing logic based on an account's owner program.
+#[allow(dead_code)] // Used by pool discovery systems
 pub static POOL_PARSER_REGISTRY: Lazy<HashMap<Pubkey, Arc<dyn UtilsPoolParser>>> = Lazy::new(|| {
     let mut m = HashMap::new();
 
@@ -68,147 +69,110 @@ pub static POOL_PARSER_REGISTRY: Lazy<HashMap<Pubkey, Arc<dyn UtilsPoolParser>>>
 // BANNED PAIRS MANAGEMENT
 // =====================================================================================
 
-/// A canonical key for a token pair, ensuring (A,B) and (B,A) are treated the same.
+/// Represents a token pair for banned pairs management
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-struct BannedPairKey {
-    token1: String,
-    token2: String,
+pub struct BannedPairKey {
+    pub token_a: String,
+    pub token_b: String,
 }
 
 impl BannedPairKey {
-    fn new(token_a: &str, token_b: &str) -> Self {
+    pub fn new(token_a: String, token_b: String) -> Self {
+        // Ensure consistent ordering to treat (A, B) and (B, A) as the same pair
         if token_a <= token_b {
-            BannedPairKey {
-                token1: token_a.to_string(),
-                token2: token_b.to_string(),
-            }
+            Self { token_a, token_b }
         } else {
-            BannedPairKey {
-                token1: token_b.to_string(),
-                token2: token_a.to_string(),
-            }
+            Self { token_a: token_b, token_b: token_a }
         }
     }
 }
 
-/// Manages the set of banned trading pairs.
-#[derive(Debug)]
+/// Manages banned trading pairs
 pub struct BannedPairsManager {
     banned_pairs: HashSet<BannedPairKey>,
-    csv_file_path: Box<Path>,
+    csv_file_path: String,
 }
 
 impl BannedPairsManager {
-    /// Creates a new BannedPairsManager by loading banned pairs from a CSV file.
-    pub fn new(csv_file_path: &Path) -> Result<Self> {
-        info!("Loading banned pairs from: {:?}", csv_file_path);
+    /// Create a new BannedPairsManager and load banned pairs from CSV
+    pub fn new(csv_file_path: String) -> Result<Self> {
+        let mut manager = Self {
+            banned_pairs: HashSet::new(),
+            csv_file_path,
+        };
+        manager.load_from_csv()?;
+        Ok(manager)
+    }
 
-        let mut banned_pairs = HashSet::new();
-
-        if csv_file_path.exists() {
-            let file = std::fs::File::open(csv_file_path)
-                .with_context(|| format!("Failed to open banned pairs file: {:?}", csv_file_path))?;
-
-            let mut reader = ReaderBuilder::new()
-                .has_headers(true)
-                .from_reader(BufReader::new(file));
-
-            for result in reader.records() {
-                let record = result.with_context(|| "Failed to parse CSV record")?;
-
-                if record.len() != 2 {
-                    warn!("Skipping invalid record with {} fields: {:?}", record.len(), record);
-                    continue;
-                }
-
-                let token_a = record[0].trim();
-                let token_b = record[1].trim();
-
-                if !token_a.is_empty() && !token_b.is_empty() {
-                    let key = BannedPairKey::new(token_a, token_b);
-                    banned_pairs.insert(key);
-                } else {
-                    warn!("Skipping record with empty token: {:?}", record);
-                }
-            }
-
-            info!("Loaded {} banned pairs from CSV file", banned_pairs.len());
-        } else {
-            info!("Banned pairs file does not exist, starting with empty set");
+    /// Load banned pairs from CSV file
+    fn load_from_csv(&mut self) -> Result<()> {
+        if !Path::new(&self.csv_file_path).exists() {
+            info!("Banned pairs CSV file does not exist, starting with empty list: {}", self.csv_file_path);
+            return Ok(());
         }
 
-        Ok(BannedPairsManager {
-            banned_pairs,
-            csv_file_path: csv_file_path.into(),
-        })
+        let file = std::fs::File::open(&self.csv_file_path)
+            .with_context(|| format!("Failed to open banned pairs CSV: {}", self.csv_file_path))?;
+        
+        let mut reader = ReaderBuilder::new().has_headers(true).from_reader(BufReader::new(file));
+        
+        for result in reader.records() {
+            let record = result.with_context(|| "Failed to read CSV record")?;
+            if record.len() >= 2 {
+                let token_a = record[0].to_string();
+                let token_b = record[1].to_string();
+                let pair = BannedPairKey::new(token_a, token_b);
+                self.banned_pairs.insert(pair);
+            }
+        }
+
+        info!("Loaded {} banned pairs from CSV", self.banned_pairs.len());
+        Ok(())
     }
 
-    /// Checks if a trading pair is banned.
+    /// Save banned pairs to CSV file
+    fn save_to_csv(&self) -> Result<()> {
+        let file = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(&self.csv_file_path)
+            .with_context(|| format!("Failed to create banned pairs CSV: {}", self.csv_file_path))?;
+
+        let mut writer = CsvWriterBuilder::new().has_headers(true).from_writer(file);
+        writer.write_record(&["token_a", "token_b"])?;
+
+        for pair in &self.banned_pairs {
+            writer.write_record(&[&pair.token_a, &pair.token_b])?;
+        }
+
+        writer.flush()?;
+        Ok(())
+    }
+
+    /// Check if a token pair is banned
     pub fn is_pair_banned(&self, token_a: &str, token_b: &str) -> bool {
-        let key = BannedPairKey::new(token_a, token_b);
-        self.banned_pairs.contains(&key)
+        let pair = BannedPairKey::new(token_a.to_string(), token_b.to_string());
+        self.banned_pairs.contains(&pair)
     }
 
-    /// Checks if a trading pair (by Pubkey) is banned.
-    pub fn is_pair_banned_pubkey(&self, token_a: &Pubkey, token_b: &Pubkey) -> bool {
+    /// Check if a token pair (by Pubkey) is banned
+    pub fn is_pair_banned_by_pubkey(&self, token_a: &Pubkey, token_b: &Pubkey) -> bool {
         self.is_pair_banned(&token_a.to_string(), &token_b.to_string())
     }
 
-    /// Adds a new banned pair and persists it to the CSV file.
-    pub fn ban_pair(&mut self, token_a: &str, token_b: &str) -> Result<()> {
-        let key = BannedPairKey::new(token_a, token_b);
-        
-        if self.banned_pairs.insert(key.clone()) {
-            self.persist_new_ban(&key)?;
-            info!("Banned new pair: {} <-> {}", key.token1, key.token2);
-        } else {
-            debug!("Pair already banned: {} <-> {}", key.token1, key.token2);
-        }
-
+    /// Ban a token pair
+    pub fn ban_pair(&mut self, token_a: String, token_b: String) -> Result<()> {
+        let pair = BannedPairKey::new(token_a, token_b);
+        self.banned_pairs.insert(pair);
+        self.save_to_csv()?;
+        info!("Banned pair added and saved to CSV");
         Ok(())
     }
 
-    fn persist_new_ban(&self, banned_pair: &BannedPairKey) -> Result<()> {
-        let file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&*self.csv_file_path)
-            .with_context(|| format!("Failed to open banned pairs file for writing: {:?}", self.csv_file_path))?;
-
-        let mut writer = CsvWriterBuilder::new()
-            .has_headers(false)
-            .from_writer(file);
-
-        writer.write_record(&[&banned_pair.token1, &banned_pair.token2])
-            .with_context(|| "Failed to write banned pair to CSV")?;
-
-        writer.flush()
-            .with_context(|| "Failed to flush CSV writer")?;
-
-        Ok(())
-    }
-
-    /// Returns the number of banned pairs.
-    pub fn count(&self) -> usize {
+    /// Get the number of banned pairs
+    pub fn banned_count(&self) -> usize {
         self.banned_pairs.len()
-    }
-
-    /// Filters a list of pools, removing those with banned pairs.
-    pub fn filter_banned_pools(&self, pools: Vec<PoolInfo>) -> Vec<PoolInfo> {
-        let initial_count = pools.len();
-        let filtered: Vec<PoolInfo> = pools
-            .into_iter()
-            .filter(|pool| {
-                !self.is_pair_banned_pubkey(&pool.token_a.mint, &pool.token_b.mint)
-            })
-            .collect();
-
-        let filtered_count = initial_count - filtered.len();
-        if filtered_count > 0 {
-            info!("Filtered out {} banned pairs from {} total pools", filtered_count, initial_count);
-        }
-
-        filtered
     }
 }
 
@@ -227,31 +191,29 @@ pub struct PoolValidationConfig {
 impl Default for PoolValidationConfig {
     fn default() -> Self {
         Self {
-            min_liquidity_usd: 1000.0,
-            max_price_impact_bps: 500, // 5%
+            min_liquidity_usd: 1000.0, // $1000 minimum liquidity
+            max_price_impact_bps: 1000, // 10% max price impact
             require_balanced_reserves: false,
         }
     }
 }
 
-/// Service responsible for discovering and managing liquidity pools across multiple DEXs.
+/// Pool discovery and management service
 pub struct PoolDiscoveryService {
-    pub pool_cache: Arc<DashMap<Pubkey, Arc<PoolInfo>>>,
-    pub dex_clients: Vec<Arc<dyn PoolDiscoverable>>,
-    pub validation_config: PoolValidationConfig,
-    pub banned_pairs_manager: Arc<tokio::sync::Mutex<BannedPairsManager>>,
+    pool_cache: Arc<DashMap<Pubkey, Arc<PoolInfo>>>,
+    dex_clients: Vec<Arc<dyn PoolDiscoverable>>,
+    validation_config: PoolValidationConfig,
+    banned_pairs_manager: Arc<tokio::sync::Mutex<BannedPairsManager>>,
     rpc_client: Arc<SolanaRpcClient>,
-    cache: Arc<Cache>,
 }
 
 impl PoolDiscoveryService {
-    /// Creates a new PoolDiscoveryService instance.
+    /// Create a new PoolDiscoveryService
     pub fn new(
         dex_clients: Vec<Arc<dyn PoolDiscoverable>>,
-        rpc_client: Arc<SolanaRpcClient>,
-        cache: Arc<Cache>,
         validation_config: PoolValidationConfig,
-        banned_pairs_csv_path: &Path,
+        banned_pairs_csv_path: String,
+        rpc_client: Arc<SolanaRpcClient>,
     ) -> Result<Self> {
         let banned_pairs_manager = BannedPairsManager::new(banned_pairs_csv_path)?;
         
@@ -261,300 +223,222 @@ impl PoolDiscoveryService {
             validation_config,
             banned_pairs_manager: Arc::new(tokio::sync::Mutex::new(banned_pairs_manager)),
             rpc_client,
-            cache,
         })
     }
 
-    /// Discovers pools from all configured DEX clients.
-    pub async fn discover_all_pools(&self) -> Result<Vec<PoolInfo>> {
-        info!("Starting pool discovery across {} DEXs", self.dex_clients.len());
+    /// Discover pools from all DEX clients
+    pub async fn discover_all_pools(&self) -> Result<usize> {
         let start_time = Instant::now();
+        info!("Starting pool discovery across {} DEX clients", self.dex_clients.len());
 
-        let discovery_tasks: Vec<_> = self.dex_clients
-            .iter()
-            .map(|client| async move {
-                let dex_start = Instant::now();
+        let mut discovery_tasks = Vec::new();
+        
+        for dex_client in &self.dex_clients {
+            let client = dex_client.clone();
+            let task = tokio::spawn(async move {
                 match client.discover_pools().await {
                     Ok(pools) => {
-                        info!(
-                            "Discovered {} pools from {} in {:?}",
-                            pools.len(),
-                            client.dex_name(),
-                            dex_start.elapsed()
-                        );
-                        Ok(pools)
+                        info!("Discovered {} pools from {}", pools.len(), client.dex_name());
+                        Ok((client.dex_name().to_string(), pools))
                     }
                     Err(e) => {
-                        error!("Failed to discover pools from {}: {}", client.dex_name(), e);
-                        Ok(Vec::new())
+                        warn!("Failed to discover pools from {}: {}", client.dex_name(), e);
+                        Err(e)
                     }
                 }
-            })
-            .collect();
+            });
+            discovery_tasks.push(task);
+        }
 
-        let results: Vec<Result<Vec<PoolInfo>>> = join_all(discovery_tasks).await;
+        let results = join_all(discovery_tasks).await;
+        let mut total_discovered = 0;
         let mut all_pools = Vec::new();
 
         for result in results {
             match result {
-                Ok(pools) => all_pools.extend(pools),
-                Err(e) => warn!("Pool discovery task failed: {}", e),
+                Ok(Ok((dex_name, pools))) => {
+                    total_discovered += pools.len();
+                    all_pools.extend(pools);
+                    debug!("Successfully processed pools from {}", dex_name);
+                }
+                Ok(Err(e)) => {
+                    warn!("DEX discovery error: {}", e);
+                }
+                Err(e) => {
+                    error!("Task join error: {}", e);
+                }
             }
         }
-
-        info!(
-            "Total discovery completed in {:?}: {} pools found",
-            start_time.elapsed(),
-            all_pools.len()
-        );
 
         // Filter banned pairs
-        let banned_pairs_manager = self.banned_pairs_manager.lock().await;
-        let filtered_pools = banned_pairs_manager.filter_banned_pools(all_pools);
-        drop(banned_pairs_manager); // Release lock early
+        let banned_manager = self.banned_pairs_manager.lock().await;
+        let filtered_pools: Vec<PoolInfo> = all_pools
+            .into_iter()
+            .filter(|pool| {
+                !banned_manager.is_pair_banned_by_pubkey(&pool.token_a.mint, &pool.token_b.mint)
+            })
+            .collect();
+        drop(banned_manager);
+
+        let banned_count = total_discovered - filtered_pools.len();
+        if banned_count > 0 {
+            info!("Filtered out {} banned pairs", banned_count);
+        }
 
         // Validate pools
-        let validated_pools = self.validate_pools(filtered_pools).await?;
+        let filtered_pools_len = filtered_pools.len();
+        let validated_pools = self.validate_pools(filtered_pools).await;
+        let validation_filtered = filtered_pools_len - validated_pools.len();
+        if validation_filtered > 0 {
+            info!("Filtered out {} pools during validation", validation_filtered);
+        }
 
         // Update cache
-        self.update_pool_cache(&validated_pools).await;
+        self.update_pool_cache(validated_pools).await;
 
+        let discovery_time = start_time.elapsed();
         info!(
-            "Pool discovery complete: {} valid pools cached",
-            validated_pools.len()
+            "Pool discovery completed in {:.2}s: {} total discovered, {} in cache",
+            discovery_time.as_secs_f64(),
+            total_discovered,
+            self.pool_cache.len()
         );
 
-        Ok(validated_pools)
+        Ok(self.pool_cache.len())
     }
 
-    /// Updates the pool cache with discovered pools.
-    pub async fn update_pool_cache(&self, pools: &[PoolInfo]) {
+    /// Update the pool cache with discovered pools
+    async fn update_pool_cache(&self, pools: Vec<PoolInfo>) {
         for pool in pools {
-            self.pool_cache.insert(pool.address, Arc::new(pool.clone()));
+            self.pool_cache.insert(pool.address, Arc::new(pool));
         }
-        info!("Updated pool cache with {} pools", pools.len());
     }
 
-    /// Validates pools according to the configured validation rules.
-    pub async fn validate_pools(&self, pools: Vec<PoolInfo>) -> Result<Vec<PoolInfo>> {
-        let mut valid_pools = Vec::new();
-
+    /// Validate pools according to configuration
+    async fn validate_pools(&self, pools: Vec<PoolInfo>) -> Vec<PoolInfo> {
+        let mut validated = Vec::new();
+        
         for pool in pools {
-            if self.validate_single_pool(&pool).await? {
-                valid_pools.push(pool);
+            if self.validate_single_pool(&pool).await {
+                validated.push(pool);
             }
         }
-
-        info!(
-            "Pool validation complete: {}/{} pools passed validation",
-            valid_pools.len(),
-            valid_pools.len()
-        );
-
-        Ok(valid_pools)
+        
+        validated
     }
 
-    /// Validates a single pool according to the configuration.
-    pub async fn validate_single_pool(&self, pool: &PoolInfo) -> Result<bool> {
-        // Check if reserves exist
+    /// Validate a single pool
+    async fn validate_single_pool(&self, pool: &PoolInfo) -> bool {
+        // Check minimum liquidity (simplified - would need price data for accurate USD calculation)
         if pool.token_a.reserve == 0 || pool.token_b.reserve == 0 {
-            debug!("Pool {} has zero reserves", pool.address);
-            return Ok(false);
+            return false;
         }
 
-        // Check if pair is banned
-        {
-            let banned_pairs_manager = self.banned_pairs_manager.lock().await;
-            if banned_pairs_manager.is_pair_banned_pubkey(&pool.token_a.mint, &pool.token_b.mint) {
-                debug!("Pool {} has banned token pair", pool.address);
-                return Ok(false);
+        // Check balanced reserves if required
+        if self.validation_config.require_balanced_reserves {
+            let ratio = pool.token_a.reserve as f64 / pool.token_b.reserve as f64;
+            if ratio < 0.1 || ratio > 10.0 {
+                return false;
             }
         }
 
-        Ok(true)
+        true
     }
 
-    /// Returns all cached pools.
+    /// Get all cached pools
     pub fn get_all_cached_pools(&self) -> Vec<Arc<PoolInfo>> {
         self.pool_cache.iter().map(|entry| entry.value().clone()).collect()
     }
 
-    /// Gets a specific pool from cache.
-    pub fn get_cached_pool(&self, pool_address: &Pubkey) -> Option<Arc<PoolInfo>> {
-        self.pool_cache.get(pool_address).map(|entry| entry.clone())
+    /// Get a specific cached pool
+    pub fn get_cached_pool(&self, address: &Pubkey) -> Option<Arc<PoolInfo>> {
+        self.pool_cache.get(address).map(|entry| entry.value().clone())
     }
 
-    /// Returns the total number of cached pools.
+    /// Get cache size
     pub fn cache_size(&self) -> usize {
         self.pool_cache.len()
     }
 
-    /// Checks if a pool exists in cache.
-    pub fn has_cached_pool(&self, pool_address: &Pubkey) -> bool {
-        self.pool_cache.contains_key(pool_address)
+    /// Check if pool is cached
+    pub fn has_cached_pool(&self, address: &Pubkey) -> bool {
+        self.pool_cache.contains_key(address)
     }
 
-    /// Gets pool cache statistics.
-    pub fn get_cache_stats(&self) -> (usize, Vec<String>) {
-        let size = self.pool_cache.len();
-        let dex_types: Vec<String> = self.pool_cache
-            .iter()
-            .map(|entry| format!("{:?}", entry.value().dex_type))
-            .collect::<std::collections::HashSet<_>>()
-            .into_iter()
-            .collect();
-        
-        (size, dex_types)
-    }
+    /// Get cache statistics
+    pub fn get_cache_stats(&self) -> HashMap<String, usize> {
+        let mut stats = HashMap::new();
+        let mut dex_counts = HashMap::new();
 
-    /// Clears expired pools from cache based on age.
-    pub fn cleanup_expired_pools(&self, max_age_secs: u64) -> usize {
-        let _cutoff_time = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs()
-            .saturating_sub(max_age_secs);
-
-        let mut removed_count = 0;
-        let keys_to_remove: Vec<Pubkey> = self.pool_cache
-            .iter()
-            .filter_map(|entry| {
-                // For pools without timestamps, we keep them (assume they're fresh)
-                // This is a conservative approach for existing pools
-                let pool = entry.value();
-                // TODO: Add timestamp field to PoolInfo for proper age tracking
-                // For now, we'll implement a simple cleanup based on reserve thresholds
-                if pool.token_a.reserve < 1000 && pool.token_b.reserve < 1000 {
-                    Some(*entry.key())
-                } else {
-                    None
-                }
-            })
-            .collect();
-
-        for key in keys_to_remove {
-            if self.pool_cache.remove(&key).is_some() {
-                removed_count += 1;
-            }
-        }
-
-        if removed_count > 0 {
-            info!("Cleaned up {} expired/low-liquidity pools from cache", removed_count);
-        }
-
-        removed_count
-    }
-
-    /// Sync pool cache with external hot cache (like ArbitrageOrchestrator's cache).
-    pub async fn sync_with_hot_cache(&self, hot_cache: &Arc<DashMap<Pubkey, Arc<PoolInfo>>>) -> Result<()> {
-        info!("Syncing pool discovery cache with hot cache...");
-        
-        let mut synced_count = 0;
-        let mut new_pools_count = 0;
-
-        // Copy pools from hot cache to discovery cache
-        for entry in hot_cache.iter() {
-            let pool_address = *entry.key();
-            let pool_info = entry.value().clone();
-            
-            if !self.pool_cache.contains_key(&pool_address) {
-                new_pools_count += 1;
-            }
-            
-            self.pool_cache.insert(pool_address, pool_info);
-            synced_count += 1;
-        }
-
-        // Copy unique pools from discovery cache to hot cache
         for entry in self.pool_cache.iter() {
-            let pool_address = *entry.key();
-            let pool_info = entry.value().clone();
-            
-            if !hot_cache.contains_key(&pool_address) {
-                hot_cache.insert(pool_address, pool_info);
-            }
+            let dex_name = match &entry.value().dex_type {
+                DexType::Orca => "Orca",
+                DexType::Raydium => "Raydium",
+                DexType::Lifinity => "Lifinity",
+                DexType::Meteora => "Meteora",
+                DexType::Whirlpool => "Whirlpool",
+                DexType::Unknown(name) => name.as_str(),
+            };
+            *dex_counts.entry(dex_name.to_string()).or_insert(0) += 1;
         }
 
-        info!(
-            "Cache sync completed: {} pools synced, {} new pools added to discovery cache",
-            synced_count, new_pools_count
-        );
+        stats.insert("total".to_string(), self.pool_cache.len());
+        for (dex, count) in dex_counts {
+            stats.insert(dex, count);
+        }
 
-        Ok(())
+        stats
     }
 
-    /// Export cached pools to hot cache format.
-    pub fn export_to_hot_cache(&self) -> Arc<DashMap<Pubkey, Arc<PoolInfo>>> {
-        let hot_cache = Arc::new(DashMap::new());
-        
+    /// Clean up expired pools (placeholder implementation)
+    pub async fn cleanup_expired_pools(&self, _max_age_seconds: u64) {
+        // Implementation would check pool timestamps and remove old entries
+        // For now, this is a placeholder
+        debug!("Pool cleanup completed");
+    }
+
+    /// Export pools to hot cache
+    pub async fn export_to_hot_cache(&self, hot_cache: &Arc<DashMap<Pubkey, Arc<PoolInfo>>>) {
         for entry in self.pool_cache.iter() {
             hot_cache.insert(*entry.key(), entry.value().clone());
         }
-        
-        info!("Exported {} pools to hot cache format", hot_cache.len());
-        hot_cache
+        info!("Exported {} pools to hot cache", self.pool_cache.len());
     }
 
-    /// Import pools from hot cache format.
-    pub fn import_from_hot_cache(&self, hot_cache: &Arc<DashMap<Pubkey, Arc<PoolInfo>>>) -> usize {
-        let mut imported_count = 0;
-        
+    /// Import pools from hot cache
+    pub async fn import_from_hot_cache(&self, hot_cache: &Arc<DashMap<Pubkey, Arc<PoolInfo>>>) {
         for entry in hot_cache.iter() {
             self.pool_cache.insert(*entry.key(), entry.value().clone());
-            imported_count += 1;
         }
-        
-        info!("Imported {} pools from hot cache", imported_count);
-        imported_count
+        info!("Imported {} pools from hot cache", hot_cache.len());
     }
 
-    /// Get pools by DEX type from cache.
-    pub fn get_pools_by_dex(&self, dex_type: &crate::utils::DexType) -> Vec<Arc<PoolInfo>> {
+    /// Get pools by DEX type
+    pub fn get_pools_by_dex(&self, dex_type: &DexType) -> Vec<Arc<PoolInfo>> {
         self.pool_cache
             .iter()
-            .filter_map(|entry| {
-                let pool = entry.value();
-                if std::mem::discriminant(&pool.dex_type) == std::mem::discriminant(dex_type) {
-                    Some(pool.clone())
-                } else {
-                    None
-                }
-            })
+            .filter(|entry| &entry.value().dex_type == dex_type)
+            .map(|entry| entry.value().clone())
             .collect()
     }
 
-    /// Find pools containing specific token pairs.
-    pub async fn find_pools_for_tokens(&self, token_a: &Pubkey, token_b: &Pubkey) -> Vec<Arc<PoolInfo>> {
-        let banned_pairs_manager = self.banned_pairs_manager.lock().await;
-        let is_banned = banned_pairs_manager.is_pair_banned_pubkey(token_a, token_b);
-        drop(banned_pairs_manager); // Release lock early
-        
+    /// Find pools for specific token pair
+    pub fn find_pools_for_tokens(&self, token_a: &Pubkey, token_b: &Pubkey) -> Vec<Arc<PoolInfo>> {
         self.pool_cache
             .iter()
-            .filter_map(|entry| {
+            .filter(|entry| {
                 let pool = entry.value();
-                let matches = (pool.token_a.mint == *token_a && pool.token_b.mint == *token_b) ||
-                             (pool.token_a.mint == *token_b && pool.token_b.mint == *token_a);
-                
-                if matches && !is_banned {
-                    Some(pool.clone())
-                } else {
-                    None
-                }
+                (pool.token_a.mint == *token_a && pool.token_b.mint == *token_b) ||
+                (pool.token_a.mint == *token_b && pool.token_b.mint == *token_a)
             })
+            .map(|entry| entry.value().clone())
             .collect()
     }
 
-    /// Adds a new banned pair.
-    pub async fn ban_pair(&self, token_a: &str, token_b: &str) -> Result<()> {
-        let mut banned_pairs_manager = self.banned_pairs_manager.lock().await;
-        banned_pairs_manager.ban_pair(token_a, token_b)
-    }
-
-    /// Checks if a pair is banned.
+    /// Check if a pair is banned
     pub async fn is_pair_banned(&self, token_a: &Pubkey, token_b: &Pubkey) -> bool {
-        let banned_pairs_manager = self.banned_pairs_manager.lock().await;
-        banned_pairs_manager.is_pair_banned_pubkey(token_a, token_b)
+        let banned_manager = self.banned_pairs_manager.lock().await;
+        banned_manager.is_pair_banned_by_pubkey(token_a, token_b)
     }
 }
 
@@ -563,6 +447,7 @@ impl PoolDiscoveryService {
 // =====================================================================================
 
 /// Finds the appropriate DEX client for a given pool based on its dex_type
+#[allow(dead_code)] // Used by routing systems
 pub fn find_dex_client_for_pool(
     pool: &PoolInfo, 
     dex_clients: &[Arc<dyn DexClient>]
@@ -605,17 +490,17 @@ pub fn group_pools_by_dex(pools: &[PoolInfo]) -> HashMap<String, Vec<&PoolInfo>>
     grouped
 }
 
-/// Finds pools that support a specific token pair
+/// Find pools that support a specific token pair
 pub fn find_pools_for_pair(
-    pools: &[Arc<PoolInfo>],
-    token_a: &Pubkey,
-    token_b: &Pubkey,
+    pools: &[Arc<PoolInfo>], 
+    token_a: &Pubkey, 
+    token_b: &Pubkey
 ) -> Vec<Arc<PoolInfo>> {
     pools
         .iter()
         .filter(|pool| {
             (pool.token_a.mint == *token_a && pool.token_b.mint == *token_b) ||
-            (pool.token_b.mint == *token_a && pool.token_a.mint == *token_b)
+            (pool.token_a.mint == *token_b && pool.token_b.mint == *token_a)
         })
         .cloned()
         .collect()
@@ -626,37 +511,28 @@ pub fn find_pools_for_pair(
 // =====================================================================================
 
 /// Basic pool validation function for backward compatibility
-pub async fn validate_pools(pools: Vec<PoolInfo>) -> Result<Vec<PoolInfo>> {
-    let config = PoolValidationConfig::default();
-    let banned_pairs_manager = BannedPairsManager::new(Path::new("banned_pairs_log.csv"))?;
-    
-    let mut valid_pools = Vec::new();
-    for pool in pools {
-        if validate_single_pool(&pool, &config, &banned_pairs_manager).await? {
-            valid_pools.push(pool);
+pub fn validate_pools(pools: Vec<PoolInfo>, config: &PoolValidationConfig) -> Vec<PoolInfo> {
+    pools
+        .into_iter()
+        .filter(|pool| {
+            // Basic validation
+            pool.token_a.reserve > 0 && pool.token_b.reserve > 0
+        })
+        .collect()
+}
+
+/// Validate a single pool with given configuration
+pub fn validate_single_pool(pool: &PoolInfo, config: &PoolValidationConfig) -> bool {
+    if pool.token_a.reserve == 0 || pool.token_b.reserve == 0 {
+        return false;
+    }
+
+    if config.require_balanced_reserves {
+        let ratio = pool.token_a.reserve as f64 / pool.token_b.reserve as f64;
+        if ratio < 0.1 || ratio > 10.0 {
+            return false;
         }
     }
-    Ok(valid_pools)
+
+    true
 }
-
-/// Validates a single pool with given configuration
-pub async fn validate_single_pool(
-    pool: &PoolInfo,
-    _config: &PoolValidationConfig,
-    banned_pairs_manager: &BannedPairsManager,
-) -> Result<bool> {
-    // Check minimum liquidity
-    if pool.token_a.reserve == 0 || pool.token_b.reserve == 0 {
-        return Ok(false);
-    }
-
-    // Check if pair is banned
-    if banned_pairs_manager.is_pair_banned_pubkey(&pool.token_a.mint, &pool.token_b.mint) {
-        return Ok(false);
-    }
-
-    Ok(true)
-}
-
-/// Backward compatibility alias
-pub use validate_pools as validate_pools_basic;

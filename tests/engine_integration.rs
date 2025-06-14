@@ -1,5 +1,4 @@
 use std::sync::Arc;
-use std::path::Path;
 use tokio::sync::Mutex;
 use dashmap::DashMap;
 use solana_sdk::pubkey::Pubkey;
@@ -15,12 +14,12 @@ fn dummy_banned_pairs_manager() -> Arc<BannedPairsManager> {
     std::fs::write(&temp_csv_path, "token_a,token_b\n").unwrap_or_default();
     
     Arc::new(
-        BannedPairsManager::new(&temp_csv_path)
+        BannedPairsManager::new(temp_csv_path.to_string_lossy().to_string())
             .unwrap_or_else(|_| {
                 // Fallback: create with an empty temporary file
                 let fallback_path = std::env::temp_dir().join("empty_banned_pairs.csv");
                 std::fs::write(&fallback_path, "").unwrap_or_default();
-                BannedPairsManager::new(&fallback_path).expect("Failed to create fallback BannedPairsManager")
+                BannedPairsManager::new(fallback_path.to_string_lossy().to_string()).expect("Failed to create fallback BannedPairsManager")
             })
     )
 }

@@ -14,6 +14,15 @@ use crate::{
     utils::{PoolInfo, PoolParser, DexType},
 };
 
+// Import paper trading components
+use crate::paper_trading::{
+    SimulatedExecutionEngine, 
+    PaperTradingConfig, 
+    SafeVirtualPortfolio, 
+    PaperTradingAnalytics, 
+    PaperTradingReporter
+};
+
 use dashmap::DashMap;
 use log::{debug, error, info, warn};
 use rust_decimal::prelude::*;
@@ -108,6 +117,12 @@ pub struct ArbitrageOrchestrator {
     // Sprint 2: Performance tracking
     pub detection_metrics: Arc<Mutex<DetectionMetrics>>,
     pub execution_enabled: Arc<AtomicBool>,
+    
+    // Paper trading components
+    pub paper_trading_engine: Option<Arc<SimulatedExecutionEngine>>,
+    pub paper_trading_portfolio: Option<Arc<SafeVirtualPortfolio>>,
+    pub paper_trading_analytics: Option<Arc<Mutex<PaperTradingAnalytics>>>,
+    pub paper_trading_reporter: Option<Arc<PaperTradingReporter>>,
 }
 
 #[derive(Debug, Default)]
@@ -155,12 +170,44 @@ impl ArbitrageOrchestrator {
         let (opportunity_sender, _opportunity_receiver) = mpsc::unbounded_channel();
         let detection_metrics = Arc::new(Mutex::new(DetectionMetrics::default()));
 
+        // Initialize paper trading components if enabled
+        let (paper_trading_engine, paper_trading_portfolio, paper_trading_analytics, paper_trading_reporter) = 
+            if config.paper_trading {
+                info!("📄 Paper trading mode ENABLED - initializing simulation components");
+                
+                let paper_config = PaperTradingConfig::default();
+                
+                // Create initial balances for paper trading (e.g., 1 SOL, 10000 USDC)
+                let mut initial_balances = HashMap::new();
+                let sol_mint = solana_sdk::system_program::id(); // Simplified - would use actual SOL mint
+                let usdc_mint = Pubkey::new_unique(); // Simplified - would use actual USDC mint
+                initial_balances.insert(sol_mint, 1_000_000_000); // 1 SOL in lamports
+                initial_balances.insert(usdc_mint, 10_000_000_000); // 10000 USDC in micro-units
+                
+                let mut paper_config_with_balances = paper_config.clone();
+                paper_config_with_balances.initial_balances = initial_balances.clone();
+                
+                let portfolio = Arc::new(SafeVirtualPortfolio::new(initial_balances));
+                let analytics = Arc::new(Mutex::new(PaperTradingAnalytics::new()));
+                let reporter = PaperTradingReporter::new("./paper_trading_logs")
+                    .map_err(|e| warn!("Failed to create paper trading reporter: {}", e))
+                    .ok()
+                    .map(Arc::new);
+                let engine = Arc::new(SimulatedExecutionEngine::new(paper_config_with_balances));
+                
+                (Some(engine), Some(portfolio), Some(analytics), reporter)
+            } else {
+                info!("💰 Real trading mode - paper trading disabled");
+                (None, None, None, None)
+            };
+
         info!("🚀 Enhanced ArbitrageOrchestrator initialized with Sprint 2 features:");
         info!("   🔥 Hot cache integration: {} pools", hot_cache.len());
         info!("   🎯 DEX providers: {}", dex_providers.len());
         info!("   ⚡ Batch execution: integrated into executor");
         info!("   📊 Advanced metrics: enabled");
         info!("   🔄 Async execution pipeline: ready");
+        info!("   📄 Paper trading: {}", if config.paper_trading { "enabled" } else { "disabled" });
 
         Self {
             hot_cache,
@@ -185,6 +232,10 @@ impl ArbitrageOrchestrator {
             opportunity_sender: Some(opportunity_sender),
             detection_metrics,
             execution_enabled: Arc::new(AtomicBool::new(true)),
+            paper_trading_engine,
+            paper_trading_portfolio,
+            paper_trading_analytics,
+            paper_trading_reporter,
         }
     }
 
@@ -279,13 +330,7 @@ impl ArbitrageOrchestrator {
         
         // Apply validation with performance tracking
         let validation_start = Instant::now();
-        let validated_pools = match validate_pools(pools_vec).await {
-            Ok(pools) => pools,
-            Err(e) => {
-                warn!("Pool validation failed: {}", e);
-                Vec::new() // Return empty vec if validation fails
-            }
-        };
+        let validated_pools = validate_pools(pools_vec, &self.pool_validation_config);
         
         let validation_time = validation_start.elapsed();
         debug!("✅ Pool validation completed in {:.2}ms", validation_time.as_secs_f64() * 1000.0);
@@ -311,6 +356,13 @@ impl ArbitrageOrchestrator {
 
         let start_time = Instant::now();
         let total_opportunities = opportunities.len();
+        
+        // Check if paper trading is enabled and route to simulation
+        if self.config.paper_trading {
+            info!("📄 Paper trading mode - simulating {} opportunities", total_opportunities);
+            return self.execute_paper_trading_opportunities(opportunities).await;
+        }
+        
         info!("🚀 Executing {} opportunities with intelligent routing...", total_opportunities);
 
         // === THREE-STAGE WORKFLOW IMPLEMENTATION ===
@@ -409,7 +461,7 @@ impl ArbitrageOrchestrator {
         // 2. If ALL opportunities are safe to batch -> Batch execution for efficiency
         if competitive_opportunities.is_empty() && !safe_batch_opportunities.is_empty() {
             if safe_batch_opportunities.len() >= 2 && self.batch_execution_engine.is_some() {
-                info!("� All opportunities safe for batching - using BATCH EXECUTION for efficiency");
+                info!("📦 All opportunities safe for batching - using BATCH EXECUTION for efficiency");
                 return ExecutionStrategy::BatchExecution(safe_batch_opportunities, Vec::new());
             } else {
                 info!("📋 Single opportunity or no batch engine - using single execution");
@@ -544,7 +596,7 @@ impl ArbitrageOrchestrator {
         
         // Validate that all pools are still valid
         for pool in &resolved_pools {
-            if !validate_single_pool(pool, &self.pool_validation_config, &self.banned_pairs_manager).await? {
+            if !validate_single_pool(pool, &self.pool_validation_config) {
                 return Err(ArbError::InvalidPoolState(
                     format!("Pool {} failed validation during execution", pool.address)
                 ));
@@ -641,13 +693,7 @@ impl ArbitrageOrchestrator {
             .collect();
         
         let original_count = pools_vec.len();
-        let valid_pools = match validate_pools(pools_vec).await {
-            Ok(pools) => pools,
-            Err(e) => {
-                warn!("Pool validation failed: {}", e);
-                Vec::new()
-            }
-        };
+        let valid_pools = validate_pools(pools_vec, &self.pool_validation_config);
         let filtered_count = original_count - valid_pools.len();
         
         if filtered_count > 0 {
@@ -783,7 +829,7 @@ impl ArbitrageOrchestrator {
     }
 
     pub async fn add_validated_pool(&self, pool: PoolInfo) -> Result<bool, ArbError> {
-        if !validate_single_pool(&pool, &self.pool_validation_config, &self.banned_pairs_manager).await? {
+        if !validate_single_pool(&pool, &self.pool_validation_config) {
             warn!("Pool {} failed validation - not adding to hot cache", pool.address);
             return Ok(false);
         }
@@ -834,16 +880,35 @@ impl ArbitrageOrchestrator {
     pub async fn run_health_checks(&self) {
         let mut overall_healthy = true;
 
-        if let Some(rpc_client) = &self.rpc_client {
-            if rpc_client.is_healthy().await {
-                debug!("RPC client reported as healthy.");
+        // RPC Health Check with detailed status
+        let rpc_healthy = if let Some(rpc_client) = &self.rpc_client {
+            let rpc_health_status = rpc_client.get_health_status().await;
+            
+            if rpc_health_status.overall_healthy {
+                info!("RPC client health check: PASSED ({}ms)", rpc_health_status.check_duration_ms);
+                debug!("RPC Primary: {}, Fallbacks: {}", 
+                       if rpc_health_status.primary_status.is_healthy { "HEALTHY" } else { "UNHEALTHY" },
+                       rpc_health_status.fallback_statuses.iter()
+                           .map(|s| if s.is_healthy { "HEALTHY" } else { "UNHEALTHY" })
+                           .collect::<Vec<_>>().join(", "));
             } else {
-                warn!("RPC client reported as unhealthy.");
+                warn!("RPC client health check: FAILED ({}ms)", rpc_health_status.check_duration_ms);
+                if let Some(error) = &rpc_health_status.primary_status.error_message {
+                    warn!("RPC Primary error: {}", error);
+                }
+                for (i, fallback) in rpc_health_status.fallback_statuses.iter().enumerate() {
+                    if let Some(error) = &fallback.error_message {
+                        warn!("RPC Fallback-{} error: {}", i + 1, error);
+                    }
+                }
                 overall_healthy = false;
             }
+            
+            rpc_health_status.overall_healthy
         } else {
             warn!("RPC client not configured; skipping RPC health check.");
-        }
+            false
+        };
 
         let ws_healthy = if let Some(_ws_manager) = &self.ws_manager {
             info!("WebSocket manager health check (placeholder).");
@@ -859,7 +924,11 @@ impl ArbitrageOrchestrator {
             warn!("Price provider not configured; skipping price provider health check.");
         }
 
-        self.dex_providers_health_check().await;
+        // DEX Providers Health Check
+        let dex_healthy = self.dex_providers_health_check().await;
+        if !dex_healthy {
+            overall_healthy = false;
+        }
 
         let degradation_factor = self.config.degradation_profit_factor.unwrap_or(1.5);
         let current_min_profit = self.get_min_profit_threshold_pct().await;
@@ -868,6 +937,8 @@ impl ArbitrageOrchestrator {
 
         if should_degrade && !was_degraded {
             warn!("[ArbitrageEngine] Entering degradation mode due to system health issues");
+            warn!("[ArbitrageEngine] Health status - RPC: {}, WS: {}, DEX: {}", 
+                  rpc_healthy, ws_healthy, dex_healthy);
             let new_threshold = current_min_profit * degradation_factor;
             self.set_min_profit_threshold_pct(new_threshold).await;
             info!("[ArbitrageEngine] Min profit threshold increased to {:.4}% due to degradation.", new_threshold);
@@ -884,18 +955,51 @@ impl ArbitrageOrchestrator {
         info!("Health checks completed. System healthy: {}.", overall_healthy);
     }
 
-    pub async fn dex_providers_health_check(&self) {
+    pub async fn dex_providers_health_check(&self) -> bool {
         if self.dex_providers.is_empty() {
             warn!("No DEX providers configured. ArbitrageEngine cannot operate without DEX APIs.");
-        } else {
-            info!("Checking health of {} DEX providers...", self.dex_providers.len());
-            
-            for (i, provider) in self.dex_providers.iter().enumerate() {
-                let provider_name = provider.get_name();
-                info!("DEX provider #{} ({}) health check: OK", i + 1, provider_name);
-            }
-            info!("All {} DEX providers reported healthy", self.dex_providers.len());
+            return false;
         }
+        
+        info!("Checking health of {} DEX providers...", self.dex_providers.len());
+        let mut all_healthy = true;
+        
+        for (i, provider) in self.dex_providers.iter().enumerate() {
+            let provider_name = provider.get_name();
+            
+            match provider.health_check().await {
+                Ok(health_status) => {
+                    if health_status.is_healthy {
+                        info!("DEX provider #{} ({}) health check: OK - {}", 
+                              i + 1, provider_name, health_status.status_message);
+                    } else {
+                        warn!("DEX provider #{} ({}) health check: FAILED - {}", 
+                              i + 1, provider_name, health_status.status_message);
+                        all_healthy = false;
+                    }
+                    
+                    // Log additional details if available
+                    if let Some(response_time) = health_status.response_time_ms {
+                        debug!("DEX provider #{} response time: {}ms", i + 1, response_time);
+                    }
+                    if let Some(pool_count) = health_status.pool_count {
+                        debug!("DEX provider #{} reported {} pools", i + 1, pool_count);
+                    }
+                }
+                Err(e) => {
+                    error!("DEX provider #{} ({}) health check error: {}", i + 1, provider_name, e);
+                    all_healthy = false;
+                }
+            }
+        }
+        
+        if all_healthy {
+            info!("All {} DEX providers reported healthy", self.dex_providers.len());
+        } else {
+            warn!("Some DEX providers reported unhealthy status");
+        }
+        
+        all_healthy
     }
 
     pub async fn run_full_health_check(&self) {
@@ -1014,13 +1118,7 @@ impl ArbitrageOrchestrator {
 
                 info!("Validating {} pools after live reserve update", pools.len());
                 let pools_len = pools.len();
-                let valid_pools = match validate_pools(pools.clone()).await {
-                    Ok(pools) => pools,
-                    Err(e) => {
-                        warn!("Pool validation failed: {}", e);
-                        Vec::new()
-                    }
-                };
+                let valid_pools = validate_pools(pools.clone(), &self.pool_validation_config);
                 let invalid_count = pools_len - valid_pools.len();
                 
                 if invalid_count > 0 {
@@ -1147,13 +1245,7 @@ impl ArbitrageOrchestrator {
             .map(|entry| (**entry.value()).clone())
             .collect();
         
-        let valid_pools = match validate_pools(pools_vec).await {
-            Ok(pools) => pools,
-            Err(e) => {
-                warn!("Pool validation failed: {}", e);
-                Vec::new()
-            }
-        };
+        let valid_pools = validate_pools(pools_vec, &self.pool_validation_config);
         let valid_count = valid_pools.len();
         let invalid_count = total_pools - valid_count;
         let rejection_rate = (invalid_count as f64 / total_pools as f64) * 100.0;
@@ -1439,9 +1531,7 @@ impl ArbitrageOrchestrator {
         
         Ok(analyzed_opportunities)
     }
-}
 
-impl ArbitrageOrchestrator {
     /// Execute opportunities via single executor
     async fn execute_via_single_executor(&self, opportunities: Vec<MultiHopArbOpportunity>) -> Result<Vec<String>, ArbError> {
         let _executor = self.executor.as_ref()
@@ -1525,19 +1615,120 @@ impl ArbitrageOrchestrator {
         Ok(results)
     }
 
-    /// Integrate with pool discovery service for enhanced cache management.
-    pub async fn integrate_with_pool_discovery(&self, pool_discovery: &Arc<crate::dex::discovery::PoolDiscoveryService>) -> Result<(), ArbError> {
-        info!("🔗 Integrating ArbitrageOrchestrator with PoolDiscoveryService...");
+    /// Execute opportunities in paper trading mode using simulation
+    async fn execute_paper_trading_opportunities(&self, opportunities: Vec<MultiHopArbOpportunity>) -> Result<Vec<String>, ArbError> {
+        let start_time = Instant::now();
+        let total_opportunities = opportunities.len();
         
-        // This is a placeholder for integration logic
-        // In a real implementation, you would:
-        // 1. Subscribe to pool discovery updates
-        // 2. Update the hot_cache when new pools are discovered
-        // 3. Validate new pools against banned pairs
+        // Get paper trading components
+        let (engine, portfolio, analytics, reporter) = match (
+            &self.paper_trading_engine,
+            &self.paper_trading_portfolio,
+            &self.paper_trading_analytics,
+            &self.paper_trading_reporter
+        ) {
+            (Some(e), Some(p), Some(a), r) => (e, p, a, r),
+            _ => {
+                error!("📄 Paper trading components not initialized");
+                return Err(ArbError::ExecutionError("Paper trading not properly initialized".to_string()));
+            }
+        };
+
+        info!("📄 Simulating {} arbitrage opportunities in paper trading mode", total_opportunities);
         
-        let _ = pool_discovery; // Suppress unused parameter warning
+        let mut execution_results = Vec::new();
+        let mut successful_simulations = 0;
         
-        info!("✅ ArbitrageOrchestrator integration with PoolDiscoveryService completed");
-        Ok(())
+        for opportunity in opportunities {
+            info!("📊 Simulating opportunity: profit={} units, route={} hops", 
+                  opportunity.total_profit, opportunity.hops.len());
+            
+            // Simulate the trade execution
+            match engine.simulate_arbitrage_execution(&opportunity, &self.dex_providers).await {
+                Ok(result) => {
+                    successful_simulations += 1;
+                    let tx_id = format!("paper_tx_{}", chrono::Utc::now().timestamp_millis());
+                    execution_results.push(tx_id.clone());
+                    
+                    // Update analytics
+                    {
+                        let mut analytics_guard = analytics.lock().await;
+                        if result.success {
+                            analytics_guard.record_successful_execution(
+                                result.input_amount,
+                                result.output_amount,
+                                result.output_amount as i64 - result.input_amount as i64, // profit/loss
+                                result.fee_amount,
+                            );
+                        } else {
+                            analytics_guard.record_failed_execution(
+                                result.input_amount,
+                                result.fee_amount,
+                                result.error_message.clone().unwrap_or_default()
+                            );
+                        }
+                    }
+                    
+                    // Log trade if reporter is available
+                    if let Some(reporter) = reporter {
+                        let trade_entry = PaperTradingReporter::create_trade_log_entry(
+                            &opportunity,
+                            result.input_amount,
+                            result.output_amount,
+                            result.output_amount as i64 - result.input_amount as i64, // profit/loss
+                            result.slippage_bps as f64 / 10000.0, // Convert bps to percentage
+                            result.fee_amount,
+                            result.success,
+                            result.error_message,
+                            0 // gas cost (not tracked in simulation)
+                        );
+                        
+                        if let Err(e) = reporter.log_trade(trade_entry) {
+                            warn!("Failed to log paper trade: {}", e);
+                        }
+                    }
+                    
+                    info!("✅ Simulated trade completed: {} (profit: {} units)", 
+                          if result.success { "SUCCESS" } else { "FAILED" },
+                          result.output_amount as i64 - result.input_amount as i64);
+                }
+                Err(e) => {
+                    warn!("❌ Failed to simulate opportunity: {}", e);
+                    
+                    // Record failed simulation
+                    {
+                        let mut analytics_guard = analytics.lock().await;
+                        analytics_guard.record_failed_execution(
+                            (opportunity.input_amount * 1_000_000.0) as u64, // Convert to lamports equivalent
+                            0, // No fees for failed simulation
+                            format!("Simulation error: {}", e)
+                        );
+                    }
+                }
+            }
+        }
+        
+        let execution_time = start_time.elapsed();
+        
+        // Print summary
+        info!("📄 Paper trading simulation completed in {:.2}ms:", execution_time.as_secs_f64() * 1000.0);
+        info!("   ✅ Successful simulations: {}/{}", successful_simulations, total_opportunities);
+        info!("   💰 Portfolio value: {} lamports", portfolio.get_total_value());
+        
+        // Export analytics if reporter is available
+        if let Some(reporter) = reporter {
+            let analytics_guard = analytics.lock().await;
+            let portfolio_snapshot = portfolio.snapshot();
+            if let Err(e) = reporter.export_analytics(&analytics_guard, &portfolio_snapshot) {
+                warn!("Failed to export paper trading analytics: {}", e);
+            }
+            drop(analytics_guard);
+            
+            // Print performance summary
+            let analytics_guard = analytics.lock().await;
+            reporter.print_performance_summary(&analytics_guard, &portfolio_snapshot);
+        }
+        
+        Ok(execution_results)
     }
 }

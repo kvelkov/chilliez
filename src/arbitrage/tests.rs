@@ -32,12 +32,12 @@ mod tests {
         std::fs::write(&temp_csv_path, "token_a,token_b\n").unwrap_or_default();
         
         Arc::new(
-            BannedPairsManager::new(&temp_csv_path)
+            BannedPairsManager::new(temp_csv_path.to_string_lossy().to_string())
                 .unwrap_or_else(|_| {
                     // Fallback: create with an empty temporary file
                     let fallback_path = std::env::temp_dir().join("empty_banned_pairs.csv");
                     std::fs::write(&fallback_path, "").unwrap_or_default();
-                    BannedPairsManager::new(&fallback_path).expect("Failed to create fallback BannedPairsManager")
+                    BannedPairsManager::new(fallback_path.to_string_lossy().to_string()).expect("Failed to create fallback BannedPairsManager")
                 })
         )
     }
@@ -208,6 +208,17 @@ mod tests {
             // Return a mock instruction or an error for the stub
             // For simplicity, let's return an error indicating it's a stub
             Err(ArbError::InstructionError("MockDexClient get_swap_instruction_enhanced not implemented".to_string()))
+        }
+
+        async fn health_check(&self) -> Result<crate::dex::api::DexHealthStatus, crate::error::ArbError> {
+            Ok(crate::dex::api::DexHealthStatus {
+                is_healthy: true,
+                last_successful_request: Some(std::time::Instant::now()),
+                error_count: 0,
+                response_time_ms: Some(10),
+                pool_count: Some(0),
+                status_message: "Mock DEX client always healthy".to_string(),
+            })
         }
 
     }

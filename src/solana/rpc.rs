@@ -18,6 +18,31 @@ use tokio::time::sleep;
 
 const DEFAULT_COMMITMENT: CommitmentConfig = CommitmentConfig::confirmed();
 
+/// Represents the health status of an individual RPC client
+#[derive(Debug, Clone)]
+pub struct ClientHealthStatus {
+    pub name: String,
+    pub is_healthy: bool,
+    pub health_endpoint_ok: bool,
+    pub functionality_ok: bool,
+    pub response_time_ok: bool,
+    pub response_time_ms: u64,
+    pub last_slot: Option<u64>,
+    pub last_successful_request: Option<std::time::Instant>,
+    pub error_count: u32,
+    pub error_message: Option<String>,
+}
+
+/// Represents the overall health status of the RPC system
+#[derive(Debug, Clone)]
+pub struct RpcHealthStatus {
+    pub overall_healthy: bool,
+    pub primary_status: ClientHealthStatus,
+    pub fallback_statuses: Vec<ClientHealthStatus>,
+    pub degraded_mode: bool,
+    pub check_duration_ms: u64,
+}
+
 /// Provides high-availability RPC with retries/fallbacks.
 pub struct SolanaRpcClient {
     pub primary_client: Arc<NonBlockingRpcClient>,
@@ -201,19 +226,130 @@ impl SolanaRpcClient {
 
 
 
-    /// Checks the health of the RPC client, primarily by querying the primary client.
+    /// Comprehensive health check for the RPC client system
     pub async fn is_healthy(&self) -> bool {
-        debug!("[RPC HA - is_healthy] Checking RPC health...");
-        match self.primary_client.get_health().await {
+        debug!("[RPC HA - is_healthy] Starting comprehensive RPC health check...");
+        
+        let start_time = std::time::Instant::now();
+        
+        // Test primary client health
+        let primary_healthy = match self.primary_client.get_health().await {
             Ok(_) => {
-                debug!("[RPC HA - is_healthy] Primary RPC client is healthy.");
+                debug!("[RPC HA - is_healthy] Primary RPC client health check passed.");
                 true
             }
             Err(e) => {
-                warn!("[RPC HA - is_healthy] Primary RPC client health check failed: {}. Consider checking fallback clients if necessary.", e);
-                // Optionally, you could try to check fallback clients here as well
+                warn!("[RPC HA - is_healthy] Primary RPC client health check failed: {}", e);
                 false
             }
+        };
+        
+        // Test basic functionality with a simple request
+        let functionality_healthy = match self.primary_client.get_slot().await {
+            Ok(slot) => {
+                debug!("[RPC HA - is_healthy] Primary RPC client functionality test passed (slot: {})", slot);
+                true
+            }
+            Err(e) => {
+                warn!("[RPC HA - is_healthy] Primary RPC client functionality test failed: {}", e);
+                false
+            }
+        };
+        
+        // If primary is not healthy, test fallback clients
+        let fallback_healthy = if !primary_healthy && !self.fallback_clients.is_empty() {
+            let mut any_fallback_healthy = false;
+            for (i, fallback_client) in self.fallback_clients.iter().enumerate() {
+                match fallback_client.get_health().await {
+                    Ok(_) => {
+                        debug!("[RPC HA - is_healthy] Fallback client #{} is healthy", i + 1);
+                        any_fallback_healthy = true;
+                        break;
+                    }
+                    Err(e) => {
+                        warn!("[RPC HA - is_healthy] Fallback client #{} health check failed: {}", i + 1, e);
+                    }
+                }
+            }
+            any_fallback_healthy
+        } else {
+            false
+        };
+        
+        let overall_healthy = primary_healthy && functionality_healthy || fallback_healthy;
+        let check_duration = start_time.elapsed();
+        
+        if overall_healthy {
+            info!("[RPC HA - is_healthy] Overall health check passed in {:?}", check_duration);
+        } else {
+            error!("[RPC HA - is_healthy] Overall health check failed in {:?} - primary_healthy: {}, functionality_healthy: {}, fallback_healthy: {}", 
+                   check_duration, primary_healthy, functionality_healthy, fallback_healthy);
+        }
+        
+        overall_healthy
+    }
+
+    /// Get detailed health status for monitoring
+    pub async fn get_health_status(&self) -> RpcHealthStatus {
+        let start_time = std::time::Instant::now();
+        
+        // Test primary client
+        let primary_status = self.test_client_health(&self.primary_client, "Primary").await;
+        
+        // Test fallback clients
+        let mut fallback_statuses = Vec::new();
+        for (i, fallback_client) in self.fallback_clients.iter().enumerate() {
+            let status = self.test_client_health(fallback_client, &format!("Fallback-{}", i + 1)).await;
+            fallback_statuses.push(status);
+        }
+        
+        let total_check_time = start_time.elapsed();
+        let overall_healthy = primary_status.is_healthy || fallback_statuses.iter().any(|s| s.is_healthy);
+        
+        RpcHealthStatus {
+            overall_healthy,
+            primary_status,
+            fallback_statuses,
+            degraded_mode: false, // TODO: Determine if degraded mode is active
+            check_duration_ms: total_check_time.as_millis() as u64,
+        }
+    }
+    
+    /// Test health of a specific RPC client
+    async fn test_client_health(&self, client: &Arc<NonBlockingRpcClient>, name: &str) -> ClientHealthStatus {
+        let start_time = std::time::Instant::now();
+        
+        // Test 1: Health endpoint
+        let health_ok = client.get_health().await.is_ok();
+        
+        // Test 2: Basic functionality (get slot)
+        let (slot_ok, slot_value) = match client.get_slot().await {
+            Ok(slot) => (true, Some(slot)),
+            Err(_) => (false, None),
+        };
+        
+        // Test 3: Response time test
+        let response_time = start_time.elapsed();
+        let response_time_ok = response_time.as_millis() < 5000; // 5 second threshold
+        
+        let is_healthy = health_ok && slot_ok && response_time_ok;
+        
+        ClientHealthStatus {
+            name: name.to_string(),
+            is_healthy,
+            health_endpoint_ok: health_ok,
+            functionality_ok: slot_ok,
+            response_time_ok,
+            response_time_ms: response_time.as_millis() as u64,
+            last_slot: slot_value,
+            last_successful_request: if is_healthy { Some(start_time) } else { None },
+            error_count: if is_healthy { 0 } else { 1 },
+            error_message: if !is_healthy {
+                Some(format!("Health: {}, Functionality: {}, Response: {}ms", 
+                           health_ok, slot_ok, response_time.as_millis()))
+            } else {
+                None
+            },
         }
     }
 

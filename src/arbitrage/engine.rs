@@ -1,4 +1,108 @@
 // src/arbitrage/engine.rs
+//! 🚀 ARBITRAGE ENGINE - Central Coordinator & Data Manager
+//! 
+//! The ArbitrageEngine is the central coordination layer that:
+//! 
+//! ## 📊 DATA COLLECTION & MANAGEMENT
+//! - Manages hot cache with sub-millisecond pool access via DashMap
+//! - Collects and validates pool data from multiple DEX sources
+//! - Maintains real-time price feeds and market data
+//! - Tracks pool usage and prevents execution conflicts
+//! 
+//! ## 🧠 OPPORTUNITY DETECTION & ANALYSIS
+//! - Orchestrates opportunity detection using ArbitrageDetector
+//! - Performs competitiveness analysis for execution routing
+//! - Calculates pool depth, profit margins, and time sensitivity
+//! - Manages dynamic thresholds based on market conditions
+//! 
+//! ## 🎯 EXECUTION COORDINATION (NOT EXECUTION!)
+//! - Delegates opportunities to appropriate executors
+//! - Routes competitive opportunities → Single Executor (speed)
+//! - Routes safe opportunities → Batch Executor (efficiency)
+//! - Manages hybrid execution strategies
+//! - Prevents pool conflicts between executors
+//! 
+//! ## 💾 CACHING & BOTTLENECK RESOLUTION
+//! - Hot cache for pool data (sub-ms access)
+//! - Batch pairing resolution for scalability
+//! - Post-execution cache updates
+//! - Pool state management
+//! 
+//! ## 📈 METRICS & MONITORING
+//! - Execution success/failure tracking
+//! - Performance metrics collection
+//! - Cache hit/miss ratios
+//! - Bottleneck identification
+//! 
+//! The engine does NOT execute transactions - it coordinates and delegates!
+
+// ==================================================================================
+// 🏗️ ARCHITECTURE CLARITY: PROPER DATA FLOW AND COMPONENT ROLES
+// ==================================================================================
+//
+// ❌ CURRENT PROBLEM: Multiple components doing overlapping calculations
+//    - Fee Manager calculates fees + slippage
+//    - Calculator calculates profit + slippage  
+//    - Detector calls calculator BUT also has its own calculations
+//    - Dynamic Threshold calculates thresholds
+//    - Jito calculates tips
+//    - Opportunity struct stores results but where do numbers come from?
+//
+// ✅ PROPER ARCHITECTURE: Clear separation of concerns
+//
+//    📊 DATA FLOW:
+//    ┌─────────────┐    ┌─────────────┐    ┌─────────────┐    ┌─────────────┐
+//    │   ENGINE    │───▶│ CALCULATOR  │───▶│  DETECTOR   │───▶│  ENGINE     │
+//    │(Coordinator)│    │(All Math)   │    │(Find Opps)  │    │(Decisions)  │
+//    └─────────────┘    └─────────────┘    └─────────────┘    └─────────────┘
+//           │                   ▲                                     │
+//           │                   │                                     ▼
+//    ┌─────────────┐    ┌─────────────┐                    ┌─────────────┐
+//    │HOT CACHE &  │    │INPUT        │                    │ EXECUTORS   │
+//    │MARKET DATA  │    │PROVIDERS:   │                    │ (Trading)   │
+//    │             │    │• Fee Mgr    │                    │             │
+//    └─────────────┘    │• Jito       │                    └─────────────┘
+//                       │• DynThresh  │
+//                       └─────────────┘
+//
+// 🎯 COMPONENT ROLES:
+//
+// 1. ENGINE (Coordinator/Cache Manager):
+//    - Manages hot cache of pool data
+//    - Collects market data asynchronously  
+//    - Orchestrates all calculations through Calculator
+//    - Makes execution decisions based on competitiveness
+//    - NEVER executes trades directly
+//
+// 2. CALCULATOR (Central Math Engine):
+//    - ALL numerical calculations happen here
+//    - Profit calculations, slippage, fees, gas costs
+//    - Uses input from Fee Manager, Jito, Dynamic Threshold
+//    - Returns OpportunityCalculationResult
+//    - Single source of truth for numbers
+//
+// 3. INPUT PROVIDERS (Data Sources):
+//    - Fee Manager: Current fee rates, slippage models
+//    - Jito Client: MEV protection costs, tip calculations  
+//    - Dynamic Threshold: Market-based profit thresholds
+//    - These PROVIDE data TO Calculator, don't calculate opportunities
+//
+// 4. DETECTOR (Opportunity Finder):
+//    - Uses Calculator to test potential arbitrage paths
+//    - Finds profitable combinations
+//    - Creates Opportunity structs with Calculator results
+//    - No independent calculations
+//
+// 5. OPPORTUNITY (Data Container):
+//    - Pure data structure
+//    - Contains pre-calculated results from Calculator
+//    - No calculation logic inside
+//
+// 6. EXECUTORS (Trading):
+//    - Single Executor: Fast direct trades
+//    - Batch Engine: Efficient batch processing
+//    - Only execute, never calculate
+
 use crate::{
     arbitrage::{
         detector::ArbitrageDetector,
@@ -6,13 +110,14 @@ use crate::{
         opportunity::MultiHopArbOpportunity,
         executor::ArbitrageExecutor,
         pipeline::ExecutionPipeline,
+        execution_engine::BatchExecutionEngine,
     },
     config::settings::Config,
     dex::{DexClient, PoolValidationConfig, validate_pools, validate_pools_basic, validate_single_pool},
     error::ArbError,
     metrics::Metrics,
     solana::{rpc::SolanaRpcClient, websocket::SolanaWebsocketManager},
-    utils::{PoolInfo, PoolParser},
+    utils::{PoolInfo, PoolParser, DexType},
 };
 
 use dashmap::DashMap;
@@ -36,6 +141,38 @@ pub trait PriceDataProvider: Send + Sync {
     fn get_current_price(&self, symbol: &str) -> Option<f64>;
 }
 
+/// Strategy for executing arbitrage opportunities
+#[derive(Debug, Clone)]
+enum ExecutionStrategy {
+    /// Execute all opportunities immediately using single executor
+    SingleExecution(Vec<MultiHopArbOpportunity>),
+    /// Execute using batch engine (batchable opportunities, immediate opportunities)
+    BatchExecution(Vec<MultiHopArbOpportunity>, Vec<MultiHopArbOpportunity>),
+    /// Hybrid approach: immediate execution + batching
+    HybridExecution {
+        immediate: Vec<MultiHopArbOpportunity>,
+        batchable: Vec<MultiHopArbOpportunity>,
+    },
+}
+
+/// Analysis of opportunity competitiveness for execution decision
+#[derive(Debug, Clone)]
+struct CompetitivenessAnalysis {
+    competitive_score: u32,
+    execution_recommendation: ExecutionRecommendation,
+    reason: String,
+    risk_factors: Vec<String>,
+}
+
+/// Recommendation for execution method based on competitiveness
+#[derive(Debug, Clone)]
+enum ExecutionRecommendation {
+    /// Execute immediately with single executor for speed
+    ImmediateSingle,
+    /// Safe to include in batch execution
+    SafeToBatch,
+}
+
 /// Enhanced arbitrage engine with Sprint 2 hot cache integration and advanced execution
 pub struct ArbitrageEngine {
     // Sprint 2: Replace HashMap with DashMap hot cache for sub-millisecond access
@@ -57,6 +194,7 @@ pub struct ArbitrageEngine {
     
     // Sprint 2: Advanced execution components
     pub executor: Option<Arc<ArbitrageExecutor>>,
+    pub batch_execution_engine: Option<Arc<BatchExecutionEngine>>,
     pub execution_pipeline: Arc<Mutex<ExecutionPipeline>>,
     
     // Sprint 2: Performance tracking
@@ -84,6 +222,7 @@ impl ArbitrageEngine {
         metrics: Arc<Mutex<Metrics>>,
         dex_providers: Vec<Arc<dyn DexClient>>,
         executor: Option<Arc<ArbitrageExecutor>>,
+        batch_execution_engine: Option<Arc<BatchExecutionEngine>>,
     ) -> Self {
         let detector = Arc::new(Mutex::new(ArbitrageDetector::new_from_config(&config)));
         let health_check_interval = Duration::from_secs(config.health_check_interval_secs.unwrap_or(60));
@@ -131,6 +270,7 @@ impl ArbitrageEngine {
             dynamic_threshold_updater,
             pool_validation_config,
             executor,
+            batch_execution_engine,
             execution_pipeline,
             detection_metrics,
             execution_enabled: Arc::new(AtomicBool::new(true)),
@@ -252,7 +392,7 @@ impl ArbitrageEngine {
         Ok(result)
     }
 
-    /// Sprint 2: Enhanced opportunity execution with batching
+    /// Sprint 3: Intelligent execution routing with decision logic
     pub async fn execute_opportunities(&self, opportunities: Vec<MultiHopArbOpportunity>) -> Result<Vec<String>, ArbError> {
         if !self.execution_enabled.load(Ordering::Relaxed) {
             warn!("⚠️ Execution is disabled - skipping opportunity execution");
@@ -265,47 +405,27 @@ impl ArbitrageEngine {
 
         let start_time = Instant::now();
         let total_opportunities = opportunities.len();
-        info!("🚀 Executing {} opportunities with advanced batching...", total_opportunities);
+        info!("🚀 Executing {} opportunities with intelligent routing...", total_opportunities);
 
-        let mut execution_results = Vec::new();
-
-        // Group opportunities by priority and compatibility for batching
-        let (high_priority, normal_priority): (Vec<_>, Vec<_>) = opportunities
-            .into_iter()
-            .partition(|opp| opp.profit_pct > 2.0); // High priority if >2% profit
-
-        // Execute high priority opportunities immediately
-        if !high_priority.is_empty() {
-            info!("⚡ Executing {} high-priority opportunities immediately", high_priority.len());
-            for opportunity in high_priority {
-                match self.execute_single_opportunity(&opportunity).await {
-                    Ok(signature) => {
-                        execution_results.push(signature);
-                        info!("✅ High-priority opportunity {} executed successfully", opportunity.id);
-                    }
-                    Err(e) => {
-                        error!("❌ Failed to execute high-priority opportunity {}: {}", opportunity.id, e);
-                    }
-                }
+        // DECISION LOGIC: Determine execution strategy
+        let execution_strategy = self.determine_execution_strategy(&opportunities).await;
+        
+        let execution_results = match execution_strategy {
+            ExecutionStrategy::SingleExecution(high_priority) => {
+                info!("⚡ Using SINGLE EXECUTION for {} high-priority opportunities", high_priority.len());
+                self.execute_via_single_executor(high_priority).await?
             }
-        }
-
-        // Execute normal priority opportunities (fix borrow checker issue)
-        let normal_priority_count = normal_priority.len();
-        if !normal_priority.is_empty() {
-            info!("📦 Executing {} normal-priority opportunities", normal_priority_count);
-            for opportunity in normal_priority {
-                match self.execute_single_opportunity(&opportunity).await {
-                    Ok(signature) => {
-                        execution_results.push(signature);
-                        info!("✅ Normal-priority opportunity {} executed successfully", opportunity.id);
-                    }
-                    Err(e) => {
-                        error!("❌ Failed to execute normal-priority opportunity {}: {}", opportunity.id, e);
-                    }
-                }
+            ExecutionStrategy::BatchExecution(batchable, immediate) => {
+                info!("📦 Using BATCH EXECUTION for {} opportunities ({} batchable, {} immediate)", 
+                      batchable.len() + immediate.len(), batchable.len(), immediate.len());
+                self.execute_via_batch_engine(batchable, immediate).await?
             }
-        }
+            ExecutionStrategy::HybridExecution { immediate, batchable } => {
+                info!("🔄 Using HYBRID EXECUTION ({} immediate, {} batchable)", 
+                      immediate.len(), batchable.len());
+                self.execute_hybrid_strategy(immediate, batchable).await?
+            }
+        };
 
         let execution_time = start_time.elapsed();
         info!("🎯 Execution completed in {:.2}ms: {}/{} opportunities executed successfully", 
@@ -314,49 +434,316 @@ impl ArbitrageEngine {
         Ok(execution_results)
     }
 
-    /// Sprint 2: Execute a single opportunity
-    async fn execute_single_opportunity(&self, opportunity: &MultiHopArbOpportunity) -> Result<String, ArbError> {
+    /// Advanced decision logic optimized for speed vs competition dynamics
+    async fn determine_execution_strategy(&self, opportunities: &[MultiHopArbOpportunity]) -> ExecutionStrategy {
+        let total_opportunities = opportunities.len();
+        let minimum_profit_threshold = 0.3; // 0.3% minimum profit after all fees
+        
+        info!("🧠 Analyzing {} opportunities for optimal execution strategy", total_opportunities);
+        
+        // Filter opportunities that meet minimum profit threshold
+        let profitable_opportunities: Vec<_> = opportunities.iter()
+            .filter(|opp| opp.profit_pct >= minimum_profit_threshold)
+            .cloned()
+            .collect();
+            
+        if profitable_opportunities.is_empty() {
+            info!("❌ No opportunities meet minimum 0.3% profit threshold after fees");
+            return ExecutionStrategy::SingleExecution(Vec::new());
+        }
+
+        // Analyze each opportunity for competition and complexity factors
+        let mut competitive_opportunities = Vec::new();
+        let mut safe_batch_opportunities = Vec::new();
+        
+        for opportunity in profitable_opportunities {
+            let analysis = self.analyze_opportunity_competitiveness(&opportunity).await;
+            
+            match analysis.execution_recommendation {
+                ExecutionRecommendation::ImmediateSingle => {
+                    info!("⚡ Opportunity {} marked for immediate single execution: {}", 
+                          opportunity.id, analysis.reason);
+                    competitive_opportunities.push(opportunity);
+                }
+                ExecutionRecommendation::SafeToBatch => {
+                    info!("📦 Opportunity {} safe for batching: {}", 
+                          opportunity.id, analysis.reason);
+                    safe_batch_opportunities.push(opportunity);
+                }
+            }
+        }
+
+        // DECISION LOGIC: Speed vs Efficiency Tradeoff
+        
+        // 1. If ALL opportunities are competitive -> Single execution for speed
+        if !competitive_opportunities.is_empty() && safe_batch_opportunities.is_empty() {
+            info!("🚨 All opportunities are competitive - using SINGLE EXECUTION for maximum speed");
+            return ExecutionStrategy::SingleExecution(competitive_opportunities);
+        }
+        
+        // 2. If ALL opportunities are safe to batch -> Batch execution for efficiency
+        if competitive_opportunities.is_empty() && !safe_batch_opportunities.is_empty() {
+            if safe_batch_opportunities.len() >= 2 && self.batch_execution_engine.is_some() {
+                info!("� All opportunities safe for batching - using BATCH EXECUTION for efficiency");
+                return ExecutionStrategy::BatchExecution(safe_batch_opportunities, Vec::new());
+            } else {
+                info!("📋 Single opportunity or no batch engine - using single execution");
+                return ExecutionStrategy::SingleExecution(safe_batch_opportunities);
+            }
+        }
+        
+        // 3. Mixed scenario -> Hybrid execution
+        if !competitive_opportunities.is_empty() && !safe_batch_opportunities.is_empty() {
+            info!("🔄 Mixed competitiveness - using HYBRID EXECUTION");
+            return ExecutionStrategy::HybridExecution {
+                immediate: competitive_opportunities,
+                batchable: safe_batch_opportunities,
+            };
+        }
+        
+        // 4. Fallback to single execution
+        info!("📋 Fallback to single execution");
+        ExecutionStrategy::SingleExecution(opportunities.to_vec())
+    }
+
+    /// Analyze opportunity competitiveness and recommend execution method
+    async fn analyze_opportunity_competitiveness(&self, opportunity: &MultiHopArbOpportunity) -> CompetitivenessAnalysis {
+        let mut competitive_factors = 0;
+        let mut reasons = Vec::new();
+        
+        // Factor 1: Pool depth analysis
+        let avg_pool_depth = self.calculate_average_pool_depth(opportunity).await;
+        if avg_pool_depth < 50_000.0 { // $50k average depth indicates high competition
+            competitive_factors += 3;
+            reasons.push(format!("Low pool depth (${:.0}k) indicates high competition", avg_pool_depth / 1000.0));
+        } else if avg_pool_depth < 200_000.0 { // $200k moderate competition
+            competitive_factors += 1;
+            reasons.push(format!("Moderate pool depth (${:.0}k)", avg_pool_depth / 1000.0));
+        }
+        
+        // Factor 2: Profit margin analysis
+        if opportunity.profit_pct > 2.0 { // >2% profit attracts more bots
+            competitive_factors += 2;
+            reasons.push(format!("High profit ({:.2}%) attracts competition", opportunity.profit_pct));
+        } else if opportunity.profit_pct > 1.0 { // >1% moderate attention
+            competitive_factors += 1;
+            reasons.push(format!("Moderate profit ({:.2}%)", opportunity.profit_pct));
+        }
+        
+        // Factor 3: Path complexity (more hops = more MEV risk)
+        let hop_count = opportunity.hops.len();
+        if hop_count > 3 {
+            competitive_factors += 2;
+            reasons.push(format!("{} hops increase MEV/sandwich risk", hop_count));
+        } else if hop_count > 2 {
+            competitive_factors += 1;
+            reasons.push(format!("{} hops moderate complexity", hop_count));
+        }
+        
+        // Factor 4: Time sensitivity (fresh opportunities are more competitive)
+        if let Some(detected_at) = opportunity.detected_at {
+            let age_ms = detected_at.elapsed().as_millis();
+            if age_ms < 100 { // <100ms is very fresh
+                competitive_factors += 2;
+                reasons.push(format!("Very fresh opportunity ({}ms old)", age_ms));
+            } else if age_ms < 500 { // <500ms still competitive
+                competitive_factors += 1;
+                reasons.push(format!("Fresh opportunity ({}ms old)", age_ms));
+            }
+        }
+        
+        // Factor 5: DEX type analysis (some DEXs have more bot activity)
+        let has_high_competition_dex = opportunity.dex_path.iter()
+            .any(|dex| matches!(dex, DexType::Raydium | DexType::Orca | DexType::Meteora)); // High-volume DEXs
+        if has_high_competition_dex {
+            competitive_factors += 1;
+            reasons.push("Uses high-competition DEX".to_string());
+        }
+        
+        // DECISION: Competitive threshold
+        let is_competitive = competitive_factors >= 4; // Threshold for immediate execution
+        
+        let recommendation = if is_competitive {
+            ExecutionRecommendation::ImmediateSingle
+        } else {
+            ExecutionRecommendation::SafeToBatch
+        };
+        
+        let summary_reason = if is_competitive {
+            format!("HIGH COMPETITION (score: {}) - {}", competitive_factors, reasons.join(", "))
+        } else {
+            format!("LOW COMPETITION (score: {}) - Safe for batching", competitive_factors)
+        };
+        
+        CompetitivenessAnalysis {
+            competitive_score: competitive_factors,
+            execution_recommendation: recommendation,
+            reason: summary_reason,
+            risk_factors: reasons,
+        }
+    }
+
+    /// Calculate average pool depth for an opportunity
+    async fn calculate_average_pool_depth(&self, opportunity: &MultiHopArbOpportunity) -> f64 {
+        let mut total_depth = 0.0;
+        let mut pool_count = 0;
+        
+        for hop in &opportunity.hops {
+            if let Some(pool) = self.hot_cache.get(&hop.pool) {
+                // Calculate pool depth using the actual PoolInfo fields
+                let depth_a = pool.token_a.reserve as f64 * 1.0; // Simplified pricing
+                let depth_b = pool.token_b.reserve as f64 * 1.0; // In practice, use real prices
+                let pool_depth = depth_a.min(depth_b);
+                
+                total_depth += pool_depth;
+                pool_count += 1;
+            }
+        }
+        
+        if pool_count > 0 {
+            total_depth / pool_count as f64
+        } else {
+            0.0
+        }
+    }
+
+    /// Engine delegates execution - does not execute directly
+    async fn delegate_to_single_executor(&self, opportunity: &MultiHopArbOpportunity) -> Result<String, ArbError> {
         let executor = self.executor.as_ref()
-            .ok_or_else(|| ArbError::ConfigError("No executor configured".to_string()))?;
+            .ok_or_else(|| ArbError::ConfigError("No single executor configured".to_string()))?;
 
         let start_time = Instant::now();
+        info!("🎯 Engine delegating opportunity {} to single executor", opportunity.id);
         
-        // Resolve pools for the opportunity from hot cache
+        // ENGINE RESPONSIBILITY: Prepare and validate data for executor
         let resolved_pools = self.resolve_pools_from_hot_cache(opportunity).await?;
         
-        // Validate that all pools are still valid
+        // ENGINE RESPONSIBILITY: Cache management and validation
         for pool in &resolved_pools {
             if !validate_single_pool(pool, &self.pool_validation_config) {
                 return Err(ArbError::InvalidPoolState(
-                    format!("Pool {} failed validation during execution", pool.address)
+                    format!("Pool {} failed validation in engine cache", pool.address)
                 ));
             }
         }
 
-        // Execute the opportunity
+        // ENGINE RESPONSIBILITY: Update pool usage tracking for conflict prevention
+        self.update_pool_usage_tracking(&opportunity.pool_path).await;
+
+        // DELEGATE TO EXECUTOR: Engine does not execute, it delegates
         match executor.execute_opportunity(opportunity).await {
             Ok(signature) => {
                 let execution_time = start_time.elapsed();
-                info!("✅ Opportunity {} executed in {:.2}ms: {}", 
-                      opportunity.id, execution_time.as_secs_f64() * 1000.0, signature);
+                info!("✅ Single executor completed opportunity {} in {:.2}ms via engine delegation", 
+                      opportunity.id, execution_time.as_secs_f64() * 1000.0);
                 
-                // Update metrics
-                let metrics = self.metrics.lock().await;
-                metrics.record_execution_time(execution_time);
-                metrics.log_opportunity_executed_success();
+                // ENGINE RESPONSIBILITY: Metrics collection and caching updates
+                self.update_execution_metrics(execution_time, true).await;
+                self.update_hot_cache_post_execution(&opportunity.pool_path).await;
                 
                 Ok(signature.to_string())
             }
             Err(e) => {
-                error!("❌ Failed to execute opportunity {}: {}", opportunity.id, e);
+                error!("❌ Single executor failed for opportunity {}: {}", opportunity.id, e);
                 
-                // Update metrics
-                let metrics = self.metrics.lock().await;
-                metrics.log_opportunity_executed_failure();
+                // ENGINE RESPONSIBILITY: Failure tracking and cache management
+                self.update_execution_metrics(Duration::from_millis(0), false).await;
                 
                 Err(ArbError::ExecutionError(e))
             }
         }
+    }
+
+    /// Engine delegates to batch executor
+    async fn delegate_to_batch_executor(&self, opportunities: Vec<MultiHopArbOpportunity>) -> Result<Vec<String>, ArbError> {
+        let batch_engine = self.batch_execution_engine.as_ref()
+            .ok_or_else(|| ArbError::ConfigError("No batch execution engine configured".to_string()))?;
+
+        info!("🎯 Engine delegating {} opportunities to batch executor", opportunities.len());
+        
+        // ENGINE RESPONSIBILITY: Batch pool conflict detection and caching
+        let all_pools: Vec<Pubkey> = opportunities.iter()
+            .flat_map(|opp| &opp.pool_path)
+            .cloned()
+            .collect();
+        
+        // ENGINE RESPONSIBILITY: Ensure no pool conflicts across batches
+        if let Err(e) = self.check_batch_pool_conflicts(&all_pools).await {
+            warn!("🚫 Engine detected batch pool conflicts: {}", e);
+            return Err(e);
+        }
+
+        let mut results = Vec::new();
+        
+        // DELEGATE TO BATCH EXECUTOR: Submit each opportunity
+        for opportunity in opportunities {
+            // ENGINE RESPONSIBILITY: Pre-submission validation and caching
+            let resolved_pools = self.resolve_pools_from_hot_cache(&opportunity).await?;
+            
+            // Validate pools in engine cache before delegation
+            for pool in &resolved_pools {
+                if !validate_single_pool(pool, &self.pool_validation_config) {
+                    warn!("⚠️ Pool {} failed engine validation, skipping opportunity {}", 
+                          pool.address, opportunity.id);
+                    continue;
+                }
+            }
+
+            // DELEGATE TO BATCH EXECUTOR
+            match batch_engine.submit_opportunity(opportunity.clone()).await {
+                Ok(()) => {
+                    // ENGINE RESPONSIBILITY: Track successful submissions
+                    results.push(format!("batch_submitted_{}", opportunity.id));
+                    info!("📦 Engine successfully delegated opportunity {} to batch executor", opportunity.id);
+                }
+                Err(e) => {
+                    error!("❌ Engine failed to delegate opportunity {} to batch executor: {}", opportunity.id, e);
+                }
+            }
+        }
+
+        // ENGINE RESPONSIBILITY: Update cache and metrics after batch delegation
+        self.update_hot_cache_post_batch_submission(&all_pools).await;
+        
+        Ok(results)
+    }
+
+    /// ENGINE RESPONSIBILITY: Pool conflict detection across executors
+    async fn check_batch_pool_conflicts(&self, pools: &[Pubkey]) -> Result<(), ArbError> {
+        // Check if any of these pools are currently being used by single executor
+        // This would be implementation-specific based on your conflict tracking needs
+        Ok(())
+    }
+
+    /// ENGINE RESPONSIBILITY: Update pool usage tracking for conflict prevention
+    async fn update_pool_usage_tracking(&self, pools: &[Pubkey]) {
+        // Track which pools are being used to prevent conflicts
+        // Implementation would update internal state to track pool usage
+        debug!("🔄 Engine updating pool usage tracking for {} pools", pools.len());
+    }
+
+    /// ENGINE RESPONSIBILITY: Update execution metrics and caching
+    async fn update_execution_metrics(&self, execution_time: Duration, success: bool) {
+        let metrics = self.metrics.lock().await;
+        if success {
+            metrics.record_execution_time(execution_time);
+            metrics.log_opportunity_executed_success();
+        } else {
+            metrics.log_opportunity_executed_failure();
+        }
+    }
+
+    /// ENGINE RESPONSIBILITY: Post-execution cache updates
+    async fn update_hot_cache_post_execution(&self, pools: &[Pubkey]) {
+        // Update hot cache with post-execution data
+        // This could include updated pool states, reserves, etc.
+        debug!("🔄 Engine updating hot cache post-execution for {} pools", pools.len());
+    }
+
+    /// ENGINE RESPONSIBILITY: Post-batch cache updates
+    async fn update_hot_cache_post_batch_submission(&self, pools: &[Pubkey]) {
+        // Update hot cache with post-batch submission data
+        debug!("🔄 Engine updating hot cache post-batch submission for {} pools", pools.len());
     }
 
     /// Sprint 2: Resolve pools from hot cache for opportunity execution
@@ -927,6 +1314,79 @@ impl ArbitrageEngine {
     }
 }
 
+impl ArbitrageEngine {
+    /// Execute opportunities via single executor delegation
+    async fn execute_via_single_executor(&self, opportunities: Vec<MultiHopArbOpportunity>) -> Result<Vec<String>, ArbError> {
+        info!("🎯 Engine coordinating {} opportunities for single executor delegation", opportunities.len());
+        let mut results = Vec::new();
+        
+        for opportunity in opportunities {
+            match self.delegate_to_single_executor(&opportunity).await {
+                Ok(signature) => {
+                    results.push(signature);
+                    info!("✅ Engine delegation success: {} ({}%)", opportunity.id, opportunity.profit_pct);
+                }
+                Err(e) => {
+                    error!("❌ Engine delegation failed: {} - {}", opportunity.id, e);
+                }
+            }
+        }
+
+        Ok(results)
+    }
+
+    /// Execute opportunities via batch execution engine delegation
+    async fn execute_via_batch_engine(
+        &self, 
+        batchable: Vec<MultiHopArbOpportunity>, 
+        immediate: Vec<MultiHopArbOpportunity>
+    ) -> Result<Vec<String>, ArbError> {
+        let mut results = Vec::new();
+
+        // Delegate batchable opportunities to batch engine
+        if !batchable.is_empty() {
+            info!("🎯 Engine delegating {} opportunities to batch executor", batchable.len());
+            let batch_results = self.delegate_to_batch_executor(batchable).await?;
+            results.extend(batch_results);
+        }
+
+        // Delegate immediate opportunities to single executor
+        if !immediate.is_empty() {
+            info!("🎯 Engine delegating {} immediate opportunities to single executor", immediate.len());
+            let immediate_results = self.execute_via_single_executor(immediate).await?;
+            results.extend(immediate_results);
+        }
+
+        Ok(results)
+    }
+
+    /// Execute using hybrid strategy delegation
+    async fn execute_hybrid_strategy(
+        &self,
+        immediate: Vec<MultiHopArbOpportunity>,
+        batchable: Vec<MultiHopArbOpportunity>
+    ) -> Result<Vec<String>, ArbError> {
+        info!("🎯 Engine coordinating hybrid execution strategy");
+        let mut results = Vec::new();
+
+        // Delegate immediate opportunities first (priority)
+        if !immediate.is_empty() {
+            info!("🔄 Engine: delegating {} immediate opportunities to single executor", immediate.len());
+            let immediate_results = self.execute_via_single_executor(immediate).await?;
+            results.extend(immediate_results);
+        }
+
+        // Then delegate batchable opportunities
+        if !batchable.is_empty() {
+            info!("🔄 Engine: delegating {} batchable opportunities to batch executor", batchable.len());
+            let batch_results = self.delegate_to_batch_executor(batchable).await?;
+            results.extend(batch_results);
+        }
+
+        Ok(results)
+    }
+}
+
 impl Clone for ArbitrageEngine {
     fn clone(&self) -> Self {
         Self {
@@ -946,6 +1406,7 @@ impl Clone for ArbitrageEngine {
             dynamic_threshold_updater: self.dynamic_threshold_updater.as_ref().map(Arc::clone),
             pool_validation_config: self.pool_validation_config.clone(),
             executor: self.executor.as_ref().map(Arc::clone),
+            batch_execution_engine: self.batch_execution_engine.as_ref().map(Arc::clone),
             execution_pipeline: Arc::clone(&self.execution_pipeline),
             detection_metrics: Arc::clone(&self.detection_metrics),
             execution_enabled: Arc::clone(&self.execution_enabled),

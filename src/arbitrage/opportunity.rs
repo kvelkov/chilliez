@@ -119,6 +119,8 @@ pub struct MultiHopArbOpportunity {
     pub intermediate_token_mint: Option<Pubkey>,
     /// Optional estimated gas cost for transaction execution.
     pub estimated_gas_cost: Option<u64>,
+    /// Timestamp when the opportunity was detected (for time-sensitive analysis).
+    pub detected_at: Option<std::time::Instant>,
 }
 
 impl MultiHopArbOpportunity {
@@ -284,6 +286,7 @@ impl Default for MultiHopArbOpportunity {
             output_token_mint: Pubkey::default(),
             intermediate_token_mint: None,
             estimated_gas_cost: None,
+            detected_at: None,
         }
     }
 }
@@ -400,6 +403,7 @@ impl AdvancedMultiHopOpportunity {
             output_token_mint: self.path.last().map(|h| h.output_token).unwrap_or_default(),
             intermediate_token_mint: None, // Could be computed from intermediate hops
             estimated_gas_cost: Some(self.estimated_gas_cost),
+            detected_at: Some(std::time::Instant::now()),
         }
     }
 }

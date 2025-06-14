@@ -371,6 +371,7 @@ impl ArbitrageDetector {
                 output_token_mint: pool2.token_b.mint,
                 intermediate_token_mint: Some(pool1.token_b.mint),
                 estimated_gas_cost: Some(400_000), // Default gas estimate for 2-hop
+                detected_at: Some(std::time::Instant::now()), // Track detection time for time-sensitive decisions
             })
         } else {
             None
@@ -577,6 +578,7 @@ impl ArbitrageDetector {
                 output_token_mint: p3.token_b.mint,
                 intermediate_token_mint: Some(p1.token_b.mint),
                 estimated_gas_cost: Some(600_000), // Default gas estimate for 3-hop
+                detected_at: Some(std::time::Instant::now()),
             })
         } else {
             None

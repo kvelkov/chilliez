@@ -239,6 +239,7 @@ async fn main() -> Result<(), ArbError> {
         metrics.clone(),
         dex_api_clients,
         executor,
+        None, // batch_execution_engine - can be initialized later if needed
     ));
 
     // Start enhanced arbitrage engine services

@@ -17,6 +17,7 @@ pub mod clmm {
     
     /// Calculate output amount for CLMM pools using tick-based liquidity
     /// This is optimized for Orca Whirlpools and similar concentrated liquidity DEXs
+    #[allow(dead_code)] // Advanced math function reserved for future CLMM implementation
     pub fn calculate_clmm_output(
         input_amount: u64,
         current_sqrt_price: u128,
@@ -58,6 +59,7 @@ pub mod clmm {
     }
     
     /// Calculate CLMM swap price impact
+    #[allow(dead_code)] // Advanced math function for price impact analysis
     pub fn calculate_price_impact(
         input_amount: u64,
         output_amount: u64,
@@ -81,6 +83,7 @@ pub mod raydium {
     
     /// Enhanced Raydium quote calculation with high precision
     /// Implements the exact formula used by Raydium V4 pools
+    #[allow(dead_code)] // Advanced math function for high-precision Raydium calculations
     pub fn calculate_raydium_output(
         input_amount: u64,
         input_reserve: u64,
@@ -118,6 +121,7 @@ pub mod raydium {
     }
     
     /// Calculate optimal input amount for a target output (reverse quote)
+    #[allow(dead_code)] // Advanced math function for reverse quote calculations
     pub fn calculate_raydium_input_for_output(
         target_output: u64,
         input_reserve: u64,
@@ -159,6 +163,7 @@ pub mod orca {
     use super::*;
     
     /// Calculate Orca Whirlpool (CLMM) output with tick-aware pricing
+    #[allow(dead_code)] // Advanced math function for Orca Whirlpool calculations
     pub fn calculate_whirlpool_output(
         input_amount: u64,
         sqrt_price_x64: u128,
@@ -180,6 +185,7 @@ pub mod orca {
     }
     
     /// Calculate legacy Orca pool output (constant product)
+    #[allow(dead_code)] // Advanced math function for legacy Orca pool calculations
     pub fn calculate_legacy_orca_output(
         input_amount: u64,
         input_reserve: u64,
@@ -203,6 +209,7 @@ pub mod meteora {
     use super::*;
     
     /// Calculate Meteora Dynamic AMM output (variable fees)
+    #[allow(dead_code)] // Advanced math function for Meteora Dynamic AMM calculations
     pub fn calculate_dynamic_amm_output(
         input_amount: u64,
         input_reserve: u64,
@@ -275,6 +282,7 @@ pub mod lifinity {
     use super::*;
     
     /// Calculate Lifinity output with proactive market making adjustments
+    #[allow(dead_code)] // Advanced math function for Lifinity proactive market making
     pub fn calculate_lifinity_output(
         input_amount: u64,
         input_reserve: u64,
@@ -321,6 +329,7 @@ pub mod utils {
     use super::*;
     
     /// Calculate slippage percentage given input and output amounts
+    #[allow(dead_code)] // Utility function for slippage analysis
     pub fn calculate_slippage(
         expected_output: u64,
         actual_output: u64,
@@ -337,6 +346,7 @@ pub mod utils {
     }
     
     /// Calculate minimum output amount given slippage tolerance
+    #[allow(dead_code)] // Utility function for slippage protection calculations
     pub fn calculate_minimum_output(
         expected_output: u64,
         slippage_tolerance_bps: u32,
@@ -350,6 +360,7 @@ pub mod utils {
     }
     
     /// Validate that calculated outputs are reasonable
+    #[allow(dead_code)] // Utility function for output validation
     pub fn validate_output(
         input_amount: u64,
         output_amount: u64,
@@ -382,6 +393,7 @@ pub mod general {
     
     /// Simple constant product AMM calculation (x * y = k)
     /// This is the most basic AMM formula used as a fallback
+    #[allow(dead_code)] // General utility function for simple AMM calculations
     pub fn calculate_simple_amm_output(
         input_amount: u64,
         input_reserve: u64,

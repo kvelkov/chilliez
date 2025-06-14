@@ -6,7 +6,7 @@ use async_trait::async_trait;
 use csv::{ReaderBuilder, WriterBuilder as CsvWriterBuilder};
 use log;
 use std::collections::HashSet;
-use std::fs::{File, OpenOptions};
+use std::fs::{OpenOptions};
 use std::io::BufReader;
 use std::path::Path;
 use std::sync::Arc;
@@ -48,8 +48,22 @@ impl BannedPairsManager {
     /// The CSV file is expected to have headers "TokenA" and "TokenB".
     pub fn new(csv_file_path: &Path) -> Result<Self> {
         log::info!("Loading banned pairs from: {:?}", csv_file_path);
-        let file = File::open(csv_file_path)
-            .with_context(|| format!("Failed to open banned pairs CSV file: {:?}", csv_file_path))?;
+        let needs_headers = !csv_file_path.exists() || csv_file_path.metadata().map(|m| m.len() == 0).unwrap_or(true);
+
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .open(csv_file_path)
+            .with_context(|| format!("Failed to open or create banned pairs CSV file: {:?}", csv_file_path))?;
+
+        if needs_headers {
+            let mut wtr = CsvWriterBuilder::new().has_headers(false).from_writer(&file); // Write headers explicitly
+            wtr.write_record(&["TokenA", "TokenB", "BanType", "Details"])
+                .with_context(|| format!("Failed to write headers to new banned pairs CSV: {:?}", csv_file_path))?;
+            wtr.flush().context("Failed to flush headers to CSV")?;
+        }
+
         let mut rdr = ReaderBuilder::new().has_headers(true).from_reader(BufReader::new(file));
 
         let mut banned_pairs_set = HashSet::new();

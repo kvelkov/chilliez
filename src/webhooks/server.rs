@@ -1,19 +1,36 @@
 // src/webhooks/server.rs
-//! Webhook server to receive Helius notifications
+//! Webhook server implementations for receiving Helius notifications
+//! 
+//! This module consolidates:
+//! - Basic WebhookServer for simple webhook handling
+//! - EnhancedWebhookServer for advanced webhook processing
+//! - HeliusWebhookManager for webhook setup and management
 
-use crate::webhooks::types::HeliusWebhookNotification;
+use crate::webhooks::types::{HeliusWebhookNotification, DexPrograms};
 use crate::webhooks::processor::PoolUpdateProcessor;
+use crate::webhooks::integration::{PoolEvent, PoolEventType};
+use crate::webhooks::helius_sdk_stub::EnhancedTransaction;
 use axum::{
-    extract::State,
+    extract::{Path, State},
     http::StatusCode,
     response::Json,
-    routing::post,
+    routing::{get, post},
     Router,
 };
-use log::{info, warn, error};
+use anyhow::{anyhow, Result as AnyhowResult};
+use log::{info, warn, error, debug};
+use reqwest::Client;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use solana_sdk::pubkey::Pubkey;
+use std::collections::HashMap;
+use std::str::FromStr;
 use std::sync::Arc;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, RwLock};
+
+// ================================================================================================
+// BASIC WEBHOOK SERVER
+// ================================================================================================
 
 /// Webhook server state
 #[derive(Clone)]
@@ -134,6 +151,379 @@ async fn webhook_status(State(state): State<WebhookState>) -> Json<Value> {
     }))
 }
 
+// ================================================================================================
+// ENHANCED WEBHOOK SERVER
+// ================================================================================================
+
+/// Statistics for the enhanced webhook server
+#[derive(Debug, Clone, Default)]
+pub struct WebhookServerStats {
+    pub total_requests: u64,
+    pub successful_requests: u64,
+    pub failed_requests: u64,
+    pub events_sent: u64,
+    pub last_request_time: Option<std::time::Instant>,
+    pub requests_by_type: HashMap<String, u64>,
+}
+
+/// Helius webhook notification payload (simplified)
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct HeliusWebhookPayload {
+    pub signature: String,
+    pub slot: u64,
+    pub timestamp: i64,
+    pub fee: u64,
+    #[serde(rename = "feePayer")]
+    pub fee_payer: String,
+    #[serde(rename = "type")]
+    pub transaction_type: String,
+    pub source: String,
+    pub accounts: Vec<String>,
+}
+
+/// Enhanced server state
+#[derive(Clone)]
+pub struct EnhancedServerState {
+    event_sender: mpsc::UnboundedSender<PoolEvent>,
+    stats: Arc<RwLock<WebhookServerStats>>,
+}
+
+/// Enhanced webhook server for processing Helius notifications
+pub struct EnhancedWebhookServer {
+    port: u16,
+    event_sender: mpsc::UnboundedSender<PoolEvent>,
+    webhook_stats: Arc<RwLock<WebhookServerStats>>,
+}
+
+impl EnhancedWebhookServer {
+    /// Create a new enhanced webhook server
+    pub fn new(
+        port: u16,
+        event_sender: mpsc::UnboundedSender<PoolEvent>,
+    ) -> Self {
+        info!("🚀 Creating Enhanced Webhook Server on port {}", port);
+        
+        Self {
+            port,
+            event_sender,
+            webhook_stats: Arc::new(RwLock::new(WebhookServerStats::default())),
+        }
+    }
+    
+    /// Start the webhook server
+    pub async fn start(&self) -> AnyhowResult<()> {
+        info!("🎬 Starting Enhanced Webhook Server on port {}", self.port);
+        
+        let state = EnhancedServerState {
+            event_sender: self.event_sender.clone(),
+            stats: self.webhook_stats.clone(),
+        };
+        
+        let app = Router::new()
+            .route("/webhook", post(handle_enhanced_webhook))
+            .route("/webhook/:id", post(handle_enhanced_webhook_with_id))
+            .route("/health", get(enhanced_health_check))
+            .with_state(state);
+        
+        let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", self.port)).await?;
+        info!("✅ Enhanced Webhook Server listening on port {}", self.port);
+        
+        axum::serve(listener, app).await?;
+        
+        Ok(())
+    }
+    
+    /// Get current statistics
+    pub async fn get_stats(&self) -> WebhookServerStats {
+        self.webhook_stats.read().await.clone()
+    }
+}
+
+/// Enhanced webhook handler
+async fn handle_enhanced_webhook(
+    State(state): State<EnhancedServerState>,
+    Json(payload): Json<HeliusWebhookPayload>,
+) -> Result<Json<Value>, StatusCode> {
+    let mut stats = state.stats.write().await;
+    stats.total_requests += 1;
+    stats.last_request_time = Some(std::time::Instant::now());
+    drop(stats);
+
+    debug!("📡 Enhanced webhook received: {}", payload.signature);
+
+    // Convert payload to pool event
+    if let Ok(pool_event) = convert_payload_to_event(&payload) {
+        if let Err(e) = state.event_sender.send(pool_event) {
+            error!("Failed to send pool event: {}", e);
+            let mut stats = state.stats.write().await;
+            stats.failed_requests += 1;
+            return Err(StatusCode::INTERNAL_SERVER_ERROR);
+        }
+
+        let mut stats = state.stats.write().await;
+        stats.successful_requests += 1;
+        stats.events_sent += 1;
+    }
+
+    Ok(Json(json!({
+        "status": "success",
+        "signature": payload.signature,
+        "timestamp": chrono::Utc::now().timestamp()
+    })))
+}
+
+/// Enhanced webhook handler with ID
+async fn handle_enhanced_webhook_with_id(
+    Path(id): Path<String>,
+    State(state): State<EnhancedServerState>,
+    Json(payload): Json<HeliusWebhookPayload>,
+) -> Result<Json<Value>, StatusCode> {
+    info!("📡 Enhanced webhook received with ID {}: {}", id, payload.signature);
+    handle_enhanced_webhook(State(state), Json(payload)).await
+}
+
+/// Enhanced health check
+async fn enhanced_health_check() -> Json<Value> {
+    Json(json!({
+        "status": "healthy",
+        "service": "enhanced-helius-webhook-server",
+        "timestamp": chrono::Utc::now().timestamp()
+    }))
+}
+
+/// Convert webhook payload to pool event
+fn convert_payload_to_event(payload: &HeliusWebhookPayload) -> AnyhowResult<PoolEvent> {
+    use crate::webhooks::helius_sdk_stub::{TransactionType, Source, TransactionEvent};
+    
+    // Parse pool address from accounts
+    let pool_address = payload.accounts.first()
+        .ok_or_else(|| anyhow!("No accounts in payload"))?;
+    
+    let pool_pubkey = Pubkey::from_str(pool_address)
+        .map_err(|_| anyhow!("Invalid pool address: {}", pool_address))?;
+
+    // Create a mock enhanced transaction
+    let enhanced_tx = EnhancedTransaction {
+        signature: payload.signature.clone(),
+        slot: payload.slot,
+        timestamp: payload.timestamp as u64,
+        fee: payload.fee,
+        fee_payer: payload.fee_payer.clone(),
+        transaction_error: None,
+        description: format!("Pool transaction on {}", pool_address),
+        transaction_type: TransactionType::Swap,
+        source: Source::Unknown,
+        account_data: payload.accounts.clone(),
+        native_transfers: None,
+        token_transfers: None,
+        instructions: vec![],
+        events: TransactionEvent,
+    };
+
+    Ok(PoolEvent::PoolUpdate {
+        pool_address: pool_pubkey,
+        transaction: enhanced_tx,
+        event_type: PoolEventType::Swap, // Default to swap for now
+    })
+}
+
+// ================================================================================================
+// HELIUS WEBHOOK MANAGER
+// ================================================================================================
+
+/// Helius webhook creation request
+#[derive(Debug, Serialize)]
+struct CreateWebhookRequest {
+    #[serde(rename = "webhookURL")]
+    webhook_url: String,
+    #[serde(rename = "transactionTypes")]
+    transaction_types: Vec<String>,
+    #[serde(rename = "accountAddresses")]
+    account_addresses: Vec<String>,
+    #[serde(rename = "webhookType")]
+    webhook_type: String,
+    #[serde(rename = "txnStatus")]
+    txn_status: String,
+    #[serde(rename = "encoding")]
+    encoding: String,
+}
+
+/// Helius webhook response
+#[derive(Debug, Deserialize)]
+#[allow(dead_code)]
+pub struct WebhookResponse {
+    #[serde(rename = "webhookID")]
+    webhook_id: String,
+    #[serde(rename = "webhookURL")]
+    webhook_url: String,
+    #[serde(rename = "transactionTypes")]
+    transaction_types: Vec<String>,
+    #[serde(rename = "accountAddresses")]
+    account_addresses: Vec<String>,
+    #[serde(rename = "webhookType")]
+    webhook_type: String,
+}
+
+/// Manages Helius webhooks for DEX monitoring
+pub struct HeliusWebhookManager {
+    api_key: String,
+    base_url: String,
+    client: Client,
+    webhook_endpoint: String,
+    active_webhooks: HashMap<String, String>, // program_id -> webhook_id
+}
+
+impl HeliusWebhookManager {
+    /// Create a new Helius webhook manager
+    pub fn new(api_key: String, webhook_endpoint: String) -> Self {
+        Self {
+            api_key,
+            base_url: "https://api.helius.xyz/v0".to_string(),
+            client: Client::new(),
+            webhook_endpoint,
+            active_webhooks: HashMap::new(),
+        }
+    }
+
+    /// Set up webhooks for all DEX programs
+    pub async fn setup_dex_webhooks(&mut self) -> AnyhowResult<()> {
+        info!("Setting up Helius webhooks for DEX programs...");
+
+        // Create webhook for each major DEX program
+        let programs = DexPrograms::all_program_ids();
+        
+        for program_id in programs {
+            match self.create_program_webhook(program_id).await {
+                Ok(webhook_id) => {
+                    info!("✅ Created webhook for program {}: {}", program_id, webhook_id);
+                    self.active_webhooks.insert(program_id.to_string(), webhook_id);
+                }
+                Err(e) => {
+                    error!("❌ Failed to create webhook for program {}: {}", program_id, e);
+                }
+            }
+        }
+
+        info!("Webhook setup complete. Active webhooks: {}", self.active_webhooks.len());
+        Ok(())
+    }
+
+    /// Create a webhook for a specific program
+    async fn create_program_webhook(&self, program_id: &str) -> AnyhowResult<String> {
+        let webhook_request = CreateWebhookRequest {
+            webhook_url: self.webhook_endpoint.clone(),
+            transaction_types: vec!["Any".to_string()],
+            account_addresses: vec![program_id.to_string()],
+            webhook_type: "enhanced".to_string(),
+            txn_status: "success".to_string(),
+            encoding: "jsonParsed".to_string(),
+        };
+
+        let url = format!("{}/webhooks?api-key={}", self.base_url, self.api_key);
+        
+        let response = self.client
+            .post(&url)
+            .json(&webhook_request)
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            let error_text = response.text().await?;
+            return Err(anyhow!("Failed to create webhook: {}", error_text));
+        }
+
+        let webhook_response: WebhookResponse = response.json().await?;
+        Ok(webhook_response.webhook_id)
+    }
+
+    /// Create a webhook for specific addresses
+    pub async fn create_webhook(&mut self, addresses: Vec<String>) -> AnyhowResult<String> {
+        let webhook_request = CreateWebhookRequest {
+            webhook_url: self.webhook_endpoint.clone(),
+            transaction_types: vec!["Any".to_string()],
+            account_addresses: addresses,
+            webhook_type: "enhanced".to_string(),
+            txn_status: "success".to_string(),
+            encoding: "jsonParsed".to_string(),
+        };
+
+        let url = format!("{}/webhooks?api-key={}", self.base_url, self.api_key);
+        
+        let response = self.client
+            .post(&url)
+            .json(&webhook_request)
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            let error_text = response.text().await?;
+            return Err(anyhow!("Failed to create webhook: {}", error_text));
+        }
+
+        let webhook_response: WebhookResponse = response.json().await?;
+        let webhook_id = webhook_response.webhook_id.clone();
+        
+        // Add to active webhooks
+        self.active_webhooks.insert(format!("addresses_{}", webhook_id), webhook_id.clone());
+        
+        Ok(webhook_id)
+    }
+
+    /// Delete a webhook
+    pub async fn delete_webhook(&mut self, webhook_id: &str) -> AnyhowResult<()> {
+        let url = format!("{}/webhooks/{}?api-key={}", self.base_url, webhook_id, self.api_key);
+        
+        let response = self.client.delete(&url).send().await?;
+        
+        if !response.status().is_success() {
+            let error_text = response.text().await?;
+            return Err(anyhow!("Failed to delete webhook: {}", error_text));
+        }
+
+        // Remove from active webhooks
+        self.active_webhooks.retain(|_, id| id != webhook_id);
+        info!("🗑️ Deleted webhook: {}", webhook_id);
+        
+        Ok(())
+    }
+
+    /// Get all active webhooks
+    pub fn get_active_webhooks(&self) -> &HashMap<String, String> {
+        &self.active_webhooks
+    }
+
+    /// Clean up all webhooks
+    pub async fn cleanup_all_webhooks(&mut self) -> AnyhowResult<()> {
+        info!("🧹 Cleaning up all active webhooks...");
+        
+        let webhook_ids: Vec<String> = self.active_webhooks.values().cloned().collect();
+        
+        for webhook_id in webhook_ids {
+            if let Err(e) = self.delete_webhook(&webhook_id).await {
+                error!("Failed to delete webhook {}: {}", webhook_id, e);
+            }
+        }
+        
+        self.active_webhooks.clear();
+        info!("✅ Webhook cleanup complete");
+        
+        Ok(())
+    }
+}
+
+impl std::fmt::Display for WebhookServerStats {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Requests: Total={}, Success={}, Failed={}, Events Sent: {}",
+            self.total_requests,
+            self.successful_requests,
+            self.failed_requests,
+            self.events_sent
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -141,11 +531,30 @@ mod tests {
     use tokio::sync::mpsc;
 
     #[tokio::test]
-    async fn test_webhook_server_creation() {
+    async fn test_basic_webhook_server_creation() {
         let processor = Arc::new(PoolUpdateProcessor::new());
         let (tx, _rx) = mpsc::unbounded_channel();
         
         let server = WebhookServer::new(8080, processor, tx);
         assert_eq!(server.port, 8080);
+    }
+
+    #[tokio::test]
+    async fn test_enhanced_webhook_server_creation() {
+        let (tx, _rx) = mpsc::unbounded_channel();
+        
+        let server = EnhancedWebhookServer::new(8081, tx);
+        assert_eq!(server.port, 8081);
+    }
+
+    #[test]
+    fn test_helius_webhook_manager_creation() {
+        let manager = HeliusWebhookManager::new(
+            "test_api_key".to_string(),
+            "http://localhost:8080/webhook".to_string()
+        );
+        
+        assert_eq!(manager.api_key, "test_api_key");
+        assert_eq!(manager.webhook_endpoint, "http://localhost:8080/webhook");
     }
 }

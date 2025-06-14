@@ -1,5 +1,5 @@
-// src/utils/dex_routing.rs
-//! DEX routing utilities extracted from legacy pool_discovery module
+// src/dex/routing.rs
+//! DEX routing utilities for finding appropriate clients and grouping operations
 
 use crate::utils::{PoolInfo, DexType};
 use crate::dex::quote::DexClient;

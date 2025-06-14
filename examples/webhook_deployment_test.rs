@@ -3,7 +3,7 @@
 
 use solana_arb_bot::{
     config::Config,
-    webhooks::{WebhookIntegrationService, WebhookStats},
+    webhooks::integration::{WebhookIntegrationService, WebhookStats},
 };
 use std::sync::Arc;
 use tokio::time::{sleep, Duration};

@@ -1,19 +1,19 @@
 // src/dex/mod.rs
 
 
+// src/dex/mod.rs
+
 #[cfg(any(test, debug_assertions))]
-pub mod integration_test;
+pub mod dex_tests; // Consolidated all tests
 
 pub mod lifinity;
 pub mod meteora;
 pub mod orca;
 pub mod raydium;
-pub mod pool;
-pub mod pool_discovery;
-pub mod banned_pairs;
-pub mod whirlpool;
-pub mod whirlpool_parser;
 pub mod phoenix;
+pub mod pool_management; // Combined pool.rs + pool_discovery.rs
+pub mod banned_pairs;
+pub mod routing; // DEX routing utilities moved from utils
 
 // --- New Advanced Math Module ---
 pub mod math;  // Advanced CLMM and AMM mathematical calculations
@@ -21,19 +21,13 @@ pub mod math;  // Advanced CLMM and AMM mathematical calculations
 // --- Quote and Client Infrastructure ---
 pub mod quote;
 pub mod quoting_engine;
-pub mod opportunity;
-pub mod path_finder;
-
-// Module declarations for each DEX client and utility
+pub mod path_finder; // Now includes opportunity.rs
 
 // Re-export the main DexClient trait for easier access
 pub use quote::DexClient;
-// pub use banned_pairs::{BannedPairsManager, BannedPairFilteringDexClientDecorator}; // These are unused as top-level exports
 
-
-pub use quoting_engine::{AdvancedQuotingEngine, QuotingEngineOperations}; // Export the new trait
-pub use opportunity::{HopInfo, MultiHopArbOpportunity};
-pub use path_finder::PathFinder;
+// Re-export only the used items from pool_management
+pub use pool_management::{PoolValidationConfig, validate_pools, validate_single_pool, validate_pools_basic};
 // --- Publicly re-export concrete client types ---
 // These lines make the client structs available directly under the `dex` module,
 // e.g., as `crate::dex::OrcaClient`
@@ -46,7 +40,7 @@ pub use path_finder::PathFinder;
 // pub use self::orca::OrcaClient;
 // pub use self::phoenix::PhoenixClient;
 // pub use self::raydium::RaydiumClient;
-// pub use self::whirlpool::WhirlpoolClient;
+// WhirlpoolClient removed - consolidated into OrcaClient
 
 // (Keep your existing imports for get_all_clients, etc.)
 use crate::cache::Cache;
@@ -60,14 +54,14 @@ use std::sync::Arc;
 /// Initializes and returns all supported DEX API client instances.
 /// Each client is configured with shared cache and application configuration.
 pub fn get_all_clients(
-    cache: Arc<Cache>,
+    _cache: Arc<Cache>,
     app_config: Arc<Config>,
 ) -> Vec<Box<dyn DexClient>> {
     let mut clients: Vec<Box<dyn DexClient>> = Vec::new();
 
     info!("Initializing DEX API clients with Cache and Config integration...");
 
-    let get_dex_ttl = |dex_name: &str| -> Option<u64> {
+    let _get_dex_ttl = |dex_name: &str| -> Option<u64> {
         app_config.dex_quote_cache_ttl_secs
             .as_ref()
             .and_then(|map| map.get(dex_name).copied())
@@ -94,11 +88,12 @@ pub fn get_all_clients(
     // )));
     // info!("- Phoenix client initialized.");
 
-    clients.push(Box::new(whirlpool::WhirlpoolClient::new(
-        Arc::clone(&cache),
-        get_dex_ttl("Whirlpool"),
-    )));
-    info!("- Whirlpool API client initialized.");
+    // WhirlpoolClient removed - now using OrcaClient for all Orca Whirlpool interactions
+    // clients.push(Box::new(whirlpool::WhirlpoolClient::new(
+    //     Arc::clone(&cache),
+    //     get_dex_ttl("Whirlpool"),
+    // )));
+    // info!("- Whirlpool API client initialized.");
 
     info!(
         "Total {} DEX API clients initialized successfully.",

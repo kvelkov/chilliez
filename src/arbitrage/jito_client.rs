@@ -5,11 +5,12 @@
 //! for atomic transaction execution with MEV protection.
 
 use crate::error::ArbError;
-use log::{info, warn, error, debug};
+use log::{info, warn, debug};
 use solana_sdk::{
     signature::Signature,
     transaction::Transaction,
     pubkey::Pubkey,
+    signer::Signer,
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -246,24 +247,25 @@ impl JitoClient {
 
     /// Create a tip transaction
     async fn create_tip_transaction(&self, tip_lamports: u64) -> Result<Transaction, ArbError> {
-        debug!("💰 Creating tip transaction: {} lamports", tip_lamports);
+        debug!("💰 Creating real tip transaction: {} lamports", tip_lamports);
 
-        // Select tip account (prefer NY region)
         let tip_account = self.config.tip_accounts.get("ny")
             .or_else(|| self.config.tip_accounts.values().next())
             .ok_or_else(|| ArbError::ConfigError("No tip accounts configured".to_string()))?;
 
-        // In real implementation, this would:
-        // 1. Create a transfer instruction to the tip account
-        // 2. Sign with the wallet keypair
-        // 3. Return the signed transaction
+        let keypair_path = self.config.auth_keypair_path.as_ref()
+            .ok_or_else(|| ArbError::ConfigError("Missing auth_keypair_path".to_string()))?;
 
-        // Placeholder implementation
-        use solana_sdk::message::Message;
-        let message = Message::new(&[], None);
-        let transaction = Transaction::new_unsigned(message);
+        let payer = solana_sdk::signer::keypair::read_keypair_file(keypair_path)
+            .map_err(|e| ArbError::ConfigError(format!("Failed to read keypair: {}", e)))?;
 
-        debug!("💰 Created tip transaction to account: {}", tip_account);
+        let instruction = solana_sdk::system_instruction::transfer(&payer.pubkey(), tip_account, tip_lamports);
+        let message = solana_sdk::message::Message::new(&[instruction], Some(&payer.pubkey()));
+        let recent_blockhash = self.get_recent_blockhash().await?;
+
+        let transaction = Transaction::new(&[&payer], message, recent_blockhash);
+
+        debug!("💰 Created signed tip transaction to: {}", tip_account);
         Ok(transaction)
     }
 
@@ -274,7 +276,8 @@ impl JitoClient {
         for (idx, tx) in transactions.iter().enumerate() {
             match bincode::serialize(tx) {
                 Ok(serialized) => {
-                    let encoded_tx = base64::encode(&serialized);
+                    use base64::{Engine as _, engine::general_purpose};
+                    let encoded_tx = general_purpose::STANDARD.encode(&serialized);
                     encoded.push(encoded_tx);
                     debug!("📝 Encoded transaction {}: {} bytes", idx, serialized.len());
                 }
@@ -400,25 +403,44 @@ impl JitoClient {
         Err(ArbError::TimeoutError("Bundle confirmation timeout".to_string()))
     }
 
-    /// Get bundle status
+    /// Get bundle status from Jito's real API
     async fn get_bundle_status(&self, bundle_id: &str) -> Result<BundleStatus, ArbError> {
-        // In real implementation, this would query Jito's bundle status endpoint
-        // For now, we'll simulate a successful bundle
-        
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        let url = format!("{}/bundle-status/{}", self.config.block_engine_url, bundle_id);
 
-        Ok(BundleStatus {
-            bundle_id: bundle_id.to_string(),
-            status: "landed".to_string(),
-            landed_slot: Some(12345678),
-            transactions: vec![
-                BundleTransaction {
-                    signature: Signature::default().to_string(),
-                    status: "success".to_string(),
-                    error: None,
-                }
-            ],
-        })
+        let response = self.client
+            .get(&url)
+            .send()
+            .await
+            .map_err(|e| ArbError::NetworkError(format!("HTTP request failed: {}", e)))?;
+
+        if !response.status().is_success() {
+            return Err(ArbError::NetworkError(format!("HTTP error: {}", response.status())));
+        }
+
+        let status: BundleStatus = response
+            .json()
+            .await
+            .map_err(|e| ArbError::ParseError(format!("Failed to parse bundle status: {}", e)))?;
+
+        Ok(status)
+    }
+
+    /// Fetch recent blockhash from Solana RPC
+    async fn get_recent_blockhash(&self) -> Result<solana_sdk::hash::Hash, ArbError> {
+        use solana_client::nonblocking::rpc_client::RpcClient;
+        use solana_sdk::commitment_config::CommitmentConfig;
+
+        let rpc = RpcClient::new_with_commitment(
+            "https://api.mainnet-beta.solana.com".to_string(),
+            CommitmentConfig::confirmed(),
+        );
+
+        let blockhash = rpc
+            .get_latest_blockhash()
+            .await
+            .map_err(|e| ArbError::NetworkError(format!("Failed to get recent blockhash: {}", e)))?;
+
+        Ok(blockhash)
     }
 
     /// Get optimal tip amount based on network conditions
@@ -494,5 +516,23 @@ mod tests {
         let base_tip = client.get_optimal_tip(15_000).await;
         assert!(base_tip.is_ok());
         assert!(base_tip.unwrap() >= 15_000);
+    }
+
+    #[tokio::test]
+    async fn test_submit_bundle_mock() {
+        let mut config = JitoConfig::default();
+        config.auth_keypair_path = Some("tests/test-keypair.json".into()); // Make sure this exists or mock it
+
+        let client = JitoClient::new(config);
+
+        use solana_sdk::message::Message;
+        let message = Message::new(&[], None);
+        let transaction = Transaction::new_unsigned(message);
+        let bundle = vec![transaction];
+
+        let result = client.submit_bundle(bundle, None).await;
+
+        // Expected to fail in test env, but should return a Result
+        assert!(result.is_err());
     }
 }

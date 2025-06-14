@@ -11,14 +11,16 @@ mod solana;
 pub mod websocket;
 
 use crate::{
-    arbitrage::engine::{ArbitrageEngine, PriceDataProvider},
+    arbitrage::{
+        engine::{ArbitrageEngine, PriceDataProvider},
+        executor::ArbitrageExecutor,
+    },
     cache::Cache,
     config::settings::Config,
     dex::{
         get_all_clients_arc, get_all_discoverable_clients,
-        pool_discovery::{PoolDiscoveryConfig, PoolDiscoveryService},
+        pool_management::{PoolDiscoveryConfig, PoolDiscoveryService, POOL_PARSER_REGISTRY},
         quote::PoolDiscoverable,
-        pool::POOL_PARSER_REGISTRY,
     },
     error::ArbError,
     metrics::Metrics,
@@ -30,9 +32,10 @@ use crate::{
 };
 use dashmap::DashMap;
 use log::{error, info, warn};
-use solana_sdk::pubkey::Pubkey;
-use std::sync::Arc;
-use tokio::sync::{Mutex, RwLock};
+use solana_client::nonblocking::rpc_client::RpcClient as NonBlockingRpcClient;
+use solana_sdk::{pubkey::Pubkey, signature::{Keypair, Signer, read_keypair_file}};
+use std::{fs, sync::Arc};
+use tokio::sync::Mutex;
 
 // Simple price provider implementation for demonstration
 struct SimplePriceProvider {
@@ -101,7 +104,7 @@ async fn main() -> Result<(), ArbError> {
     info!("🔍 Starting initial pool discovery with enhanced parallel processing...");
     let discovery_start = std::time::Instant::now();
     
-    let discovery_result = pool_discovery_service.discover_and_enrich_all_pools().await?;
+    let discovery_result = pool_discovery_service.discover_and_parse_pools().await?;
     let discovery_duration = discovery_start.elapsed();
     
     info!("✅ Initial discovery complete in {:?}:", discovery_duration);
@@ -191,6 +194,41 @@ async fn main() -> Result<(), ArbError> {
         sol_price: app_config.sol_price_usd.unwrap_or(100.0),
     });
 
+    // Initialize executor if wallet is configured
+    let executor = if let Some(wallet_path) = &app_config.trader_wallet_keypair_path {
+        if !wallet_path.is_empty() && fs::metadata(wallet_path).is_ok() {
+            match read_keypair_file(wallet_path) {
+                Ok(keypair) => {
+                    info!("✅ Loaded trading wallet: {}", keypair.pubkey());
+                    
+                    // Create non-blocking RPC client for executor
+                    let executor_rpc = Arc::new(NonBlockingRpcClient::new(app_config.rpc_url.clone()));
+                    
+                    // Create executor
+                    let executor = Arc::new(ArbitrageExecutor::new(
+                        Arc::new(keypair),
+                        executor_rpc,
+                        None, // Event sender - can be added later for monitoring
+                        app_config.clone(),
+                        metrics.clone(),
+                    ));
+                    
+                    Some(executor)
+                }
+                Err(e) => {
+                    warn!("⚠️ Failed to load wallet from {}: {}. Execution will be disabled.", wallet_path, e);
+                    None
+                }
+            }
+        } else {
+            warn!("⚠️ Wallet path {} not found. Execution will be disabled.", wallet_path);
+            None
+        }
+    } else {
+        warn!("⚠️ No trader wallet configured. Execution will be disabled.");
+        None
+    };
+
     // Initialize enhanced arbitrage engine with hot cache
     let arbitrage_engine = Arc::new(ArbitrageEngine::new(
         hot_cache.clone(),
@@ -200,7 +238,7 @@ async fn main() -> Result<(), ArbError> {
         app_config.clone(),
         metrics.clone(),
         dex_api_clients,
-        None, // Executor will be added later
+        executor,
     ));
 
     // Start enhanced arbitrage engine services

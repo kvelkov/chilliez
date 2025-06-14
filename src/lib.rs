@@ -10,3 +10,11 @@ pub mod websocket;
 pub mod webhooks;
 pub mod cache;
 pub mod helius_client;  // NEW: Helius SDK client management
+pub mod testing; // Testing infrastructure
+
+// Re-export key testing components for easy access
+pub use testing::{
+    MockDexEnvironment, MarketCondition, TestSuiteRunner,
+
+
+};

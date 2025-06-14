@@ -1,6 +1,6 @@
 // src/discovery/service.rs
 use crate::dex::quote::DexClient;
-use crate::utils::pool_validation::{PoolValidationConfig, validate_pools_basic};
+use crate::dex::{PoolValidationConfig, validate_pools_basic};
 use crate::utils::PoolInfo;
 use std::sync::Arc;
 use tokio::sync::mpsc::Sender;

@@ -214,26 +214,34 @@ impl AdvancedMevProtection {
             let optimal_fee = self.calculate_optimal_priority_fee(opportunity, base_fee).await?;
 
             // Add compute budget instructions
-            let mut _tx_instructions = vec![
+            let mut tx_instructions = vec![
                 ComputeBudgetInstruction::set_compute_unit_limit(estimated_cu),
                 ComputeBudgetInstruction::set_compute_unit_price(optimal_fee / estimated_cu as u64),
             ];
 
             // Add MEV protection instructions
             if self.config.use_flashloan_protection {
-                let _protection_instructions = self.create_flashloan_protection_instructions().await?;
-                // _tx_instructions.extend(_protection_instructions);
+                let protection_instructions = self.create_flashloan_protection_instructions().await?;
+                tx_instructions.extend(protection_instructions);
             }
 
             // Add the actual arbitrage instructions
-            // _tx_instructions.extend(instructions.clone());
+            tx_instructions.extend(instructions.clone());
 
             // Add anti-MEV randomization
             if self.config.randomize_execution_timing {
-                let _randomization_instructions = self.create_timing_randomization_instructions().await?;
-                // _tx_instructions.extend(_randomization_instructions);
+                let randomization_instructions = self.create_timing_randomization_instructions().await?;
+                tx_instructions.extend(randomization_instructions);
             }
 
+            // Create a placeholder transaction (would need real wallet and recent blockhash in production)
+            // For now, we'll create a basic transaction structure
+            let transaction = Transaction::new_with_payer(
+                &tx_instructions,
+                None, // payer would be set from wallet in production
+            );
+            
+            bundle_transactions.push(transaction);
             total_compute_units += estimated_cu;
             
             info!("📦 Added opportunity {} to bundle (CU: {}, Fee: {} lamports)", 

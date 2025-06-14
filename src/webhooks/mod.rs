@@ -8,27 +8,25 @@
 //! - Real-time event handling for DEX programs
 
 pub mod helius;
-pub mod helius_sdk;        // NEW: Enhanced Helius SDK integration
-pub mod helius_sdk_stub;   // NEW: Stub module for Helius SDK integration
-pub mod pool_monitor;      // NEW: Pool monitoring coordinator using Helius SDK
-pub mod enhanced_server;   // NEW: Enhanced webhook server for Helius notifications
+pub mod helius_sdk;        // Enhanced Helius SDK integration
+pub mod helius_sdk_stub;   // Stub module for Helius SDK integration
 pub mod server;
 pub mod processor;
 pub mod types;
-pub mod integration;
-pub mod pool_integration;
+pub mod integration;       // Consolidated integration service
 
-// Legacy webhook management (being phased out)
-pub use helius::HeliusWebhookManager;
+// Core functionality
+pub use server::{WebhookServer, HeliusWebhookManager, EnhancedWebhookServer, WebhookServerStats};
+pub use processor::PoolUpdateProcessor;
+pub use types::*;
+
+// Consolidated integration exports
+pub use integration::{
+    WebhookIntegrationService, WebhookStats,
+    IntegratedPoolService, IntegratedPoolStats, PoolUpdateNotification,
+    PoolMonitoringCoordinator, PoolEvent, PoolEventType, PoolMonitorStats, 
+    MonitoredPool, WebhookMetadata
+};
 
 // Helius SDK integration (currently stubbed due to dependency conflicts)
 pub use helius_sdk_stub::{HeliusManager as EnhancedHeliusWebhookManager, HeliusConfig as WebhookConfig, Helius};
-pub use pool_monitor::{PoolMonitoringCoordinator, PoolEvent, PoolEventType, PoolMonitorStats, MonitoredPool};
-pub use enhanced_server::{EnhancedWebhookServer, WebhookServerStats, HeliusWebhookPayload};
-
-// Core functionality
-pub use server::WebhookServer;
-pub use processor::PoolUpdateProcessor;
-pub use integration::{WebhookIntegrationService, WebhookStats};
-pub use pool_integration::{IntegratedPoolService, IntegratedPoolStats, PoolUpdateNotification};
-pub use types::*;

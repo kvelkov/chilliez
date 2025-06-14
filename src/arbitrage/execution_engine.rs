@@ -9,11 +9,11 @@
 
 use crate::{
     arbitrage::{
-        opportunity::{MultiHopArbOpportunity, AdvancedMultiHopOpportunity},
+        opportunity::MultiHopArbOpportunity,
         mev_protection::{AdvancedMevProtection, MevProtectionConfig},
     },
     error::ArbError,
-    utils::{DexType, PoolInfo},
+    utils::DexType,
     solana::rpc::SolanaRpcClient,
 };
 use log::{info, warn, error, debug};
@@ -24,7 +24,6 @@ use solana_sdk::{
     signature::Signature,
     transaction::Transaction,
     message::Message,
-    hash::Hash,
 };
 use std::{
     collections::{HashMap, HashSet},
@@ -500,12 +499,17 @@ impl BatchExecutionEngine {
             // 1. Get recent blockhash
             // 2. Create message with instructions
             // 3. Sign transaction with wallet keypair
+            let blockhash = self.rpc_client.primary_client.get_latest_blockhash().await
+                .map_err(|e| ArbError::RpcError(format!("Failed to get blockhash for batch transaction: {}", e)))?;
             
             debug!("🔧 Creating transaction for opportunity {} in batch {}", 
                    opp_idx, batch.id);
 
             // Placeholder transaction creation
-            let message = Message::new(&opp_instructions, None);
+            // In a real scenario, a payer_pubkey would be needed from a wallet.
+            // For now, using None as payer, which might not be valid for actual execution.
+            let message = Message::new_with_blockhash(&opp_instructions, None, &blockhash);
+            // Transactions created here are unsigned. Signing would typically happen before Jito submission.
             let transaction = Transaction::new_unsigned(message);
             
             transactions.push(transaction);
@@ -561,27 +565,30 @@ impl BatchExecutionEngine {
     }
 
     /// Simulate a single transaction
-    async fn simulate_single_transaction(&self, _transaction: &Transaction, tx_idx: usize) -> Result<SimulationResult, ArbError> {
+    async fn simulate_single_transaction(&self, transaction: &Transaction, tx_idx: usize) -> Result<SimulationResult, ArbError> {
         let start_time = Instant::now();
         
         debug!("🧪 Simulating transaction {}", tx_idx);
 
-        // In real implementation, this would:
-        // 1. Call rpc_client.simulate_transaction()
-        // 2. Parse the simulation response
-        // 3. Extract compute units, logs, and success status
-
-        // Simulate processing time
-        tokio::time::sleep(Duration::from_millis(10)).await;
+        let rpc_response = self.rpc_client.primary_client.simulate_transaction(transaction).await
+            .map_err(|e| {
+                error!("Simulation RPC call failed for tx {}: {:?}", tx_idx, e);
+                e
+            })?;
 
         let simulation_time = start_time.elapsed();
+        let rpc_simulation_result = rpc_response.value;
 
-        // Mock successful simulation for now
+        let success = rpc_simulation_result.err.is_none();
+        let compute_units_consumed = rpc_simulation_result.units_consumed.unwrap_or(0) as u32;
+        let logs = rpc_simulation_result.logs.unwrap_or_default();
+        let error_message = rpc_simulation_result.err.map(|e| format!("{:?}", e)); // Format the TransactionError
+
         Ok(SimulationResult {
-            success: true,
-            compute_units_consumed: 150_000,
-            logs: vec![format!("Program log: Simulated transaction {}", tx_idx)],
-            error_message: None,
+            success,
+            compute_units_consumed,
+            logs,
+            error_message,
             simulation_time_ms: simulation_time.as_millis() as u64,
         })
     }
@@ -612,12 +619,15 @@ impl BatchExecutionEngine {
     async fn create_tip_transaction(&self) -> Result<Transaction, ArbError> {
         // In real implementation, this would:
         // 1. Create a transfer instruction to Jito tip account
+        // 2. Fetch recent blockhash
         // 2. Sign with wallet keypair
         
         debug!("💰 Creating tip transaction: {} lamports", self.config.jito_tip_lamports);
+        let blockhash = self.rpc_client.primary_client.get_latest_blockhash().await
+            .map_err(|e| ArbError::RpcError(format!("Failed to get blockhash for tip transaction: {}", e)))?;
 
         // Placeholder tip transaction
-        let message = Message::new(&[], None);
+        let message = Message::new_with_blockhash(&[], None, &blockhash);
         Ok(Transaction::new_unsigned(message))
     }
 
@@ -743,7 +753,7 @@ impl BatchExecutionEngine {
 
         // Check for pool overlaps (reduces compatibility)
         let mut all_pools = HashSet::new();
-        let mut total_pools = 0;
+        let mut _total_pools = 0;
 
         for opp in opportunities {
             for pool in &opp.pool_path {
@@ -751,7 +761,7 @@ impl BatchExecutionEngine {
                     score -= 0.1; // Penalty for pool overlap
                 }
                 all_pools.insert(*pool);
-                total_pools += 1;
+                _total_pools += 1;
             }
         }
 
@@ -847,7 +857,6 @@ pub struct BatchEngineStatus {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::utils::PoolToken;
 
     fn create_test_opportunity(id: &str, profit_pct: f64, profit_usd: f64) -> MultiHopArbOpportunity {
         MultiHopArbOpportunity {

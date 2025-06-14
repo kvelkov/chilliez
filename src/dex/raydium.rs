@@ -1,6 +1,7 @@
 // src/dex/raydium.rs
 //! Raydium client and parser for on-chain data and instruction building.
 //! This implementation follows the official Raydium V4 layout for maximum accuracy.
+//! Includes Raydium API data models.
 
 use crate::dex::quote::{DexClient, Quote, SwapInfo, PoolDiscoverable};
 use crate::solana::rpc::SolanaRpcClient;
@@ -8,7 +9,7 @@ use crate::utils::{DexType, PoolInfo, PoolParser as UtilsPoolParser, PoolToken};
 use anyhow::{anyhow, Result as AnyhowResult};
 use async_trait::async_trait;
 use bytemuck::{Pod, Zeroable};
-use log::info; // <<< FIX: Removed unused `warn` import
+use log::info;
 use serde::{Deserialize, Serialize};
 use solana_sdk::{
     instruction::{AccountMeta, Instruction},
@@ -248,30 +249,103 @@ impl PoolDiscoverable for RaydiumClient {
     fn dex_name(&self) -> &str { self.get_name() }
 }
 
-// Temporary struct definitions for Raydium API response
-// TODO: Replace with proper raydium_models when available
-#[derive(Debug, Deserialize, Serialize)]
-struct LiquidityFile {
-    official: Vec<RaydiumPool>,
+// =====================================================================================
+// RAYDIUM API DATA MODELS (from raydium_models.rs)
+// =====================================================================================
+
+/// Root structure for Raydium liquidity JSON response
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LiquidityFile {
+    /// Official pools list
+    pub official: Vec<AmmPool>,
+    /// Unofficial pools list (optional)
+    #[serde(default, rename = "unOfficial")]
+    pub un_official: Vec<AmmPool>,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
-struct RaydiumPool {
-    id: String,
+/// Raydium AMM pool information from API
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AmmPool {
+    /// Pool ID (address)
+    pub id: String,
+    /// Base token mint
     #[serde(rename = "baseMint")]
-    base_mint: String,
+    pub base_mint: String,
+    /// Quote token mint
     #[serde(rename = "quoteMint")]
-    quote_mint: String,
-    #[serde(rename = "baseVault")]
-    base_vault: String,
-    #[serde(rename = "quoteVault")]
-    quote_vault: String,
-    #[serde(rename = "baseSymbol")]
-    base_symbol: Option<String>,
-    #[serde(rename = "quoteSymbol")]
-    quote_symbol: Option<String>,
+    pub quote_mint: String,
+    /// LP mint
+    #[serde(rename = "lpMint")]
+    pub lp_mint: String,
+    /// Base token decimals
     #[serde(rename = "baseDecimals")]
-    base_decimals: Option<u8>,
+    pub base_decimals: Option<u8>,
+    /// Quote token decimals
     #[serde(rename = "quoteDecimals")]
-    quote_decimals: Option<u8>,
+    pub quote_decimals: Option<u8>,
+    /// LP token decimals
+    #[serde(rename = "lpDecimals")]
+    pub lp_decimals: Option<u8>,
+    /// Version
+    pub version: u8,
+    /// Program ID
+    #[serde(rename = "programId")]
+    pub program_id: String,
+    /// Authority
+    pub authority: String,
+    /// Open orders
+    #[serde(rename = "openOrders")]
+    pub open_orders: String,
+    /// Target orders
+    #[serde(rename = "targetOrders")]
+    pub target_orders: String,
+    /// Base vault
+    #[serde(rename = "baseVault")]
+    pub base_vault: String,
+    /// Quote vault
+    #[serde(rename = "quoteVault")]
+    pub quote_vault: String,
+    /// Withdraw queue
+    #[serde(rename = "withdrawQueue")]
+    pub withdraw_queue: String,
+    /// LP vault
+    #[serde(rename = "lpVault")]
+    pub lp_vault: String,
+    /// Market version
+    #[serde(rename = "marketVersion")]
+    pub market_version: u8,
+    /// Market program ID
+    #[serde(rename = "marketProgramId")]
+    pub market_program_id: String,
+    /// Market ID
+    #[serde(rename = "marketId")]
+    pub market_id: String,
+    /// Market authority
+    #[serde(rename = "marketAuthority")]
+    pub market_authority: String,
+    /// Market base vault
+    #[serde(rename = "marketBaseVault")]
+    pub market_base_vault: String,
+    /// Market quote vault
+    #[serde(rename = "marketQuoteVault")]
+    pub market_quote_vault: String,
+    /// Market bids
+    #[serde(rename = "marketBids")]
+    pub market_bids: String,
+    /// Market asks
+    #[serde(rename = "marketAsks")]
+    pub market_asks: String,
+    /// Market event queue
+    #[serde(rename = "marketEventQueue")]
+    pub market_event_queue: String,
+    /// Base symbol
+    #[serde(default)]
+    pub base_symbol: Option<String>,
+    /// Quote symbol
+    #[serde(default)]
+    pub quote_symbol: Option<String>,
 }
+
+// =====================================================================================
+// RAYDIUM CLIENT IMPLEMENTATION  
+// =====================================================================================

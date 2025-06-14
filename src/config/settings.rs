@@ -138,7 +138,6 @@ impl Config {
     }
 
     /// Returns a default config for testing purposes.
-    #[cfg(test)] // Add this attribute
     pub fn test_default() -> Self {
         Self {
             min_profit_pct: 0.1,

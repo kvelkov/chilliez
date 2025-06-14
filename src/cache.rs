@@ -49,6 +49,7 @@ impl Cache {
         })
     }
 
+    #[allow(dead_code)] // Helper method for cache key generation
     fn generate_key(prefix: &str, params: &[&str]) -> String {
         let mut key = prefix.to_string();
         for param in params {
@@ -58,6 +59,7 @@ impl Cache {
         key
     }
 
+    #[allow(dead_code)] // Available for future Redis-based caching features
     pub async fn get_json<T: DeserializeOwned>(
         &self,
         key_prefix: &str,
@@ -92,6 +94,7 @@ impl Cache {
         }
     }
 
+    #[allow(dead_code)] // Available for future Redis-based caching features
     pub async fn set_ex<T: Serialize>(
         &self,
         prefix: &str,
@@ -139,6 +142,7 @@ impl Cache {
     }
 
     /// Updates the cache with new pool data, typically called from a WebSocket PoolUpdate handler.
+    #[allow(dead_code)] // Available for future Redis-based pool caching
     pub async fn update_pool_cache<T: Serialize>(
         &self,
         pool_pubkey: &str,

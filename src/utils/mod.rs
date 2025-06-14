@@ -10,8 +10,9 @@ use async_trait::async_trait;
 use serde::{Serialize, Deserialize};
 use std::sync::Arc;
 
-pub mod pool_validation;
-pub mod dex_routing;
+// Removed modules that have been moved to dex folder:
+// - pool_validation -> moved to dex/pool_management.rs
+// - dex_routing -> moved to dex/routing.rs
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PoolInfo {
@@ -173,7 +174,7 @@ pub trait PoolParser: Send + Sync {
     fn parse_pool_data_sync(
         &self,
         address: Pubkey,
-        data: &[u8],
+        _data: &[u8],
     ) -> anyhow::Result<PoolInfo> {
         // For now, provide a basic implementation that doesn't require RPC
         // Individual parsers can override this for better performance

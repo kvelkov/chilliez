@@ -245,7 +245,7 @@ mod tests {
     #[test]
     fn test_exercise_all_token_metadata_cache_and_pool_parser() {
         use crate::solana::accounts::{TokenMetadataCache, TokenMetadata};
-        use crate::dex::pool::{PoolParseFn, POOL_PARSER_REGISTRY, get_pool_parser_fn_for_program};
+        use crate::dex::pool_management::{POOL_PARSER_REGISTRY, get_pool_parser_for_program};
         use solana_sdk::pubkey::Pubkey;
         let cache = TokenMetadataCache::new();
         let _ = TokenMetadata::default();

@@ -370,6 +370,7 @@ impl ArbitrageDetector {
                 input_token_mint: pool1.token_a.mint,
                 output_token_mint: pool2.token_b.mint,
                 intermediate_token_mint: Some(pool1.token_b.mint),
+                estimated_gas_cost: Some(400_000), // Default gas estimate for 2-hop
             })
         } else {
             None
@@ -431,7 +432,7 @@ impl ArbitrageDetector {
         pools: &[Arc<PoolInfo>],
         metrics: &mut DetectionMetrics,
     ) -> Vec<MultiHopArbOpportunity> {
-        let mut opportunities = Vec::new();
+        let opportunities = Vec::new();
         
         // Very limited search for 4-hop to prevent performance issues
         let max_combinations = 500;
@@ -575,6 +576,7 @@ impl ArbitrageDetector {
                 input_token_mint: p1.token_a.mint,
                 output_token_mint: p3.token_b.mint,
                 intermediate_token_mint: Some(p1.token_b.mint),
+                estimated_gas_cost: Some(600_000), // Default gas estimate for 3-hop
             })
         } else {
             None

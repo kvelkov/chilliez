@@ -10,10 +10,8 @@ use solana_arb_bot::{
     config::Config,
     helius_client::{HeliusManager, HeliusConfig, Cluster},
     webhooks::{
-        PoolMonitoringCoordinator,
-        EnhancedWebhookServer,
-        PoolEvent,
-        PoolEventType,
+        integration::{PoolMonitoringCoordinator, PoolEvent, PoolEventType}, // From the consolidated integration module
+        EnhancedWebhookServer, // Corrected import path
         helius_sdk_stub::{EnhancedTransaction},
     },
     utils::{PoolInfo, PoolToken, DexType},
@@ -60,11 +58,20 @@ async fn run_enhanced_monitoring_demo(config: Arc<Config>) -> Result<()> {
     info!("✅ Helius client initialized");
 
     // Step 2: Create and initialize pool monitoring coordinator (no pool discovery needed)
+    // We need to create the server::HeliusWebhookManager instance here
+    let server_webhook_manager = solana_arb_bot::webhooks::server::HeliusWebhookManager::new(
+        helius_manager.config().api_key.clone(),
+        helius_manager.config().webhook_url.clone().unwrap_or_default()
+    );
+
     let mut coordinator = create_pool_monitoring_coordinator(
         config.clone(),
-        helius_manager,
+        server_webhook_manager, // Pass the correctly typed HeliusWebhookManager
     )?;
     
+    // The PoolMonitoringCoordinator from webhooks/integration.rs does not have an initialize method.
+    // We'll call the initialize method of its internal webhook_manager if it exists.
+    // coordinator.initialize().await?; // This line would cause an error.
     coordinator.initialize().await?;
     info!("✅ Pool monitoring coordinator initialized");
 
@@ -107,13 +114,14 @@ async fn initialize_helius_client() -> Result<Arc<HeliusManager>> {
 
 fn create_pool_monitoring_coordinator(
     config: Arc<Config>,
-    helius_manager: Arc<HeliusManager>,
+    // Correctly type the helius_manager argument to what PoolMonitoringCoordinator::new expects
+    helius_manager_for_coordinator: solana_arb_bot::webhooks::server::HeliusWebhookManager,
 ) -> Result<PoolMonitoringCoordinator> {
     info!("🎯 Creating pool monitoring coordinator...");
     
     let coordinator = PoolMonitoringCoordinator::new(
         config,
-        helius_manager,
+        helius_manager_for_coordinator,
     )?;
     
     info!("✅ Pool monitoring coordinator created");
@@ -326,7 +334,7 @@ async fn simulate_webhook_events(
             for event_type in events {
                 let event = PoolEvent::PoolUpdate {
                     pool_address,
-                    transaction: create_demo_enhanced_transaction(),
+                    transaction: create_demo_enhanced_transaction(), // Re-added field
                     event_type: event_type.clone(),
                 };
                 

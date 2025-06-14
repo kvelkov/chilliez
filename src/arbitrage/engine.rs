@@ -5,15 +5,14 @@ use crate::{
         dynamic_threshold::DynamicThresholdUpdater,
         opportunity::MultiHopArbOpportunity,
         executor::ArbitrageExecutor,
-        batch_executor::{AdvancedBatchExecutor, BatchExecutionConfig},
         pipeline::ExecutionPipeline,
     },
     config::settings::Config,
-    dex::DexClient,
+    dex::{DexClient, PoolValidationConfig, validate_pools, validate_pools_basic, validate_single_pool},
     error::ArbError,
     metrics::Metrics,
     solana::{rpc::SolanaRpcClient, websocket::SolanaWebsocketManager},
-    utils::{PoolInfo, PoolParser, pool_validation::{PoolValidationConfig, validate_pools, validate_pools_basic, validate_single_pool}},
+    utils::{PoolInfo, PoolParser},
 };
 
 use dashmap::DashMap;
@@ -58,7 +57,6 @@ pub struct ArbitrageEngine {
     
     // Sprint 2: Advanced execution components
     pub executor: Option<Arc<ArbitrageExecutor>>,
-    pub batch_executor: Arc<Mutex<AdvancedBatchExecutor>>,
     pub execution_pipeline: Arc<Mutex<ExecutionPipeline>>,
     
     // Sprint 2: Performance tracking
@@ -106,22 +104,14 @@ impl ArbitrageEngine {
             verify_on_chain: false, // Expensive, off by default
         };
 
-        // Sprint 2: Initialize advanced execution components with default batch config
-        let batch_config = BatchExecutionConfig {
-            max_batch_size: 5, // Default batch size
-            max_compute_units: config.transaction_cu_limit.unwrap_or(1_400_000),
-            max_batch_execution_time_ms: 3000,
-            priority_threshold: 7,
-        };
-        
-        let batch_executor = Arc::new(Mutex::new(AdvancedBatchExecutor::new(batch_config)));
+        // Sprint 2: Initialize advanced execution components
         let execution_pipeline = Arc::new(Mutex::new(ExecutionPipeline::new()));
         let detection_metrics = Arc::new(Mutex::new(DetectionMetrics::default()));
 
         info!("🚀 Enhanced ArbitrageEngine initialized with Sprint 2 features:");
         info!("   🔥 Hot cache integration: {} pools", hot_cache.len());
         info!("   🎯 DEX providers: {}", dex_providers.len());
-        info!("   ⚡ Batch execution: enabled");
+        info!("   ⚡ Batch execution: integrated into executor");
         info!("   📊 Advanced metrics: enabled");
 
         Self {
@@ -141,7 +131,6 @@ impl ArbitrageEngine {
             dynamic_threshold_updater,
             pool_validation_config,
             executor,
-            batch_executor,
             execution_pipeline,
             detection_metrics,
             execution_enabled: Arc::new(AtomicBool::new(true)),
@@ -957,7 +946,6 @@ impl Clone for ArbitrageEngine {
             dynamic_threshold_updater: self.dynamic_threshold_updater.as_ref().map(Arc::clone),
             pool_validation_config: self.pool_validation_config.clone(),
             executor: self.executor.as_ref().map(Arc::clone),
-            batch_executor: Arc::clone(&self.batch_executor),
             execution_pipeline: Arc::clone(&self.execution_pipeline),
             detection_metrics: Arc::clone(&self.detection_metrics),
             execution_enabled: Arc::clone(&self.execution_enabled),

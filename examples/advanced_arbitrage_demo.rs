@@ -274,6 +274,7 @@ impl ArbitrageDemo {
             input_token_mint: Pubkey::new_unique(),
             output_token_mint: Pubkey::new_unique(),
             intermediate_token_mint: None,
+            estimated_gas_cost: None, // Add the missing field
         })
     }
 

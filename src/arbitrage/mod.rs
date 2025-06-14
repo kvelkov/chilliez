@@ -1,3 +1,5 @@
+// In mod.rs
+pub mod calculator;
 use crate::metrics::Metrics;
 use std::sync::Arc;
 use tokio::sync::{mpsc::{self, Receiver, Sender}, Mutex};
@@ -5,7 +7,6 @@ use log::{info, error};
 
 // Module declarations
 pub mod engine;
-pub mod calculator;
 pub mod pipeline;
 pub mod fee_manager;
 pub mod executor;
@@ -13,8 +14,6 @@ pub mod opportunity;
 pub mod dynamic_threshold;
 pub mod detector;
 pub mod path_finder;
-pub mod batch_executor;
-pub mod metrics;
 pub mod tests;
 
 // Sprint 3: Advanced MEV Protection and ML Integration
@@ -30,7 +29,8 @@ pub use self::opportunity::{ArbHop, MultiHopArbOpportunity, AdvancedMultiHopOppo
 pub use self::pipeline::ExecutionPipeline;
 pub use self::dynamic_threshold::DynamicThresholdUpdater;
 pub use self::path_finder::{AdvancedPathFinder, ArbitragePath};
-pub use self::batch_executor::{AdvancedBatchExecutor, BatchExecutionConfig, BatchOpportunity};
+// Batch execution types are available from execution_engine module
+pub use self::execution_engine::BatchExecutionConfig;
 
 // Sprint 3: Re-export new components
 pub use mev_protection::{AdvancedMevProtection, MevProtectionConfig, GasOptimizationMetrics};

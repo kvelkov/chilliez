@@ -117,6 +117,8 @@ pub struct MultiHopArbOpportunity {
     pub output_token_mint: Pubkey,
     /// Mint of the token after the first hop for 2-hop (or first intermediate for multi-hop).
     pub intermediate_token_mint: Option<Pubkey>,
+    /// Optional estimated gas cost for transaction execution.
+    pub estimated_gas_cost: Option<u64>,
 }
 
 impl MultiHopArbOpportunity {
@@ -281,6 +283,7 @@ impl Default for MultiHopArbOpportunity {
             input_token_mint: Pubkey::default(),
             output_token_mint: Pubkey::default(),
             intermediate_token_mint: None,
+            estimated_gas_cost: None,
         }
     }
 }
@@ -396,6 +399,7 @@ impl AdvancedMultiHopOpportunity {
             input_token_mint: self.path.first().map(|h| h.input_token).unwrap_or_default(),
             output_token_mint: self.path.last().map(|h| h.output_token).unwrap_or_default(),
             intermediate_token_mint: None, // Could be computed from intermediate hops
+            estimated_gas_cost: Some(self.estimated_gas_cost),
         }
     }
 }

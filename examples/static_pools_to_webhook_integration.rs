@@ -4,7 +4,7 @@
 
 use solana_arb_bot::{
     config::Config,
-    webhooks::pool_integration::IntegratedPoolService,
+    webhooks::integration::IntegratedPoolService,
     dex::{
         orca::OrcaClient,
         raydium::RaydiumClient,

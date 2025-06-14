@@ -6,6 +6,10 @@ use thiserror::Error; // Import thiserror::Error
 
 #[derive(Debug, Clone, Error)] // Add thiserror::Error derive
 pub enum ArbError {
+    /// Unsupported DEX or operation
+    #[error("Unsupported DEX: {0}")]
+    UnsupportedDex(String),
+    
     /// Network/connectivity issues
     #[error("Network Error: {0}")]
     NetworkError(String),
@@ -96,10 +100,18 @@ impl From<anyhow::Error> for ArbError {
     }
 }
 
+// Implement From<solana_client::client_error::ClientError> for ArbError
+impl From<solana_client::client_error::ClientError> for ArbError {
+    fn from(err: solana_client::client_error::ClientError) -> Self {
+        ArbError::RpcError(format!("Solana client error: {}", err))
+    }
+}
+
 impl ArbError {
     /// Determines if an error is recoverable through retry
     pub fn is_recoverable(&self) -> bool {
         match self {
+            ArbError::UnsupportedDex(_) => false, // DEX not supported
             ArbError::NetworkError(_) => true,
             ArbError::WebSocketError(_) => true,
             ArbError::DexError(msg) => {
@@ -161,6 +173,7 @@ impl ArbError {
     /// Categorizes error for metrics and monitoring
     pub fn categorize(&self) -> ErrorCategory {
         match self {
+            ArbError::UnsupportedDex(_) => ErrorCategory::Configuration,
             ArbError::NetworkError(_) | ArbError::RpcError(_) => ErrorCategory::Network,
             ArbError::WebSocketError(_) => ErrorCategory::DataFeed,
             ArbError::DexError(_) => ErrorCategory::Trading,

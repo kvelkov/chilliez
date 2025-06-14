@@ -3,7 +3,7 @@
 
 use solana_arb_bot::{
     config::Config,
-    webhooks::IntegratedPoolService,
+    webhooks::integration::IntegratedPoolService,
     dex::{
         orca::OrcaClient,
         raydium::RaydiumClient,
@@ -161,7 +161,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn display_integrated_stats(stats: &solana_arb_bot::webhooks::IntegratedPoolStats, label: &str) {
+fn display_integrated_stats(stats: &solana_arb_bot::webhooks::integration::IntegratedPoolStats, label: &str) {
     println!("📊 INTEGRATED SERVICE STATS ({})", label);
     println!("{}", "=".repeat(30 + label.len()));
     println!("   Total pools in cache: {}", stats.total_pools);

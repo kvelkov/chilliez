@@ -52,6 +52,7 @@ pub struct TransactionEvent;
 #[derive(Debug, Clone)]
 pub enum Source {
     Other(String),
+    Unknown,
 }
 
 #[derive(Debug, Clone)]

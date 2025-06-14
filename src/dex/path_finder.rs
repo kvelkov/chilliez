@@ -1,20 +1,59 @@
 // src/dex/path_finder.rs
+//! Path finding for arbitrage opportunities and opportunity data structures.
+//! This module combines path_finder.rs and opportunity.rs for better organization.
 
 use crate::dex::quoting_engine::QuotingEngineOperations;
-use crate::dex::quote::{DexClient, Quote};
-use crate::dex::opportunity::{HopInfo, MultiHopArbOpportunity};
-use crate::utils::{DexType, PoolInfo, PoolToken}; // Added PoolToken
-use anyhow::{anyhow, Context, Result}; // Added anyhow macro
+use crate::dex::quote::DexClient;
+use crate::utils::{DexType, PoolInfo};
+#[cfg(test)]
+use crate::utils::PoolToken;
+use anyhow::{anyhow, Result};
 use dashmap::DashMap;
 use log::{debug, error, info, warn};
 use petgraph::prelude::DiGraphMap; // Changed import for DiGraphMap
 use petgraph::algo::find_negative_cycle;
+use serde::{Deserialize, Serialize};
 use solana_sdk::pubkey::Pubkey;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 use tokio::sync::{broadcast, RwLock};
 use uuid::Uuid;
+
+/// Represents a single hop (swap) in an arbitrage path.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HopInfo {
+    pub pool_address: Pubkey,
+    pub dex_type: DexType,
+    pub input_mint: Pubkey,
+    pub output_mint: Pubkey,
+    pub input_amount: u64,
+    pub output_amount: u64,
+    // Potentially add estimated fee for this hop if available
+}
+
+/// Represents a multi-hop arbitrage opportunity.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MultiHopArbOpportunity {
+    /// A unique identifier for this opportunity (e.g., hash of hops and timestamp).
+    pub id: String,
+    /// The sequence of swaps (hops) that make up the arbitrage.
+    pub hops: Vec<HopInfo>,
+    /// The initial token mint for the arbitrage cycle.
+    pub start_token_mint: Pubkey,
+    /// The final token mint (should be same as start_token_mint for an arbitrage).
+    pub end_token_mint: Pubkey,
+    /// The initial amount of `start_token_mint` used for the arbitrage.
+    pub initial_input_amount: u64,
+    /// The final amount of `end_token_mint` received after all hops.
+    pub final_output_amount: u64,
+    /// Estimated profit in basis points (e.g., 100 bips = 1%).
+    pub profit_bps: u32,
+    /// Optional: Estimated profit in USD (requires token price data).
+    pub estimated_profit_usd: Option<f64>,
+    /// Optional: A score indicating the risk or reliability of this opportunity.
+    pub risk_score: Option<f32>,
+}
 
 /// Configuration for the arbitrage discovery process.
 #[derive(Debug, Clone)]
@@ -81,7 +120,7 @@ impl PathFinder {
         let mut graph = self.market_graph.write().await;
         graph.clear(); // Simple strategy: clear and rebuild.
 
-        let mut edges_added = 0;
+        let mut _edges_added = 0;
         let mut pools_processed = 0;
 
         for entry in self.pool_cache.iter() {
@@ -116,7 +155,7 @@ impl PathFinder {
                             if rate_a_to_b > 0.0 {
                                 let weight = -rate_a_to_b.ln();
                                 graph.add_edge(pool_info.token_a.mint, pool_info.token_b.mint, weight);
-                                edges_added += 1;
+                                _edges_added += 1;
                                 debug!("Graph edge: {} -> {} via {} (Pool: {}), Rate: {:.6}, Weight: {:.6}",
                                        pool_info.token_a.symbol, pool_info.token_b.symbol, dex_client.get_name(), pool_info.address, rate_a_to_b, weight);
                             }
@@ -141,7 +180,7 @@ impl PathFinder {
                             if rate_b_to_a > 0.0 {
                                 let weight = -rate_b_to_a.ln();
                                 graph.add_edge(pool_info.token_b.mint, pool_info.token_a.mint, weight);
-                                edges_added += 1;
+                                _edges_added += 1;
                                 debug!("Graph edge: {} -> {} via {} (Pool: {}), Rate: {:.6}, Weight: {:.6}",
                                        pool_info.token_b.symbol, pool_info.token_a.symbol, dex_client.get_name(), pool_info.address, rate_b_to_a, weight);
                             }
@@ -279,7 +318,6 @@ impl PathFinder {
         }
 
         let start_token_mint = cycle_path[0];
-        let mut initial_amount_atomic = 0u64;
 
         // Find decimals for the start_token_mint
         let mut start_token_decimals: Option<u8> = None;
@@ -289,7 +327,7 @@ impl PathFinder {
             if pool.token_b.mint == start_token_mint { start_token_decimals = Some(pool.token_b.decimals); break; }
         }
         let decimals = start_token_decimals.ok_or_else(|| anyhow!("Could not find decimals for start token {}", start_token_mint))?;
-        initial_amount_atomic = 10u64.pow(decimals as u32); // 1 full unit
+        let initial_amount_atomic = 10u64.pow(decimals as u32); // 1 full unit
 
         let mut current_amount_atomic = initial_amount_atomic;
         let mut actual_hops: Vec<HopInfo> = Vec::new();
@@ -367,7 +405,7 @@ impl PathFinder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dex::quoting_engine::{AdvancedQuotingEngine, QuotingEngineOperations}; // Import new trait
+    use crate::dex::quoting_engine::QuotingEngineOperations;
     use crate::utils::DexType;
     use crate::dex::quote::Quote;
     use tokio::sync::broadcast;

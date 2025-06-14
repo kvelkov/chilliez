@@ -1228,7 +1228,40 @@ impl ArbitrageOrchestrator {
         Ok(results)
     }
 
-    /// Advanced arbitrage calculation using high-precision mathematics
+    /// Integrate with pool discovery service for enhanced cache management.
+    pub async fn integrate_with_pool_discovery(&self, pool_discovery: &Arc<crate::dex::discovery::PoolDiscoveryService>) -> Result<(), ArbError> {
+        info!("🔗 Integrating ArbitrageOrchestrator with PoolDiscoveryService...");
+        
+        // Sync caches bidirectionally
+        pool_discovery.sync_with_hot_cache(&self.hot_cache).await.map_err(ArbError::from)?;
+        
+        // Get cache statistics
+        let (discovery_cache_size, dex_types) = pool_discovery.get_cache_stats();
+        let hot_cache_size = self.hot_cache.len();
+        
+        info!("Cache integration complete:");
+        info!("  🔥 Hot cache: {} pools", hot_cache_size);
+        info!("  📊 Discovery cache: {} pools across DEXs: {:?}", discovery_cache_size, dex_types);
+        
+        Ok(())
+    }
+
+    /// Use pool discovery service to find optimal pools for token pairs.
+    pub fn find_pools_for_arbitrage(&self, pool_discovery: &Arc<crate::dex::discovery::PoolDiscoveryService>, token_a: &Pubkey, token_b: &Pubkey) -> Vec<Arc<PoolInfo>> {
+        pool_discovery.find_pools_for_tokens(token_a, token_b)
+    }
+
+    /// Get pools by DEX type using discovery service.
+    pub fn get_pools_by_dex(&self, pool_discovery: &Arc<crate::dex::discovery::PoolDiscoveryService>, dex_type: &crate::utils::DexType) -> Vec<Arc<PoolInfo>> {
+        pool_discovery.get_pools_by_dex(dex_type)
+    }
+
+    /// Check if a token pair is banned using discovery service.
+    pub fn is_pair_banned(&self, pool_discovery: &Arc<crate::dex::discovery::PoolDiscoveryService>, token_a: &Pubkey, token_b: &Pubkey) -> bool {
+        pool_discovery.is_pair_banned(token_a, token_b)
+    }
+
+    /// Enhanced arbitrage calculation using high-precision mathematics
     /// Implements optimal input calculation, cycle detection, and execution strategy selection
     pub async fn calculate_advanced_arbitrage(
         &self,

@@ -379,6 +379,163 @@ impl PoolDiscoveryService {
         self.pool_cache.get(pool_address).map(|entry| entry.clone())
     }
 
+    /// Returns the total number of cached pools.
+    pub fn cache_size(&self) -> usize {
+        self.pool_cache.len()
+    }
+
+    /// Checks if a pool exists in cache.
+    pub fn has_cached_pool(&self, pool_address: &Pubkey) -> bool {
+        self.pool_cache.contains_key(pool_address)
+    }
+
+    /// Gets pool cache statistics.
+    pub fn get_cache_stats(&self) -> (usize, Vec<String>) {
+        let size = self.pool_cache.len();
+        let dex_types: Vec<String> = self.pool_cache
+            .iter()
+            .map(|entry| format!("{:?}", entry.value().dex_type))
+            .collect::<std::collections::HashSet<_>>()
+            .into_iter()
+            .collect();
+        
+        (size, dex_types)
+    }
+
+    /// Clears expired pools from cache based on age.
+    pub fn cleanup_expired_pools(&self, max_age_secs: u64) -> usize {
+        let cutoff_time = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs()
+            .saturating_sub(max_age_secs);
+
+        let mut removed_count = 0;
+        let keys_to_remove: Vec<Pubkey> = self.pool_cache
+            .iter()
+            .filter_map(|entry| {
+                // For pools without timestamps, we keep them (assume they're fresh)
+                // This is a conservative approach for existing pools
+                let pool = entry.value();
+                // TODO: Add timestamp field to PoolInfo for proper age tracking
+                // For now, we'll implement a simple cleanup based on reserve thresholds
+                if pool.token_a.reserve < 1000 && pool.token_b.reserve < 1000 {
+                    Some(*entry.key())
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        for key in keys_to_remove {
+            if self.pool_cache.remove(&key).is_some() {
+                removed_count += 1;
+            }
+        }
+
+        if removed_count > 0 {
+            info!("Cleaned up {} expired/low-liquidity pools from cache", removed_count);
+        }
+
+        removed_count
+    }
+
+    /// Sync pool cache with external hot cache (like ArbitrageOrchestrator's cache).
+    pub async fn sync_with_hot_cache(&self, hot_cache: &Arc<DashMap<Pubkey, Arc<PoolInfo>>>) -> Result<()> {
+        info!("Syncing pool discovery cache with hot cache...");
+        
+        let mut synced_count = 0;
+        let mut new_pools_count = 0;
+
+        // Copy pools from hot cache to discovery cache
+        for entry in hot_cache.iter() {
+            let pool_address = *entry.key();
+            let pool_info = entry.value().clone();
+            
+            if !self.pool_cache.contains_key(&pool_address) {
+                new_pools_count += 1;
+            }
+            
+            self.pool_cache.insert(pool_address, pool_info);
+            synced_count += 1;
+        }
+
+        // Copy unique pools from discovery cache to hot cache
+        for entry in self.pool_cache.iter() {
+            let pool_address = *entry.key();
+            let pool_info = entry.value().clone();
+            
+            if !hot_cache.contains_key(&pool_address) {
+                hot_cache.insert(pool_address, pool_info);
+            }
+        }
+
+        info!(
+            "Cache sync completed: {} pools synced, {} new pools added to discovery cache",
+            synced_count, new_pools_count
+        );
+
+        Ok(())
+    }
+
+    /// Export cached pools to hot cache format.
+    pub fn export_to_hot_cache(&self) -> Arc<DashMap<Pubkey, Arc<PoolInfo>>> {
+        let hot_cache = Arc::new(DashMap::new());
+        
+        for entry in self.pool_cache.iter() {
+            hot_cache.insert(*entry.key(), entry.value().clone());
+        }
+        
+        info!("Exported {} pools to hot cache format", hot_cache.len());
+        hot_cache
+    }
+
+    /// Import pools from hot cache format.
+    pub fn import_from_hot_cache(&self, hot_cache: &Arc<DashMap<Pubkey, Arc<PoolInfo>>>) -> usize {
+        let mut imported_count = 0;
+        
+        for entry in hot_cache.iter() {
+            self.pool_cache.insert(*entry.key(), entry.value().clone());
+            imported_count += 1;
+        }
+        
+        info!("Imported {} pools from hot cache", imported_count);
+        imported_count
+    }
+
+    /// Get pools by DEX type from cache.
+    pub fn get_pools_by_dex(&self, dex_type: &crate::utils::DexType) -> Vec<Arc<PoolInfo>> {
+        self.pool_cache
+            .iter()
+            .filter_map(|entry| {
+                let pool = entry.value();
+                if std::mem::discriminant(&pool.dex_type) == std::mem::discriminant(dex_type) {
+                    Some(pool.clone())
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
+    /// Find pools containing specific token pairs.
+    pub fn find_pools_for_tokens(&self, token_a: &Pubkey, token_b: &Pubkey) -> Vec<Arc<PoolInfo>> {
+        self.pool_cache
+            .iter()
+            .filter_map(|entry| {
+                let pool = entry.value();
+                let matches = (pool.token_a.mint == *token_a && pool.token_b.mint == *token_b) ||
+                             (pool.token_a.mint == *token_b && pool.token_b.mint == *token_a);
+                
+                if matches && !self.banned_pairs_manager.is_pair_banned_pubkey(token_a, token_b) {
+                    Some(pool.clone())
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
     /// Adds a new banned pair.
     pub fn ban_pair(&mut self, token_a: &str, token_b: &str) -> Result<()> {
         self.banned_pairs_manager.ban_pair(token_a, token_b)

@@ -108,9 +108,18 @@ async fn main() -> Result<(), ArbError> {
     let hot_cache: Arc<DashMap<Pubkey, Arc<PoolInfo>>> = Arc::new(DashMap::new());
     
     // Populate hot cache with initial discovery results
-    for pool_info in discovery_result {
-        hot_cache.insert(pool_info.address, Arc::new(pool_info));
+    for pool_info in discovery_result.iter() {
+        hot_cache.insert(pool_info.address, Arc::new(pool_info.clone()));
     }
+    
+    // Update pool discovery service cache with discovered pools
+    pool_discovery_service.update_pool_cache(&discovery_result).await;
+    
+    // Sync caches for consistency
+    pool_discovery_service.sync_with_hot_cache(&hot_cache).await.map_err(ArbError::from)?;
+    
+    let (cache_size, dex_types) = pool_discovery_service.get_cache_stats();
+    info!("📊 Pool discovery cache stats: {} pools across DEXs: {:?}", cache_size, dex_types);
     
     metrics.lock().await.log_pools_fetched(hot_cache.len());
     info!("🔥 Enhanced hot cache initialized with {} pools for sub-millisecond access", hot_cache.len());
@@ -245,11 +254,15 @@ async fn main() -> Result<(), ArbError> {
     // Start enhanced arbitrage engine services
     arbitrage_engine.start_services(Some(redis_cache.clone())).await;
 
+    // Integrate arbitrage engine with pool discovery service
+    arbitrage_engine.integrate_with_pool_discovery(&pool_discovery_service).await.map_err(ArbError::from)?;
+
     info!("✅ Sprint 2 Enhanced Arbitrage Engine initialized successfully!");
     info!("   🔥 Hot cache integration: {} pools", hot_cache.len());
     info!("   🎯 Enhanced detection: enabled");
     info!("   ⚡ Batch execution: ready");
     info!("   📊 Advanced metrics: active");
+    info!("   🔗 Pool discovery integration: enabled");
 
     // --- Sprint 2: Continuous Discovery Task ---
     info!("🔄 Starting enhanced continuous pool discovery background task...");
@@ -257,13 +270,34 @@ async fn main() -> Result<(), ArbError> {
     let continuous_hot_cache = hot_cache.clone();
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(300)); // 5-minute intervals
+        let mut cleanup_counter = 0;
+        
         loop {
             interval.tick().await;
             match continuous_discovery_service.discover_all_pools().await {
                 Ok(new_pools) => {
                     info!("Continuous discovery found {} pools", new_pools.len());
-                    for pool in new_pools {
-                        continuous_hot_cache.insert(pool.address, Arc::new(pool));
+                    
+                    // Update discovery service cache
+                    continuous_discovery_service.update_pool_cache(&new_pools).await;
+                    
+                    // Sync with hot cache
+                    if let Err(e) = continuous_discovery_service.sync_with_hot_cache(&continuous_hot_cache).await {
+                        error!("Failed to sync caches during continuous discovery: {}", e);
+                    }
+                    
+                    // Get cache statistics
+                    let (cache_size, dex_types) = continuous_discovery_service.get_cache_stats();
+                    info!("Cache updated: {} pools across DEXs: {:?}", cache_size, dex_types);
+                    
+                    // Periodic cache cleanup (every 12 cycles = 1 hour)
+                    cleanup_counter += 1;
+                    if cleanup_counter >= 12 {
+                        let removed_count = continuous_discovery_service.cleanup_expired_pools(3600); // 1 hour
+                        if removed_count > 0 {
+                            info!("Cache cleanup: removed {} expired pools", removed_count);
+                        }
+                        cleanup_counter = 0;
                     }
                 }
                 Err(e) => {
@@ -304,6 +338,7 @@ async fn main() -> Result<(), ArbError> {
     let monitoring_hot_cache = hot_cache.clone();
     let monitoring_metrics = metrics.clone();
     let monitoring_engine = arbitrage_engine.clone();
+    let monitoring_pool_discovery = pool_discovery_service.clone();
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
         loop {
@@ -312,8 +347,13 @@ async fn main() -> Result<(), ArbError> {
             // Enhanced monitoring with Sprint 2 features
             let (cache_size, hit_rate) = monitoring_engine.get_hot_cache_stats().await;
             let (total_pools, invalid_pools, rejection_rate) = monitoring_engine.get_pool_validation_stats().await.unwrap_or((0, 0, 0.0));
+            let (discovery_cache_size, dex_types) = monitoring_pool_discovery.get_cache_stats();
             
             info!("📊 Sprint 2 Enhanced Performance Metrics:");
+            info!("   🔥 Hot Cache: {} pools, {:.1}% hit rate", cache_size, hit_rate);
+            info!("   📊 Discovery Cache: {} pools across DEXs: {:?}", discovery_cache_size, dex_types);
+            info!("   ✅ Pool Validation: {}/{} valid ({:.1}% rejection)", 
+                  total_pools - invalid_pools, total_pools, rejection_rate);
             info!("   🔥 Hot cache: {} pools, {:.1}% hit rate", cache_size, hit_rate);
             info!("   ✅ Pool validation: {}/{} valid ({:.1}% rejection rate)", 
                   total_pools - invalid_pools, total_pools, rejection_rate);

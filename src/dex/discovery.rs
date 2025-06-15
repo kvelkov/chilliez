@@ -349,6 +349,8 @@ impl PoolDiscoveryService {
         self.pool_cache.iter().map(|entry| entry.value().clone()).collect()
     }
 
+    // The following methods are currently unused and are left for future use or reference.
+    /*
     /// Get a specific cached pool
     pub fn get_cached_pool(&self, address: &Pubkey) -> Option<Arc<PoolInfo>> {
         self.pool_cache.get(address).map(|entry| entry.value().clone())
@@ -441,6 +443,7 @@ impl PoolDiscoveryService {
         let banned_manager = self.banned_pairs_manager.lock().await;
         banned_manager.is_pair_banned_by_pubkey(token_a, token_b)
     }
+    */
 }
 
 // =====================================================================================
@@ -474,7 +477,7 @@ pub fn find_dex_client_for_pool(
 }
 
 /// Groups pools by their DEX type for batch operations
-pub fn group_pools_by_dex(pools: &[PoolInfo]) -> HashMap<String, Vec<&PoolInfo>> {
+pub fn _group_pools_by_dex(pools: &[PoolInfo]) -> HashMap<String, Vec<&PoolInfo>> {
     let mut grouped = HashMap::new();
     
     for pool in pools {
@@ -496,7 +499,7 @@ pub fn group_pools_by_dex(pools: &[PoolInfo]) -> HashMap<String, Vec<&PoolInfo>>
 }
 
 /// Find pools that support a specific token pair
-pub fn find_pools_for_pair(
+pub fn _find_pools_for_pair(
     pools: &[Arc<PoolInfo>], 
     token_a: &Pubkey, 
     token_b: &Pubkey
@@ -516,7 +519,7 @@ pub fn find_pools_for_pair(
 // =====================================================================================
 
 /// Basic pool validation function for backward compatibility
-pub fn validate_pools(pools: Vec<PoolInfo>, _config: &PoolValidationConfig) -> Vec<PoolInfo> {
+pub fn _validate_pools(pools: Vec<PoolInfo>, _config: &PoolValidationConfig) -> Vec<PoolInfo> {
     pools
         .into_iter()
         .filter(|pool| {

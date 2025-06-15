@@ -1,11 +1,12 @@
 //! Arbitrage Module
 //! 
-//! This module contains all arbitrage-related functionality organized in a flat structure:
-//! - orchestrator: Central control and coordination
+//! This module contains all arbitrage-related functionality organized in a modular structure:
+//! - orchestrator: Modular central control and coordination (core, detection, execution, concurrency)
 //! - strategy: Opportunity detection and path finding
 //! - execution: Trade execution (both HFT and batch)
-//! - analysis: Mathematical analysis, fees, and thresholds (to be created)
-//! - mev: MEV protection and Jito integration (to be created)
+//! - analysis: Mathematical analysis, fees, and thresholds
+//! - mev: MEV protection and Jito integration
+//! - safety: Transaction safety, retry logic, and recovery
 
 use crate::metrics::Metrics;
 use std::sync::Arc;
@@ -21,13 +22,22 @@ pub mod opportunity;
 pub mod tests;
 pub mod calculator_tests;
 
-// New consolidated modules (flat structure)
-pub mod orchestrator;     // Central controller (formerly engine.rs)
+// Modular orchestrator (replaces the monolithic orchestrator.rs)
+pub mod orchestrator;     // Modular central controller with focused components
+
+// Specialized modules
 pub mod strategy;         // Opportunity detection and path finding
 pub mod execution;        // All execution logic (HFT + batch)
 pub mod analysis;         // Mathematical analysis, fees, thresholds
 pub mod mev;              // MEV protection and Jito integration
 pub mod safety;           // Transaction safety, retry logic, and recovery
+
+// New modular architecture (refactored from orchestrator.rs) - temporarily disabled
+// pub mod types;            // Common types and enums
+// pub mod market_data;      // Market data and price feeds
+// pub mod execution_manager; // Execution coordination
+// pub mod strategy_manager; // Strategy coordination
+// pub mod orchestrator_new; // New simplified orchestrator
 
 // =============================================================================
 // Public Re-exports (New Flat Structure)
@@ -47,6 +57,12 @@ pub use self::analysis::{
     VolatilityTracker, DynamicThresholdUpdater, FeeBreakdown, SlippageModel, XYKSlippageModel,
     OptimalInputResult, SimulationResult as AnalysisSimulationResult, ContractSelector, ExecutionStrategy
 };
+
+// New modular components (temporarily disabled)
+// pub use self::types::{ExecutionStrategy as TypesExecutionStrategy, CompetitivenessAnalysis, ExecutionRecommendation, DetectionMetrics};
+// pub use self::market_data::{MarketDataManager, PriceDataProvider};
+// pub use self::execution_manager::ExecutionManager;
+// pub use self::strategy_manager::StrategyManager;
 pub use self::mev::{
     JitoHandler, MevProtectionConfig, JitoConfig, GasOptimizationMetrics, NetworkConditions,
     MevProtectionStrategy, MevProtectionStatus, JitoBundleResult

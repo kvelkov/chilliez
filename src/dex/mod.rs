@@ -30,8 +30,7 @@ pub use api::{
 pub use discovery::{
     // Used in orchestrator.rs and webhooks:
     PoolValidationConfig, BannedPairsManager,
-    validate_pools, validate_single_pool,
-    group_pools_by_dex, find_pools_for_pair,
+    validate_single_pool,
     // Note: PoolDiscoveryService, find_dex_client_for_pool, POOL_PARSER_REGISTRY
     // are imported directly from discovery in main.rs and other places
 };

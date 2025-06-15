@@ -53,27 +53,33 @@ impl MarketGraph {
             if liquidity > 0 {
                 let rate_a_to_b = self.calculate_exchange_rate(pool, true);
                 let rate_b_to_a = self.calculate_exchange_rate(pool, false);
-                
-                // Add edges in both directions with -ln(rate) as weight
+                println!("[add_pool] {}-{}: rate_a_to_b = {}, rate_b_to_a = {}", pool.token_a.symbol, pool.token_b.symbol, rate_a_to_b, rate_b_to_a);
                 if rate_a_to_b > 0.0 {
                     let weight_a_to_b = -rate_a_to_b.ln();
+                    println!("[add_pool] Adding edge {} -> {} (weight: {}, rate: {})", pool.token_a.symbol, pool.token_b.symbol, weight_a_to_b, rate_a_to_b);
                     self.graph.add_edge(node_a, node_b, EdgeWeight {
                         weight: weight_a_to_b,
                         exchange_rate: rate_a_to_b,
                         pool_address: pool.address,
                         _liquidity: Some(liquidity),
                     });
+                } else {
+                    println!("[add_pool] Skipping edge {} -> {} due to zero rate", pool.token_a.symbol, pool.token_b.symbol);
                 }
-                
                 if rate_b_to_a > 0.0 {
                     let weight_b_to_a = -rate_b_to_a.ln();
+                    println!("[add_pool] Adding edge {} -> {} (weight: {}, rate: {})", pool.token_b.symbol, pool.token_a.symbol, weight_b_to_a, rate_b_to_a);
                     self.graph.add_edge(node_b, node_a, EdgeWeight {
                         weight: weight_b_to_a,
                         exchange_rate: rate_b_to_a,
                         pool_address: pool.address,
                         _liquidity: Some(liquidity),
                     });
+                } else {
+                    println!("[add_pool] Skipping edge {} -> {} due to zero rate", pool.token_b.symbol, pool.token_a.symbol);
                 }
+            } else {
+                println!("[add_pool] Skipping pool {}-{} due to zero liquidity", pool.token_a.symbol, pool.token_b.symbol);
             }
         }
     }
@@ -102,7 +108,6 @@ impl MarketGraph {
                     // Use precise arithmetic for price calculation
                     let sqrt_price_decimal = Decimal::from(sqrt_price);
                     let price_decimal = sqrt_price_decimal * sqrt_price_decimal / Decimal::from(1u128 << 64);
-                    
                     let rate_decimal = if a_to_b {
                         price_decimal
                     } else {
@@ -112,40 +117,46 @@ impl MarketGraph {
                             Decimal::ZERO
                         }
                     };
-                    
-                    rate_decimal.to_f64().unwrap_or(0.0)
+                    let rate = rate_decimal.to_f64().unwrap_or(0.0);
+                    println!("[calculate_exchange_rate] {}-{} (CLMM): rate = {}", pool.token_a.symbol, pool.token_b.symbol, rate);
+                    rate
                 } else {
                     // Fallback to basic AMM rate calculation using reserves
                     let reserve_a = Decimal::from(pool.token_a.reserve);
                     let reserve_b = Decimal::from(pool.token_b.reserve);
-                    
                     if !reserve_a.is_zero() && !reserve_b.is_zero() {
                         let rate_decimal = if a_to_b {
                             reserve_b / reserve_a
                         } else {
                             reserve_a / reserve_b
                         };
-                        rate_decimal.to_f64().unwrap_or(0.0)
+                        let rate = rate_decimal.to_f64().unwrap_or(0.0);
+                        println!("[calculate_exchange_rate] {}-{} (AMM): reserve_a = {}, reserve_b = {}, rate = {}", pool.token_a.symbol, pool.token_b.symbol, reserve_a, reserve_b, rate);
+                        rate
                     } else {
+                        println!("[calculate_exchange_rate] Skipping due to zero reserves: {}-{}", pool.token_a.symbol, pool.token_b.symbol);
                         0.0
                     }
                 }
             } else {
+                println!("[calculate_exchange_rate] Skipping due to zero liquidity: {}-{}", pool.token_a.symbol, pool.token_b.symbol);
                 0.0
             }
         } else {
             // Use reserve-based rate calculation when liquidity data is not available
             let reserve_a = Decimal::from(pool.token_a.reserve);
             let reserve_b = Decimal::from(pool.token_b.reserve);
-            
             if !reserve_a.is_zero() && !reserve_b.is_zero() {
                 let rate_decimal = if a_to_b {
                     reserve_b / reserve_a
                 } else {
                     reserve_a / reserve_b
                 };
-                rate_decimal.to_f64().unwrap_or(0.0)
+                let rate = rate_decimal.to_f64().unwrap_or(0.0);
+                println!("[calculate_exchange_rate] {}-{} (AMM fallback): reserve_a = {}, reserve_b = {}, rate = {}", pool.token_a.symbol, pool.token_b.symbol, reserve_a, reserve_b, rate);
+                rate
             } else {
+                println!("[calculate_exchange_rate] Skipping due to zero reserves: {}-{}", pool.token_a.symbol, pool.token_b.symbol);
                 0.0
             }
         }
@@ -234,27 +245,22 @@ impl ArbitrageStrategy {
         start_token: Pubkey,
         pools: &HashMap<Pubkey, Arc<PoolInfo>>,
     ) -> Result<Option<Vec<MultiHopArbOpportunity>>, ArbError> {
+        log::debug!("[detect_cycles_from_token] Starting from token: {}", start_token);
         let start_node = match graph.token_to_node.get(&start_token) {
             Some(&node) => node,
             None => return Ok(None),
         };
-        
-        // Initialize distances: 0 for start node, infinity for others
+        // Initialize distances and predecessors for Bellman-Ford
         let mut distances: HashMap<NodeIndex, f64> = HashMap::new();
         let mut predecessors: HashMap<NodeIndex, Option<NodeIndex>> = HashMap::new();
-        
         for node_idx in graph.graph.node_indices() {
             distances.insert(node_idx, f64::INFINITY);
             predecessors.insert(node_idx, None);
         }
         distances.insert(start_node, 0.0);
-        
         let node_count = graph.graph.node_count();
-        
-        // Relax edges repeatedly for (V-1) iterations
         for iteration in 0..(node_count - 1) {
             let mut updated = false;
-            
             for edge_idx in graph.graph.edge_indices() {
                 if let Some((from_node, to_node)) = graph.graph.edge_endpoints(edge_idx) {
                     if let Some(edge_weight) = graph.graph.edge_weight(edge_idx) {
@@ -270,16 +276,13 @@ impl ArbitrageStrategy {
                     }
                 }
             }
-            
             if !updated {
                 debug!("Bellman-Ford converged early at iteration {}", iteration);
                 break;
             }
         }
-        
         // Check for negative cycles (arbitrage opportunities)
         let mut cycle_nodes = HashSet::new();
-        
         for edge_idx in graph.graph.edge_indices() {
             if let Some((from_node, to_node)) = graph.graph.edge_endpoints(edge_idx) {
                 if let Some(edge_weight) = graph.graph.edge_weight(edge_idx) {
@@ -289,13 +292,12 @@ impl ArbitrageStrategy {
                         if new_dist < distances[&to_node] {
                             // Negative cycle detected!
                             cycle_nodes.insert(to_node);
-                            debug!("Negative cycle detected involving node {:?}", to_node);
+                            log::debug!("[detect_cycles_from_token] Negative cycle detected: {} -> {}", graph.node_to_token[&from_node], graph.node_to_token[&to_node]);
                         }
                     }
                 }
             }
         }
-        
         // Extract cycles from detected negative cycle nodes
         let mut opportunities = Vec::new();
         for &cycle_node in &cycle_nodes {
@@ -306,10 +308,10 @@ impl ArbitrageStrategy {
                 start_token, 
                 pools
             ) {
+                log::debug!("[detect_cycles_from_token] Extracted opportunity: id={}, profit_pct={}", opportunity.id, opportunity.profit_pct);
                 opportunities.push(opportunity);
             }
         }
-        
         Ok(if opportunities.is_empty() { None } else { Some(opportunities) })
     }
     
@@ -354,34 +356,61 @@ impl ArbitrageStrategy {
             }
             
             // Convert cycle to hops
-            let mut hops = Vec::new();
-            let mut total_rate = 1.0f64;
-            
+            let mut total_rate_fwd = 1.0f64;
+            let mut total_rate_rev = 1.0f64;
+            let mut hops_fwd = Vec::new();
+            let mut hops_rev = Vec::new();
+            let mut cycle_tokens = Vec::new();
             for i in 0..cycle_path.len() {
                 let from_node = cycle_path[i];
                 let to_node = cycle_path[(i + 1) % cycle_path.len()];
-                
-                // Find the edge between these nodes
+                cycle_tokens.push(graph.node_to_token[&from_node]);
+                // Forward direction
                 if let Some(edge_idx) = graph.graph.find_edge(from_node, to_node) {
                     if let Some(edge_weight) = graph.graph.edge_weight(edge_idx) {
                         let from_token = graph.node_to_token[&from_node];
                         let to_token = graph.node_to_token[&to_node];
-                        
-                        total_rate *= edge_weight.exchange_rate;
-                        
-                        hops.push(crate::arbitrage::opportunity::ArbHop {
+                        total_rate_fwd *= edge_weight.exchange_rate;
+                        hops_fwd.push(crate::arbitrage::opportunity::ArbHop {
                             dex: self.get_dex_type_for_pool(&edge_weight.pool_address, pools),
                             pool: edge_weight.pool_address,
                             input_token: self.get_token_symbol(&from_token, pools)
                                 .unwrap_or_else(|| from_token.to_string()),
                             output_token: self.get_token_symbol(&to_token, pools)
                                 .unwrap_or_else(|| to_token.to_string()),
-                            input_amount: 1000.0, // Will be optimized later
+                            input_amount: 1000.0,
+                            expected_output: 1000.0 * edge_weight.exchange_rate,
+                        });
+                    }
+                }
+                // Reverse direction
+                if let Some(edge_idx) = graph.graph.find_edge(to_node, from_node) {
+                    if let Some(edge_weight) = graph.graph.edge_weight(edge_idx) {
+                        let from_token = graph.node_to_token[&to_node];
+                        let to_token = graph.node_to_token[&from_node];
+                        total_rate_rev *= edge_weight.exchange_rate;
+                        hops_rev.push(crate::arbitrage::opportunity::ArbHop {
+                            dex: self.get_dex_type_for_pool(&edge_weight.pool_address, pools),
+                            pool: edge_weight.pool_address,
+                            input_token: self.get_token_symbol(&from_token, pools)
+                                .unwrap_or_else(|| from_token.to_string()),
+                            output_token: self.get_token_symbol(&to_token, pools)
+                                .unwrap_or_else(|| to_token.to_string()),
+                            input_amount: 1000.0,
                             expected_output: 1000.0 * edge_weight.exchange_rate,
                         });
                     }
                 }
             }
+            println!("[extract_cycle_from_node] Cycle tokens: {:?}", cycle_tokens.iter().map(|t| self.get_token_symbol(t, pools).unwrap_or_else(|| t.to_string())).collect::<Vec<_>>());
+            println!("[extract_cycle_from_node] total_rate_fwd: {} gross_profit_pct_fwd: {}", total_rate_fwd, (total_rate_fwd - 1.0) * 100.0);
+            println!("[extract_cycle_from_node] total_rate_rev: {} gross_profit_pct_rev: {}", total_rate_rev, (total_rate_rev - 1.0) * 100.0);
+            // Use the direction with the higher profit
+            let (hops, total_rate, _): (Vec<crate::arbitrage::opportunity::ArbHop>, f64, f64) = if total_rate_fwd > total_rate_rev {
+                (hops_fwd, total_rate_fwd, (total_rate_fwd - 1.0) * 100.0)
+            } else {
+                (hops_rev, total_rate_rev, (total_rate_rev - 1.0) * 100.0)
+            };
             
             if hops.is_empty() {
                 debug!("No valid hops found for cycle");

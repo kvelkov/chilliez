@@ -1,0 +1,35 @@
+# analysis.rs Refactor Plan (June 2025)
+
+## Goal
+Split the large `src/arbitrage/analysis.rs` file into three focused submodules for better maintainability, clarity, and AI/human navigation, while avoiding excessive fragmentation.
+
+## New Structure
+- `src/arbitrage/analysis/mod.rs`  — Main module, re-exports, high-level orchestration (e.g., ArbitrageAnalyzer)
+- `src/arbitrage/analysis/fee.rs`  — All fee-related logic (FeeManager, Jito/priority fee, fee breakdown, related types)
+- `src/arbitrage/analysis/math.rs` — All advanced math, slippage models/traits, simulation logic
+
+## Changes To Make
+1. **Create new files:**
+   - [x] `src/arbitrage/analysis/fee.rs`
+   - [x] `src/arbitrage/analysis/math.rs`
+   - [x] `src/arbitrage/analysis/mod.rs` (move high-level logic here)
+2. **Move code:**
+   - [x] Move all fee management, Jito/priority fee, and fee breakdown structs/functions to `fee.rs`
+   - [x] Move all slippage models/traits, advanced math, and simulation logic to `math.rs`
+   - [x] Keep only the main orchestrator (e.g., ArbitrageAnalyzer) and re-exports in `mod.rs`
+3. **Update imports:**
+   - Update all internal imports in the codebase to use the new paths.
+4. **Test:**
+   - Ensure all tests and main bot logic compile and run as before.
+
+## To Do List
+- [x] Create `fee.rs`, `math.rs`, and `mod.rs` in `src/arbitrage/analysis/`
+- [x] Move fee-related code to `fee.rs`
+- [x] Move math/slippage/simulation code to `math.rs`
+- [x] Move orchestrator and re-exports to `mod.rs`
+- [ ] Update all imports in the codebase
+- [ ] Run tests and verify functionality
+- [ ] Clean up any redundant code or comments
+
+---
+This plan keeps the codebase manageable for both humans and AI, and should be iterated as needed after the initial split.

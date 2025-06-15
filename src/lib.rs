@@ -11,6 +11,7 @@ pub mod cache;
 pub mod helius_client;  // NEW: Helius SDK client management
 pub mod testing; // Testing infrastructure
 pub mod paper_trading; // Paper trading simulation system
+pub mod monitoring; // Enhanced monitoring and alerting
 
 // Re-export key testing components for easy access
 pub use testing::{

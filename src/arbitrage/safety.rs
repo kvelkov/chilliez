@@ -16,8 +16,9 @@ use std::{
 };
 use tokio::time::sleep;
 
+use crate::arbitrage::analysis::{FeeBreakdown};
+use crate::arbitrage::analysis::math::EnhancedSlippageModel;
 use crate::{
-    arbitrage::analysis::{FeeBreakdown, EnhancedSlippageModel},
     solana::rpc::SolanaRpcClient,
     utils::{PoolInfo, TokenAmount},
 };

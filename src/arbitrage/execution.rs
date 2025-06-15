@@ -179,7 +179,7 @@ impl HftExecutor {
                             break;
                         }
                         Err(e) => {
-                            warn!("Failed to re-evaluate opportunity {} for re-entry: {}. Stopping re-entry.", current_opportunity.id, e);
+                            warn!("Failed to re-evaluate opportunity {} for re-entry: {:?}. Stopping re-entry.", current_opportunity.id, e);
                             break;
                         }
                     }
@@ -253,7 +253,7 @@ impl HftExecutor {
         let dynamic_priority_fee = match self.fee_manager.calculate_dynamic_priority_fee(estimated_cu).await {
             Ok(fee) => fee,
             Err(e) => {
-                warn!("Failed to calculate dynamic priority fee: {}. Using config default.", e);
+                warn!("Failed to calculate dynamic priority fee: {:?}. Using config default.", e);
                 self.config.transaction_priority_fee_lamports
             }
         };

@@ -88,6 +88,30 @@ pub enum ArbError {
     /// Errors that should not be retried
     #[error("Non-Recoverable Error: {0}")]
     NonRecoverable(String),
+    
+    /// Execution is currently disabled
+    #[error("Execution Disabled: {0}")]
+    ExecutionDisabled(String),
+    
+    /// Resource exhausted (rate limits, concurrency limits, etc.)
+    #[error("Resource Exhausted: {0}")]
+    ResourceExhausted(String),
+    
+    /// Deadlock prevention error
+    #[error("Deadlock Prevention: {0}")]
+    DeadlockPrevention(String),
+    
+    /// Safety mode is active, preventing operations
+    #[error("Safety Mode Active: {0}")]
+    SafetyModeActive(String),
+    
+    /// Account not found or not monitored
+    #[error("Account Not Found: {0}")]
+    AccountNotFound(String),
+    
+    /// Configuration error
+    #[error("Configuration Error: {0}")]
+    ConfigurationError(String),
 }
 
 // Implement From<serde_json::Error> for ArbError
@@ -144,7 +168,13 @@ impl ArbError {
             },
             ArbError::SimulationFailed(_) => true, // Simulations can be retried
             ArbError::Unknown(_) => true, // Unknown errors might be recoverable
-            ArbError::NonRecoverable(_) => false,
+            ArbError::NonRecoverable(_) => false, // Explicitly non-recoverable
+            ArbError::ExecutionDisabled(_) => false, // Execution disabled, manual intervention needed
+            ArbError::ResourceExhausted(_) => true, // Resources might become available
+            ArbError::DeadlockPrevention(_) => true, // Deadlock prevention, can retry later
+            ArbError::SafetyModeActive(_) => false, // Safety mode needs manual intervention
+            ArbError::AccountNotFound(_) => false, // Account not found, not recoverable by retry
+            ArbError::ConfigurationError(_) => false, // Configuration needs fixing
             ArbError::InstructionError(_) => false, // Instruction errors usually need code fixes
         }
     }
@@ -198,6 +228,12 @@ impl ArbError {
             ArbError::Unknown(_) => ErrorCategory::Critical,
             ArbError::NonRecoverable(_) => ErrorCategory::Critical,
             ArbError::InstructionError(_) => ErrorCategory::Trading, // Instruction building errors
+            ArbError::ExecutionDisabled(_) => ErrorCategory::Configuration,
+            ArbError::ResourceExhausted(_) => ErrorCategory::Infrastructure,
+            ArbError::DeadlockPrevention(_) => ErrorCategory::Infrastructure,
+            ArbError::SafetyModeActive(_) => ErrorCategory::Safety,
+            ArbError::AccountNotFound(_) => ErrorCategory::Configuration,
+            ArbError::ConfigurationError(_) => ErrorCategory::Configuration,
         }
     }
 }

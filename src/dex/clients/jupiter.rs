@@ -47,7 +47,7 @@ struct JupiterQuoteRequest {
 }
 
 /// Jupiter quote response
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JupiterQuoteResponse {
     #[serde(rename = "inputMint")]
     input_mint: String,
@@ -75,21 +75,21 @@ pub struct JupiterQuoteResponse {
     time_taken: Option<f64>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct JupiterPlatformFee {
     amount: String,
     #[serde(rename = "feeBps")]
     fee_bps: u16,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct JupiterRoutePlan {
     #[serde(rename = "swapInfo")]
     swap_info: JupiterSwapInfo,
     percent: u8,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct JupiterSwapInfo {
     #[serde(rename = "ammKey")]
     amm_key: String,
@@ -145,6 +145,44 @@ pub struct JupiterToken {
     #[serde(rename = "logoURI")]
     logo_uri: Option<String>,
     tags: Vec<String>,
+}
+
+/// Jupiter swap request
+#[derive(Debug, Serialize)]
+struct JupiterSwapRequest {
+    #[serde(rename = "quoteResponse")]
+    quote_response: JupiterQuoteResponse,
+    #[serde(rename = "userPublicKey")]
+    user_public_key: String,
+    #[serde(rename = "wrapAndUnwrapSol")]
+    wrap_and_unwrap_sol: bool,
+    #[serde(rename = "useSharedAccounts")]
+    use_shared_accounts: bool,
+    #[serde(rename = "feeAccount")]
+    fee_account: Option<String>,
+    #[serde(rename = "trackingAccount")]
+    tracking_account: Option<String>,
+    #[serde(rename = "computeUnitPriceMicroLamports")]
+    compute_unit_price_micro_lamports: Option<u64>,
+    #[serde(rename = "prioritizationFeeLamports")]
+    prioritization_fee_lamports: Option<u64>,
+}
+
+/// Jupiter swap response
+#[derive(Debug, Deserialize)]
+struct JupiterSwapResponse {
+    #[serde(rename = "swapTransaction")]
+    swap_transaction: String,
+    #[serde(rename = "lastValidBlockHeight")]
+    last_valid_block_height: Option<u64>,
+    #[serde(rename = "prioritizationFeeLamports")]
+    prioritization_fee_lamports: Option<u64>,
+    #[serde(rename = "computeUnitLimit")]
+    compute_unit_limit: Option<u32>,
+    #[serde(rename = "dynamicSlippageReport")]
+    dynamic_slippage_report: Option<serde_json::Value>,
+    #[serde(rename = "simulationError")]
+    simulation_error: Option<serde_json::Value>,
 }
 
 /// Rate limiter for Jupiter API calls
@@ -439,18 +477,36 @@ impl DexClient for JupiterClient {
     }
 
     fn get_swap_instruction(&self, _swap_info: &SwapInfo) -> Result<Instruction> {
-        // Jupiter requires transaction serialization through their API
-        // This would need to be implemented with Jupiter's swap endpoint
-        Err(anyhow!("Jupiter swap instructions require Jupiter API integration"))
+        // For now, return an error as this requires async Jupiter API calls
+        // Use get_swap_instruction_enhanced for full implementation
+        Err(anyhow!("Use get_swap_instruction_enhanced for Jupiter integration"))
     }
 
     async fn get_swap_instruction_enhanced(
         &self,
-        _swap_info: &CommonSwapInfo,
+        swap_info: &CommonSwapInfo,
         _pool_info: Arc<PoolInfo>,
     ) -> Result<Instruction, ArbError> {
-        // Jupiter requires transaction serialization through their API
-        Err(ArbError::ExecutionError("Jupiter swap instructions require Jupiter API integration".to_string()))
+        // Get Jupiter quote first
+        let quote = self.get_quote(
+            &swap_info.source_token_mint.to_string(),
+            &swap_info.destination_token_mint.to_string(),
+            swap_info.input_amount,
+            100, // Default 1% slippage in basis points
+        ).await
+        .map_err(|e| ArbError::NetworkError(format!("Jupiter quote failed: {}", e)))?;
+
+        // Get swap transaction from Jupiter API
+        let swap_response = self.get_swap_transaction(
+            &quote,
+            &swap_info.user_wallet_pubkey.to_string(),
+            0, // Default priority fee
+        ).await
+        .map_err(|e| ArbError::InstructionError(format!("Jupiter swap failed: {}", e)))?;
+
+        // Decode and return the instruction
+        self.decode_swap_instruction(&swap_response.swap_transaction)
+            .map_err(|e| ArbError::InstructionError(format!("Failed to decode Jupiter instruction: {}", e)))
     }
 
     async fn discover_pools(&self) -> Result<Vec<PoolInfo>> {
@@ -496,6 +552,73 @@ impl DexClient for JupiterClient {
                     status_message: format!("Jupiter API error: {}", e),
                 })
             }
+        }
+    }
+}
+
+impl JupiterClient {
+    /// Get swap transaction from Jupiter API
+    async fn get_swap_transaction(
+        &self,
+        quote: &JupiterQuoteResponse,
+        user_public_key: &str,
+        priority_fee_lamports: u64,
+    ) -> Result<JupiterSwapResponse> {
+        let swap_request = JupiterSwapRequest {
+            user_public_key: user_public_key.to_string(),
+            quote_response: quote.clone(),
+            wrap_and_unwrap_sol: true,
+            use_shared_accounts: false,
+            fee_account: None,
+            tracking_account: None,
+            compute_unit_price_micro_lamports: Some(priority_fee_lamports),
+            prioritization_fee_lamports: Some(priority_fee_lamports),
+        };
+
+        let response = self.client
+            .post(&format!("{}/swap", JUPITER_API_BASE))
+            .json(&swap_request)
+            .send()
+            .await?;
+
+        if response.status().is_success() {
+            let swap_response: JupiterSwapResponse = response.json().await?;
+            Ok(swap_response)
+        } else {
+            let error_text = response.text().await?;
+            Err(anyhow!("Jupiter swap API error: {}", error_text))
+        }
+    }
+
+    /// Decode swap instruction from Jupiter transaction
+    fn decode_swap_instruction(&self, transaction_data: &str) -> Result<Instruction> {
+        use base64::{Engine as _, engine::general_purpose};
+        use solana_sdk::transaction::Transaction;
+
+        // Decode base64 transaction
+        let transaction_bytes = general_purpose::STANDARD
+            .decode(transaction_data)
+            .map_err(|e| anyhow!("Failed to decode base64 transaction: {}", e))?;
+
+        // Deserialize transaction
+        let transaction: Transaction = bincode::deserialize(&transaction_bytes)
+            .map_err(|e| anyhow!("Failed to deserialize transaction: {}", e))?;
+
+        // For Jupiter, typically the first instruction is the swap instruction
+        if let Some(instruction) = transaction.message.instructions.first() {
+            Ok(Instruction {
+                program_id: transaction.message.account_keys[instruction.program_id_index as usize],
+                accounts: instruction.accounts.iter()
+                    .map(|&idx| solana_sdk::instruction::AccountMeta {
+                        pubkey: transaction.message.account_keys[idx as usize],
+                        is_signer: transaction.message.is_signer(idx as usize),
+                        is_writable: transaction.message.is_writable(idx as usize),
+                    })
+                    .collect(),
+                data: instruction.data.clone(),
+            })
+        } else {
+            Err(anyhow!("No instructions found in Jupiter transaction"))
         }
     }
 }

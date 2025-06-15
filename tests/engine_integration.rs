@@ -4,7 +4,7 @@ use dashmap::DashMap;
 use solana_sdk::pubkey::Pubkey;
 use solana_arb_bot::arbitrage::orchestrator::ArbitrageOrchestrator;
 use solana_arb_bot::config::settings::Config;
-use solana_arb_bot::dex::{DexClient, BannedPairsManager};
+use solana_arb_bot::dex::{DexClient, BannedPairsManager}; // DexClient is used by ArbitrageOrchestrator initialization
 use solana_arb_bot::utils::PoolInfo;
 
 // Helper function to create a dummy BannedPairsManager for testing
@@ -28,7 +28,6 @@ fn dummy_banned_pairs_manager() -> Arc<BannedPairsManager> {
 async fn reference_all_engine_methods_and_fields() {
     let pools = Arc::new(DashMap::<Pubkey, Arc<PoolInfo>>::new());
     let ws_manager = None;
-    let price_provider = None;
     let rpc_client = None;
     let config = Arc::new(Config {
         rpc_url: "https://api.mainnet-beta.solana.com".to_string(),
@@ -85,10 +84,20 @@ async fn reference_all_engine_methods_and_fields() {
         config.metrics_log_path.clone(),      // Provide log path from config
     )));
     let dex_api_clients: Vec<Arc<dyn DexClient>> = vec![];
-    let executor = None; // No executor for this test
-    let batch_engine = None; // No batch engine for this test
+    let executor: Option<Arc<solana_arb_bot::arbitrage::execution::HftExecutor>> = None; // No executor for this test
+    let batch_engine: Option<Arc<solana_arb_bot::arbitrage::execution::BatchExecutor>> = None; // No batch engine for this test
     let banned_pairs_manager = dummy_banned_pairs_manager();
-    let _engine = ArbitrageOrchestrator::new(pools, ws_manager, price_provider, rpc_client, config.clone(), metrics, dex_api_clients, executor, batch_engine, banned_pairs_manager);
+    let _engine = ArbitrageOrchestrator::new(
+        pools,
+        ws_manager,
+        rpc_client,
+        config.clone(),
+        metrics,
+        dex_api_clients,
+        executor,
+        batch_engine,
+        banned_pairs_manager,
+    );
 
     // Reference degradation_mode field: set and read
     // Instead of direct field access, use public getter/setter methods.

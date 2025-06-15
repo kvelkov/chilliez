@@ -3,7 +3,7 @@ mod tests {
     use crate::arbitrage::orchestrator::ArbitrageOrchestrator; // This will now be used
     use crate::arbitrage::opportunity::{ArbHop, MultiHopArbOpportunity};
     use crate::utils::{DexType, PoolInfo, PoolToken};
-    use crate::arbitrage::analysis::FeeManager; // Added import for FeeManager
+    use crate::arbitrage::analysis::FeeManager;
     use crate::error::{ArbError, self};
     use crate::dex::{DexClient, BannedPairsManager};
     use crate::dex::api::{Quote, SwapInfo};
@@ -68,6 +68,7 @@ mod tests {
     fn create_dummy_pools_map() -> Arc<DashMap<Pubkey, Arc<PoolInfo>>> {
         let token_a_mint = Pubkey::from_str("So11111111111111111111111111111111111111112").unwrap();
         let usdc_mint = Pubkey::from_str("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v").unwrap();
+        let token_b_mint = Pubkey::new_unique(); // Use a valid unique pubkey for token B
 
         let pool1 = PoolInfo {
             address: Pubkey::new_from_array([1; 32]),
@@ -76,26 +77,25 @@ mod tests {
                 mint: token_a_mint,
                 symbol: "A".to_string(),
                 decimals: 9,
-                reserve: 2_000_000_000_000, // example reserve
+                reserve: 1_000_000_000_000,
             },
             token_b: PoolToken {
                 mint: usdc_mint,
                 symbol: "USDC".to_string(),
                 decimals: 6,
-                reserve: 2_200_000_000_000, // adjusted reserve
+                reserve: 1_000_000_000_000,
             },
             token_a_vault: Pubkey::new_unique(),
             token_b_vault: Pubkey::new_unique(),
-            fee_numerator: Some(30),
-            fee_denominator: Some(10000),
-            fee_rate_bips: Some(30),
+            fee_numerator: Some(0),
+            fee_denominator: Some(1),
+            fee_rate_bips: Some(0),
             last_update_timestamp: 0,
             dex_type: DexType::Orca,
             liquidity: Some(1_000_000_000),
             sqrt_price: None,
             tick_current_index: None,
             tick_spacing: None,
-            // Initialize new Orca-specific fields to None
             tick_array_0: None,
             tick_array_1: None,
             tick_array_2: None,
@@ -104,31 +104,62 @@ mod tests {
 
         let pool2 = PoolInfo {
             address: Pubkey::new_from_array([2; 32]),
-            name: "USDC/A-Raydium".to_string(),
+            name: "USDC/B-Raydium".to_string(),
             token_a: PoolToken {
                 mint: usdc_mint,
                 symbol: "USDC".to_string(),
                 decimals: 6,
-                reserve: 2_000_000_000_000,
+                reserve: 1_000_000_000_000,
             },
             token_b: PoolToken {
-                mint: token_a_mint,
-                symbol: "A".to_string(),
+                mint: token_b_mint,
+                symbol: "B".to_string(),
                 decimals: 9,
-                reserve: 7_050_000_000_000, // adjusted reserve
+                reserve: 1_000_000_000_000,
             },
             token_a_vault: Pubkey::new_unique(),
             token_b_vault: Pubkey::new_unique(),
-            fee_numerator: Some(25),
-            fee_denominator: Some(10000),
-            fee_rate_bips: Some(25),
+            fee_numerator: Some(0),
+            fee_denominator: Some(1),
+            fee_rate_bips: Some(0),
             last_update_timestamp: 0,
             dex_type: DexType::Raydium,
             liquidity: Some(1_500_000_000),
             sqrt_price: None,
             tick_current_index: None,
             tick_spacing: None,
-            // Initialize new Orca-specific fields to None
+            tick_array_0: None,
+            tick_array_1: None,
+            tick_array_2: None,
+            oracle: None,
+        };
+
+        let pool3 = PoolInfo {
+            address: Pubkey::new_from_array([3; 32]),
+            name: "B/A-Orca".to_string(),
+            token_a: PoolToken {
+                mint: token_b_mint,
+                symbol: "B".to_string(),
+                decimals: 9,
+                reserve: 500_000_000_000, // Lower reserve for B
+            },
+            token_b: PoolToken {
+                mint: token_a_mint,
+                symbol: "A".to_string(),
+                decimals: 9,
+                reserve: 2_000_000_000_000, // Much higher reserve for A
+            },
+            token_a_vault: Pubkey::new_unique(),
+            token_b_vault: Pubkey::new_unique(),
+            fee_numerator: Some(0),
+            fee_denominator: Some(1),
+            fee_rate_bips: Some(0),
+            last_update_timestamp: 0,
+            dex_type: DexType::Orca,
+            liquidity: Some(1_000_000_000),
+            sqrt_price: None,
+            tick_current_index: None,
+            tick_spacing: None,
             tick_array_0: None,
             tick_array_1: None,
             tick_array_2: None,
@@ -138,6 +169,7 @@ mod tests {
         let pools = DashMap::new();
         pools.insert(pool1.address, Arc::new(pool1));
         pools.insert(pool2.address, Arc::new(pool2));
+        pools.insert(pool3.address, Arc::new(pool3));
 
         println!("\n=== Test Pool Setup ===");
         for entry in pools.iter() {
@@ -242,7 +274,6 @@ mod tests {
                 pools_map_arc.clone(),
                 None,
                 None,
-                None,
                 config_arc.clone(),
                 metrics_arc.clone(),
                 dummy_dex_clients,
@@ -313,11 +344,11 @@ mod tests {
             pools_map.clone(),
             None,
             None,
-            None,
             config,
             metrics_arc,
             dummy_dex_clients,
-            None, None,
+            None,
+            None,
             dummy_banned_pairs_manager(), // banned_pairs_manager
         );
 
@@ -376,7 +407,6 @@ mod tests {
         let engine = ArbitrageOrchestrator::new( // Renamed ArbitrageEngine to ArbitrageOrchestrator
             pools_map,
             None,
-            None,
             dummy_sol_rpc_client,
             config.clone(),
             metrics_arc,
@@ -417,13 +447,12 @@ mod tests {
             pools,
             None,
             None,
-            None,
             config,
             metrics,
             dex_clients,
             None,
-            None, // batch_execution_engine
-            dummy_banned_pairs_manager(), // banned_pairs_manager
+            None,
+            dummy_banned_pairs_manager(),
         );
 
         assert_eq!(engine.dex_providers.len(), 2, "Engine should have 2 DEX API clients");
@@ -440,7 +469,6 @@ mod tests {
         let dummy_dex_clients: Vec<Arc<dyn DexClient>> = vec![Arc::new(MockDexClient::new("Mock"))];
         let engine = ArbitrageOrchestrator::new( // Renamed ArbitrageEngine to ArbitrageOrchestrator
             pools_map.clone(),
-            None,
             None,
             None,
             config,

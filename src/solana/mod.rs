@@ -1,4 +1,7 @@
 pub mod accounts;
+pub mod balance_monitor;
 pub mod rpc;
 pub mod websocket;
-// pub use crate::websocket::market_data::CryptoDataProvider; // Path seems incorrect or import is unused here.
+
+// Re-export key components
+pub use balance_monitor::{BalanceMonitor, BalanceMonitorConfig};

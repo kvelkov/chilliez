@@ -72,6 +72,7 @@ pub trait PoolDiscoverable: Send + Sync {
     async fn discover_pools(&self) -> Result<Vec<PoolInfo>>;
 
     /// Fetches updated data for a specific pool by its address
+    #[allow(dead_code)] // Method is part of the trait contract, may be used in the future
     async fn fetch_pool_data(&self, pool_address: Pubkey) -> Result<PoolInfo>;
 
     /// Returns the DEX name for this discoverable client

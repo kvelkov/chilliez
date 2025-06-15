@@ -2,7 +2,7 @@
 mod tests {
     // Import all relevant functions and types from our calculator module.
     // Adjust the import path as needed depending on your project hierarchy.
-    use super::super::analysis::*; // Updated to use the new analysis module
+    use crate::arbitrage::analysis::{OpportunityCalculationResult, is_profitable_calc};
     
     /// Helper function that creates a dummy `OpportunityCalculationResult`
     /// to simulate different arbitrage outcomes. It uses an input amount of 1.0,

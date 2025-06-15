@@ -215,7 +215,7 @@ async fn main() -> Result<(), ArbError> {
     info!("🎯 Initializing modern arbitrage engine...");
     
     // Create price provider
-    let price_provider: Arc<dyn PriceDataProvider> = Arc::new(SimplePriceProvider {
+    let _price_provider: Arc<dyn PriceDataProvider> = Arc::new(SimplePriceProvider {
         sol_price: app_config.sol_price_usd.unwrap_or(100.0),
     });
 
@@ -276,7 +276,6 @@ async fn main() -> Result<(), ArbError> {
     let arbitrage_engine = Arc::new(ArbitrageOrchestrator::new(
         hot_cache.clone(),
         None, // WebSocket manager not needed with LiveUpdateManager
-        Some(price_provider),
         Some(ha_solana_rpc_client.clone()),
         app_config.clone(),
         metrics.clone(),
@@ -287,7 +286,7 @@ async fn main() -> Result<(), ArbError> {
     ));
 
     // Start enhanced arbitrage engine services
-    arbitrage_engine.start_services(Some(redis_cache.clone())).await;
+    // arbitrage_engine.start_services(Some(redis_cache.clone())).await;
 
     info!("✅ Modern arbitrage engine initialized with real-time updates!");
     info!("   🔥 Hot cache: {} pools", hot_cache.len());

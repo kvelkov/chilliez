@@ -8,6 +8,7 @@ use solana_client::{
     nonblocking::rpc_client::RpcClient as NonBlockingRpcClient,
     rpc_config::{RpcAccountInfoConfig, RpcProgramAccountsConfig},
     rpc_filter::RpcFilterType,
+    rpc_response::RpcPrioritizationFee as PrioritizationFee,
 };
 use solana_sdk::{commitment_config::CommitmentConfig, pubkey::Pubkey};
 use spl_token::state::Mint; // Added for unpacking mint data
@@ -180,21 +181,37 @@ impl SolanaRpcClient {
         .with_context(|| format!("Failed to get program accounts for {}", program_id))
     }
 
-    pub async fn get_recent_prioritization_fees(&self) -> Result<Vec<u64>, ArbError> {
-        self.execute_with_retry_and_fallback(
-            "get_recent_prioritization_fees",
-            |client: Arc<NonBlockingRpcClient>| async move {
-                client.get_recent_prioritization_fees(&[]).await
-            },
-        )
-        .await
-        .map(|fees_response| {
-            fees_response
-                .into_iter()
-                .map(|fee_info| fee_info.prioritization_fee)
-                .collect()
-        })
-        .map_err(|e| ArbError::RpcError(e.to_string()))
+    /// Get recent prioritization fees from Solana network
+    pub async fn get_recent_prioritization_fees(&self, accounts: Option<Vec<Pubkey>>) -> Result<Vec<PrioritizationFee>, ArbError> {
+        // Try primary client first
+        let accounts_ref = accounts.as_ref().map(|v| v.as_slice()).unwrap_or(&[]);
+        let last_error = match self.primary_client.get_recent_prioritization_fees(accounts_ref).await {
+            Ok(fees) => {
+                debug!("✅ Got {} recent prioritization fees from primary RPC", fees.len());
+                return Ok(fees);
+            }
+            Err(e) => {
+                warn!("❌ Primary RPC failed to get prioritization fees: {}", e);
+                ArbError::NetworkError(e.to_string())
+            }
+        };
+        
+        // Try fallback clients
+        let mut final_error = last_error;
+        for (i, fallback) in self.fallback_clients.iter().enumerate() {
+            match fallback.get_recent_prioritization_fees(accounts_ref).await {
+                Ok(fees) => {
+                    debug!("✅ Got {} recent prioritization fees from fallback RPC {}", fees.len(), i);
+                    return Ok(fees);
+                }
+                Err(e) => {
+                    warn!("❌ Fallback RPC {} failed to get prioritization fees: {}", i, e);
+                    final_error = ArbError::NetworkError(e.to_string());
+                }
+            }
+        }
+        
+        Err(final_error)
     }
 
     pub async fn get_account_data(&self, pubkey: &Pubkey) -> Result<Vec<u8>> {

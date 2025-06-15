@@ -1,12 +1,22 @@
 // src/websocket/mod.rs
 
-// pub mod handlers; // To be removed if PoolParser is sufficient
-// pub mod manager; // Removed as manager.rs is deleted
 pub mod market_data; // Defines the CryptoDataProvider trait
-// pub mod types;   // To be removed if PoolParser is sufficient (AccountUpdate struct)
+pub mod price_feeds; // Real-time WebSocket price feed infrastructure
 
-// Re-export relevant items if necessary, for example:
+// Re-export relevant items
 pub use market_data::CryptoDataProvider;
+pub use price_feeds::{
+    PriceFeedManager, PriceUpdate, WebSocketFeed, WebSocketConfig, 
+    WebSocketMetrics, ConnectionStatus
+};
 
-// If handlers.rs and types.rs are removed, this file might only contain market_data.
-// If they are kept for some specific reason, their declarations would remain.
+// DEX-specific WebSocket feeds
+pub mod feeds;
+
+// Re-export all WebSocket feed implementations
+pub use feeds::{
+    OrcaWebSocketFeed,
+    MeteoraWebSocketFeed,
+    RaydiumWebSocketFeed,
+    PhoenixWebSocketFeed,
+};

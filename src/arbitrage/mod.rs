@@ -27,6 +27,7 @@ pub mod strategy;         // Opportunity detection and path finding
 pub mod execution;        // All execution logic (HFT + batch)
 pub mod analysis;         // Mathematical analysis, fees, thresholds
 pub mod mev;              // MEV protection and Jito integration
+pub mod safety;           // Transaction safety, retry logic, and recovery
 
 // =============================================================================
 // Public Re-exports (New Flat Structure)
@@ -49,6 +50,11 @@ pub use self::analysis::{
 pub use self::mev::{
     JitoHandler, MevProtectionConfig, JitoConfig, GasOptimizationMetrics, NetworkConditions,
     MevProtectionStrategy, MevProtectionStatus, JitoBundleResult
+};
+pub use self::safety::{
+    SafeTransactionHandler, TransactionSafetyConfig, TransactionResult, SafetyViolation,
+    RetryPolicy, BalanceValidationConfig, SlippageProtectionConfig, MevProtectionConfig as SafetyMevConfig,
+    ConfirmationConfig, FailureRecoveryStrategy, SafetyConfig, TransactionRecord
 };
 pub use self::opportunity::{ArbHop, MultiHopArbOpportunity, AdvancedMultiHopOpportunity, EnhancedArbHop};
 

@@ -43,8 +43,10 @@ pub struct LiveUpdateConfig {
     /// Batch timeout in milliseconds
     pub batch_timeout_ms: u64,
     /// Whether to validate updates before applying
+    #[allow(dead_code)] // Planned for validation logic implementation
     pub validate_updates: bool,
     /// Maximum age of an update before it's considered stale (ms)
+    #[allow(dead_code)] // Planned for stale update filtering
     pub max_update_age_ms: u64,
 }
 
@@ -71,7 +73,9 @@ pub struct LiveUpdateMetrics {
     pub total_batches_processed: AtomicU64,
     pub hot_cache_updates: AtomicU64,
     pub webhook_updates: AtomicU64,
+    #[allow(dead_code)] // Planned for validation failure tracking
     pub validation_failures: AtomicU64,
+    #[allow(dead_code)] // Planned for rate limiting implementation
     pub rate_limit_hits: AtomicU64,
     pub average_update_latency_ms: AtomicU64,
     pub last_update_timestamp: AtomicU64,
@@ -97,6 +101,7 @@ impl LiveUpdateMetrics {
 pub struct LiveUpdateEvent {
     pub pool_address: Pubkey,
     pub pool_info: Arc<PoolInfo>,
+    #[allow(dead_code)] // Planned for different update type handling
     pub update_type: PoolUpdateType,
     pub timestamp: u64,
     pub source: UpdateSource,
@@ -104,6 +109,7 @@ pub struct LiveUpdateEvent {
 
 /// Source of the live update
 #[derive(Debug, Clone, PartialEq)]
+#[allow(dead_code)] // Variants planned for different update source tracking
 pub enum UpdateSource {
     Webhook,
     WebSocket,
@@ -120,8 +126,10 @@ pub struct LiveUpdateManager {
     update_sender: mpsc::Sender<LiveUpdateEvent>,
     update_receiver: Option<mpsc::Receiver<LiveUpdateEvent>>,
     
-    // External integration channels
+    // External integration channels (future webhook integration)
+    #[allow(dead_code)] // Planned for webhook receiver integration
     webhook_receiver: Option<mpsc::UnboundedReceiver<HeliusWebhookNotification>>,
+    #[allow(dead_code)] // Planned for external pool update notifications
     pool_update_sender: Option<mpsc::UnboundedSender<PoolUpdateEvent>>,
     
     // Components

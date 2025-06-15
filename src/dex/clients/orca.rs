@@ -8,9 +8,8 @@ use crate::utils::{DexType, PoolInfo, PoolParser as UtilsPoolParser, PoolToken};
 use anyhow::{anyhow, Result as AnyhowResult};
 use async_trait::async_trait;
 use bytemuck::{Pod, Zeroable};
-use log::{debug, info, warn};
-use rust_decimal::Decimal;
-use serde::{Deserialize, Serialize};
+use log::{info, warn};
+use serde::Deserialize;
 use solana_sdk::{
     instruction::{AccountMeta, Instruction},
     pubkey::Pubkey,
@@ -27,12 +26,6 @@ const MIN_SQRT_PRICE: u128 = 4295048016;
 const MAX_SQRT_PRICE: u128 = 79226673515401279992447579055;
 
 // Placeholder function - would be replaced with actual implementation from orca_whirlpools_core
-fn price_to_sqrt_price_x64(_price: f64) -> u128 {
-    // This is a placeholder implementation
-    // Real implementation would use: orca_whirlpools_core::price_math::price_to_sqrt_price_x64(price)
-    MIN_SQRT_PRICE
-}
-
 // --- On-Chain Data Structures ---
 #[repr(C, packed)]
 #[derive(Clone, Copy, Pod, Zeroable)]
@@ -243,7 +236,7 @@ impl DexClient for OrcaClient {
         let a_to_b = swap_info.source_token_mint == pool_info.token_a.mint;
         
         // Calculate sqrt_price_limit (simplified)
-        let sqrt_price_limit = if a_to_b {
+        let _sqrt_price_limit = if a_to_b {
             MIN_SQRT_PRICE
         } else {
             MAX_SQRT_PRICE

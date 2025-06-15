@@ -8,7 +8,6 @@
 use crate::{
     arbitrage::opportunity::MultiHopArbOpportunity,
     error::ArbError,
-    solana::rpc::SolanaRpcClient as LocalSolanaRpcClient, // Renamed to avoid conflict
 };
 use log::{info, warn, debug, error};
 use solana_sdk::{

@@ -4401,6 +4401,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "tungstenite 0.20.1",
+ "url",
  "uuid",
  "warp",
 ]

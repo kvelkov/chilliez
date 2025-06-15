@@ -346,7 +346,7 @@ impl ArbitrageAnalyzer {
     pub fn new(config: &Config, metrics: Arc<Mutex<Metrics>>) -> Self {
         Self {
             advanced_math: AdvancedArbitrageMath::new(18), // 18 decimal precision
-            fee_manager: FeeManager,
+            fee_manager: FeeManager::default(),
             threshold_updater: DynamicThresholdUpdater::new(config, metrics),
             slippage_model: Box::new(XYKSlippageModel::default()),
         }
@@ -607,10 +607,104 @@ impl AdvancedArbitrageMath {
 // =============================================================================
 
 /// Centralized fee management
-pub struct FeeManager;
+pub struct FeeManager {
+    pub rpc_client: Option<Arc<crate::solana::rpc::SolanaRpcClient>>,
+    pub network_congestion_cache: Arc<Mutex<Option<NetworkCongestionData>>>,
+    pub jito_config: JitoConfiguration,
+    pub priority_fee_config: PriorityFeeConfiguration,
+}
+
+impl Default for FeeManager {
+    fn default() -> Self {
+        Self {
+            rpc_client: None,
+            network_congestion_cache: Arc::new(Mutex::new(None)),
+            jito_config: JitoConfiguration::default(),
+            priority_fee_config: PriorityFeeConfiguration::default(),
+        }
+    }
+}
 
 impl FeeManager {
-    /// Calculate comprehensive fee breakdown for multi-hop arbitrage
+    /// Create new FeeManager with RPC client for dynamic fee calculation
+    pub fn new(rpc_client: Arc<crate::solana::rpc::SolanaRpcClient>) -> Self {
+        Self {
+            rpc_client: Some(rpc_client),
+            network_congestion_cache: Arc::new(Mutex::new(None)),
+            jito_config: JitoConfiguration::default(),
+            priority_fee_config: PriorityFeeConfiguration::default(),
+        }
+    }
+
+    /// Calculate dynamic Solana priority fee based on network congestion
+    pub async fn calculate_dynamic_priority_fee(&self, compute_units: u32) -> Result<u64> {
+        // Update network congestion data
+        self.update_congestion_data().await?;
+        
+        let congestion_data = self.network_congestion_cache.lock().await;
+        let congestion_data = congestion_data.as_ref()
+            .ok_or_else(|| anyhow!("No congestion data available"))?;
+
+        // Calculate fee per compute unit based on congestion level
+        let fee_per_cu_micro_lamports = match congestion_data.congestion_level {
+            CongestionLevel::Low => {
+                let recent_avg = self.calculate_percentile(&congestion_data.recent_priority_fees, 50.0);
+                recent_avg.max(1) // At least 1 micro-lamport
+            }
+            CongestionLevel::Medium => {
+                let recent_75th = self.calculate_percentile(&congestion_data.recent_priority_fees, 75.0);
+                recent_75th.max(10)
+            }
+            CongestionLevel::High => {
+                let recent_90th = self.calculate_percentile(&congestion_data.recent_priority_fees, 90.0);
+                recent_90th.max(50)
+            }
+            CongestionLevel::Critical => {
+                let recent_95th = self.calculate_percentile(&congestion_data.recent_priority_fees, 95.0);
+                recent_95th.max(200)
+            }
+        };
+
+        // Calculate total priority fee with safety margin
+        let base_fee = ((compute_units as f64 * fee_per_cu_micro_lamports as f64) / 1_000_000.0) as u64;
+        let adjusted_fee = (base_fee as f64 * self.priority_fee_config.safety_multiplier) as u64;
+        
+        let final_fee = adjusted_fee
+            .max(self.priority_fee_config.min_fee_micro_lamports)
+            .min(self.priority_fee_config.max_fee_lamports);
+
+        info!("🔥 Dynamic priority fee calculated: CU={}, fee_per_cu={}, final_fee={} lamports", 
+              compute_units, fee_per_cu_micro_lamports, final_fee);
+
+        Ok(final_fee)
+    }
+
+    /// Calculate Jito tip for MEV protection
+    pub fn calculate_jito_tip(&self, trade_value_sol: f64, complexity_factor: f64) -> u64 {
+        if !self.jito_config.enabled {
+            return 0;
+        }
+
+        // Base tip scaled by trade complexity
+        let base_tip = (self.jito_config.base_tip_lamports as f64 * complexity_factor) as u64;
+        
+        // Value-based tip (percentage of trade value)
+        let value_tip = (trade_value_sol * 1_000_000_000.0 * self.jito_config.value_based_scaling) as u64;
+        
+        let total_tip = base_tip + value_tip;
+        
+        // Apply min/max constraints
+        let final_tip = total_tip
+            .max(self.jito_config.min_tip_lamports)
+            .min(self.jito_config.max_tip_lamports);
+
+        debug!("💰 Jito tip calculated: base={}, value={}, final={} lamports", 
+               base_tip, value_tip, final_tip);
+
+        final_tip
+    }
+
+    /// Calculate comprehensive fees for multihop arbitrage
     pub fn calculate_multihop_fees(
         &self,
         pools: &[&PoolInfo],
@@ -618,64 +712,179 @@ impl FeeManager {
         sol_price_usd: f64,
     ) -> FeeBreakdown {
         let mut total_protocol_fee = 0.0;
-        let mut total_gas_fee = 0.0;
-        let mut total_slippage_cost = 0.0;
-        let mut explanation_parts = Vec::new();
+        let mut gas_cost = 0.0;
+        let mut slippage_cost = 0.0;
+        let mut risk_score = 0.0;
 
-        for (i, pool) in pools.iter().enumerate() {
-            let pool_fee = self.calculate_pool_fee(pool, input_amount);
-            let gas_cost = get_gas_cost_for_dex(pool.dex_type.clone()) as f64 / 1_000_000_000.0 * sol_price_usd;
-            let slippage = XYKSlippageModel.estimate_slippage(pool, input_amount, true) * input_amount.to_float();
+        // Calculate protocol fees for each hop
+        for pool in pools {
+            let fee_rate = if let Some(bips) = pool.fee_rate_bips {
+                bips as f64 / 10000.0
+            } else {
+                0.003 // Default 0.3%
+            };
+            total_protocol_fee += fee_rate;
 
-            total_protocol_fee += pool_fee;
-            total_gas_fee += gas_cost;
-            total_slippage_cost += slippage;
+            // Add gas cost per hop
+            let hop_gas_cost = match pool.dex_type {
+                DexType::Orca => 80_000,
+                DexType::Raydium => 100_000,
+                DexType::Jupiter => 120_000,
+                DexType::Phoenix => 90_000,
+                DexType::Meteora => 85_000,
+                DexType::Lifinity => 95_000,
+                _ => 90_000,
+            } as f64 * 0.000000001; // Convert lamports to SOL
+            
+            gas_cost += hop_gas_cost * sol_price_usd;
 
-            explanation_parts.push(format!(
-                "Hop {}: Pool fee {:.4}%, Gas ${:.2}, Slippage {:.4}%",
-                i + 1,
-                pool_fee * 100.0,
-                gas_cost,
-                slippage / input_amount.to_float() * 100.0
-            ));
+            // Estimate slippage based on trade size vs liquidity
+            if let Some(liquidity) = pool.liquidity {
+                if liquidity > 0 {
+                    let trade_impact = (input_amount.amount as f64) / (liquidity as f64);
+                    slippage_cost += trade_impact * 0.1; // Simplified slippage model
+                }
+            }
+
+            // Basic risk scoring
+            risk_score += match pool.dex_type {
+                DexType::Orca | DexType::Raydium => 0.1,
+                DexType::Jupiter => 0.2, // Aggregator has more complexity
+                _ => 0.15,
+            };
         }
 
-        let total_cost = total_protocol_fee + total_gas_fee + total_slippage_cost;
-        let risk_score = self.calculate_risk_score(pools, total_slippage_cost);
-
+        let total_cost = total_protocol_fee + gas_cost + slippage_cost;
+        
         FeeBreakdown {
             protocol_fee: total_protocol_fee,
-            gas_fee: total_gas_fee,
-            slippage_cost: total_slippage_cost,
+            gas_fee: gas_cost,
+            slippage_cost,
             total_cost,
-            explanation: explanation_parts.join("; "),
-            risk_score,
+            explanation: format!(
+                "Multihop fees: {} hops, protocol: {:.4}%, gas: ${:.4}, slippage: {:.4}%",
+                pools.len(),
+                total_protocol_fee * 100.0,
+                gas_cost,
+                slippage_cost * 100.0
+            ),
+            risk_score: risk_score / pools.len() as f64, // Average risk
         }
     }
 
-    /// Calculate fee for a single pool
-    fn calculate_pool_fee(&self, pool: &PoolInfo, _input_amount: &TokenAmount) -> f64 {
-        // Use pool's fee_rate_bips or calculate from numerator/denominator
-        if let Some(bips) = pool.fee_rate_bips {
-            bips as f64 / 10000.0 // Convert basis points to decimal
-        } else if let (Some(num), Some(denom)) = (pool.fee_numerator, pool.fee_denominator) {
-            num as f64 / denom as f64
-        } else {
-            // Default fee based on DEX type
-            match pool.dex_type {
-                DexType::Raydium | DexType::Orca => 0.0025, // 0.25%
-                DexType::Whirlpool => 0.003,                 // 0.3%
-                DexType::Lifinity => 0.0015,                 // 0.15%
-                _ => 0.003,                                  // Default 0.3%
+    /// Update network congestion data from RPC
+    async fn update_congestion_data(&self) -> Result<()> {
+        let rpc_client = self.rpc_client.as_ref()
+            .ok_or_else(|| anyhow!("No RPC client configured"))?;
+
+        // Check if cached data is still fresh (< 10 seconds old)
+        {
+            let cache = self.network_congestion_cache.lock().await;
+            if let Some(ref data) = *cache {
+                if data.timestamp.elapsed() < Duration::from_secs(10) {
+                    return Ok(()); // Use cached data
+                }
             }
         }
+
+        // Fetch fresh data from RPC
+        let epoch_info = rpc_client.primary_client.get_epoch_info().await?;
+        let recent_performance = rpc_client.primary_client.get_recent_performance_samples(Some(10)).await?;
+        
+        // Calculate average slot time
+        let avg_slot_time = if !recent_performance.is_empty() {
+            recent_performance.iter()
+                .map(|sample| sample.sample_period_secs as f64 / sample.num_slots as f64)
+                .sum::<f64>() / recent_performance.len() as f64 * 1000.0 // Convert to ms
+        } else {
+            400.0 // Default 400ms slot time
+        };
+
+        // Simulate priority fee data (in production, use getRecentPrioritizationFees RPC)
+        let recent_fees = self.simulate_recent_priority_fees(&avg_slot_time);
+        let congestion_level = self.determine_congestion_level(&recent_fees);
+
+        let congestion_data = NetworkCongestionData {
+            current_slot: epoch_info.absolute_slot,
+            slot_time_ms: avg_slot_time,
+            recent_priority_fees: recent_fees,
+            congestion_level: congestion_level.clone(),
+            timestamp: std::time::Instant::now(),
+        };
+
+        // Update cache
+        {
+            let mut cache = self.network_congestion_cache.lock().await;
+            *cache = Some(congestion_data);
+        }
+
+        debug!("🔄 Updated network congestion data: slot_time={:.1}ms, level={:?}", 
+               avg_slot_time, congestion_level);
+
+        Ok(())
     }
 
-    /// Calculate risk score based on complexity and slippage
-    fn calculate_risk_score(&self, pools: &[&PoolInfo], total_slippage: f64) -> f64 {
-        let complexity_factor = pools.len() as f64 * 0.1;
-        let slippage_factor = total_slippage * 10.0;
-        (complexity_factor + slippage_factor).min(10.0) // Cap at 10
+    /// Simulate recent priority fees (replace with actual RPC call in production)
+    fn simulate_recent_priority_fees(&self, avg_slot_time_ms: &f64) -> Vec<u64> {
+        // Simulate based on slot time - faster slots indicate more congestion
+        let base_fee = if *avg_slot_time_ms < 300.0 {
+            50 // High congestion
+        } else if *avg_slot_time_ms < 400.0 {
+            20 // Medium congestion  
+        } else {
+            5  // Low congestion
+        };
+
+        // Generate realistic distribution of recent fees
+        (0..50).map(|i| {
+            let variance = (i as f64 * 0.1).sin() * base_fee as f64 * 0.3;
+            (base_fee as f64 + variance).max(1.0) as u64
+        }).collect()
+    }
+
+    /// Determine congestion level from recent priority fees
+    fn determine_congestion_level(&self, recent_fees: &[u64]) -> CongestionLevel {
+        if recent_fees.is_empty() {
+            return CongestionLevel::Medium;
+        }
+
+        let p75_fee = self.calculate_percentile(recent_fees, 75.0);
+        
+        match p75_fee {
+            0..=10 => CongestionLevel::Low,
+            11..=50 => CongestionLevel::Medium,
+            51..=200 => CongestionLevel::High,
+            _ => CongestionLevel::Critical,
+        }
+    }
+
+    /// Calculate percentile from fee data
+    fn calculate_percentile(&self, fees: &[u64], percentile: f64) -> u64 {
+        if fees.is_empty() {
+            return 1;
+        }
+
+        let mut sorted_fees = fees.to_vec();
+        sorted_fees.sort();
+        
+        let index = ((percentile / 100.0) * (sorted_fees.len() - 1) as f64) as usize;
+        sorted_fees[index.min(sorted_fees.len() - 1)]
+    }
+
+    /// Estimate compute units for different transaction types
+    pub fn estimate_compute_units(&self, pools: &[&PoolInfo]) -> u32 {
+        let base_cu = 50_000u32;
+        let per_swap_cu = pools.iter().map(|pool| match pool.dex_type {
+            DexType::Orca => 80_000,
+            DexType::Raydium => 100_000,
+            DexType::Jupiter => 120_000,
+            DexType::Phoenix => 90_000,
+            DexType::Meteora => 85_000,
+            DexType::Lifinity => 95_000,
+            _ => 90_000,
+        }).sum::<u32>();
+
+        base_cu + per_swap_cu
     }
 }
 
@@ -734,6 +943,11 @@ impl<'a> ArbitrageCostFunction<'a> {
             DexType::Meteora => self.simulate_meteora_swap(pool, input_amount),
             DexType::Lifinity => self.simulate_lifinity_swap(pool, input_amount),
             DexType::Whirlpool => self.simulate_orca_clmm_swap(pool, input_amount), // Same as Orca
+            DexType::Phoenix => self.simulate_raydium_amm_swap(pool, input_amount), // Use AMM fallback for Phoenix
+            DexType::Jupiter => {
+                warn!("Jupiter is an aggregator, not a single pool DEX");
+                self.simulate_raydium_amm_swap(pool, input_amount) // Fallback
+            }
             DexType::Unknown(_) => {
                 warn!("Unknown DEX type for pool {}, using fallback calculation", pool.address);
                 self.simulate_raydium_amm_swap(pool, input_amount) // Fallback to constant product
@@ -1004,5 +1218,218 @@ impl ContractSelector {
 impl Default for ContractSelector {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// Network congestion data for dynamic fee calculation
+#[derive(Debug, Clone)]
+pub struct NetworkCongestionData {
+    pub current_slot: u64,
+    pub slot_time_ms: f64,
+    pub recent_priority_fees: Vec<u64>, // micro-lamports per compute unit
+    pub congestion_level: CongestionLevel,
+    pub timestamp: std::time::Instant,
+}
+
+/// Network congestion levels
+#[derive(Debug, Clone, PartialEq)]
+pub enum CongestionLevel {
+    Low,    // < 10 micro-lamports/CU
+    Medium, // 10-50 micro-lamports/CU  
+    High,   // 50-200 micro-lamports/CU
+    Critical, // > 200 micro-lamports/CU
+}
+
+/// Jito tip configuration for MEV protection
+#[derive(Debug, Clone)]
+pub struct JitoConfiguration {
+    pub enabled: bool,
+    pub min_tip_lamports: u64,
+    pub max_tip_lamports: u64,
+    pub base_tip_lamports: u64,
+    pub value_based_scaling: f64, // Percentage of trade value
+}
+
+impl Default for JitoConfiguration {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            min_tip_lamports: 1_000,    // 0.000001 SOL
+            max_tip_lamports: 100_000,  // 0.0001 SOL
+            base_tip_lamports: 10_000,  // 0.00001 SOL
+            value_based_scaling: 0.001, // 0.1% of trade value
+        }
+    }
+}
+
+/// Priority fee configuration
+#[derive(Debug, Clone)]
+pub struct PriorityFeeConfiguration {
+    pub min_fee_micro_lamports: u64,
+    pub max_fee_lamports: u64,
+    pub target_percentile: f64, // 75th percentile by default
+    pub safety_multiplier: f64,
+}
+
+impl Default for PriorityFeeConfiguration {
+    fn default() -> Self {
+        Self {
+            min_fee_micro_lamports: 1,
+            max_fee_lamports: 50_000, // 0.00005 SOL max
+            target_percentile: 75.0,
+            safety_multiplier: 1.2,   // 20% safety margin
+        }
+    }
+}
+
+/// Enhanced slippage model with pool depth analysis and volatility adjustments
+#[derive(Debug)]
+pub struct EnhancedSlippageModel {
+    pub depth_analysis_levels: usize,
+    pub volatility_window_minutes: u64,
+    pub impact_scaling_factor: f64,
+    pub price_history: Arc<Mutex<HashMap<String, VecDeque<(f64, std::time::Instant)>>>>,
+}
+
+impl Default for EnhancedSlippageModel {
+    fn default() -> Self {
+        Self {
+            depth_analysis_levels: 10,
+            volatility_window_minutes: 60,
+            impact_scaling_factor: 1.5,
+            price_history: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+}
+
+impl SlippageModel for EnhancedSlippageModel {
+    fn estimate_slippage(
+        &self,
+        pool: &PoolInfo,
+        input_amount: &TokenAmount,
+        is_a_to_b: bool,
+    ) -> f64 {
+        // Base XYK slippage calculation
+        let base_slippage = XYKSlippageModel.estimate_slippage(pool, input_amount, is_a_to_b);
+        
+        // Calculate pool depth impact
+        let depth_impact = self.calculate_depth_impact(pool, input_amount, is_a_to_b);
+        
+        // Calculate volatility adjustment
+        let volatility_multiplier = self.calculate_volatility_adjustment(pool);
+        
+        // Calculate trade size impact
+        let size_impact = self.calculate_trade_size_impact(pool, input_amount);
+        
+        // Combine all factors
+        let enhanced_slippage = base_slippage * 
+            (1.0 + depth_impact) * 
+            volatility_multiplier * 
+            (1.0 + size_impact);
+
+        // Cap slippage at reasonable maximum (50%)
+        enhanced_slippage.min(0.5)
+    }
+}
+
+impl EnhancedSlippageModel {
+    /// Calculate slippage impact based on pool depth analysis
+    fn calculate_depth_impact(&self, pool: &PoolInfo, input_amount: &TokenAmount, is_a_to_b: bool) -> f64 {
+        // Use pool reserves to calculate depth-based slippage
+        let input_reserve = if is_a_to_b {
+            pool.token_a.reserve
+        } else {
+            pool.token_b.reserve
+        };
+        
+        if input_reserve == 0 {
+            return 0.5; // 50% slippage if no liquidity
+        }
+        
+        // Calculate depth impact: slippage = input / reserve
+        let depth_impact = (input_amount.amount as f64) / (input_reserve as f64);
+        
+        // Cap at reasonable maximum
+        depth_impact.min(0.1) // Max 10% depth impact
+    }
+
+    /// Calculate volatility adjustment for slippage
+    fn calculate_volatility_adjustment(&self, pool: &PoolInfo) -> f64 {
+        // Use a simplified volatility calculation based on reserves ratio
+        let ratio = if pool.token_b.reserve > 0 {
+            (pool.token_a.reserve as f64) / (pool.token_b.reserve as f64)
+        } else {
+            1.0
+        };
+        
+        // Higher ratio deviation from 1.0 indicates more volatility
+        let volatility = (ratio - 1.0).abs() + 1.0;
+        volatility.min(3.0) // Cap at 3x multiplier
+    }
+
+    /// Calculate trade size impact on slippage
+    fn calculate_trade_size_impact(&self, pool: &PoolInfo, input_amount: &TokenAmount) -> f64 {
+        let total_liquidity = pool.token_a.reserve + pool.token_b.reserve;
+        
+        if total_liquidity == 0 {
+            return 2.0; // High impact if no liquidity
+        }
+        
+        // Impact as ratio of trade size to total liquidity
+        let impact = (input_amount.amount as f64) / (total_liquidity as f64);
+        
+        // Scale and cap the impact
+        (impact * 100.0).min(1.5) // Cap at 1.5x multiplier
+    }
+
+}
+
+/// Pool depth analyzer for advanced slippage calculations
+pub struct PoolDepthAnalyzer;
+
+impl PoolDepthAnalyzer {
+    /// Analyze pool depth to predict slippage at different trade sizes
+    pub fn analyze_depth_levels(pool: &PoolInfo, max_levels: usize) -> Vec<(f64, f64)> {
+        let mut depth_levels = Vec::new();
+        let base_reserve = pool.token_a.reserve.max(pool.token_b.reserve) as f64;
+        
+        if base_reserve == 0.0 {
+            return depth_levels;
+        }
+
+        // Generate test trade sizes from 0.1% to 20% of pool
+        for i in 1..=max_levels {
+            let trade_ratio = (i as f64 * 0.02).min(0.2); // Up to 20%
+            let trade_size = base_reserve * trade_ratio;
+            
+            // Calculate slippage for this trade size
+            let test_amount = TokenAmount {
+                amount: trade_size as u64,
+                decimals: 9,
+            };
+            
+            let slippage = XYKSlippageModel.estimate_slippage(pool, &test_amount, true);
+            depth_levels.push((trade_ratio, slippage));
+        }
+
+        depth_levels
+    }
+
+    /// Recommend optimal trade size to minimize slippage
+    pub fn recommend_optimal_trade_size(pool: &PoolInfo, desired_amount: u64) -> u64 {
+        let depth_levels = Self::analyze_depth_levels(pool, 20);
+        
+        // Find the trade size that keeps slippage under 1%
+        let max_slippage = 0.01; // 1%
+        let base_reserve = pool.token_a.reserve.max(pool.token_b.reserve) as f64;
+        
+        for (trade_ratio, slippage) in depth_levels {
+            if slippage > max_slippage {
+                let recommended_size = (base_reserve * trade_ratio * 0.8) as u64; // 80% of threshold
+                return recommended_size.min(desired_amount);
+            }
+        }
+
+        desired_amount // If all levels are acceptable
     }
 }

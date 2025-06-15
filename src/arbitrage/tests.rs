@@ -481,7 +481,7 @@ mod tests {
         use crate::utils::{PoolInfo, TokenAmount}; // Removed unused DexType import
 
         // Instantiate FeeManager
-        let fee_manager = FeeManager;
+        let fee_manager = FeeManager::default();
         let pool = PoolInfo::default();
         let input_amt = TokenAmount::new(100_000_000, 6);
         let sol_price_usd = 150.0; // Dummy SOL price for the test

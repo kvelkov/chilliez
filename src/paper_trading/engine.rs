@@ -4,14 +4,13 @@
 use crate::{
     arbitrage::opportunity::MultiHopArbOpportunity,
     dex::api::DexClient,
-    error::ArbError,
     utils::PoolInfo,
 };
 use super::{config::PaperTradingConfig, portfolio::SafeVirtualPortfolio};
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use log::{debug, error, info, warn};
 use rand::Rng;
-use solana_sdk::{pubkey::Pubkey, instruction::Instruction};
+use solana_sdk::pubkey::Pubkey;
 use std::{sync::Arc, time::Instant};
 use tokio::time::{sleep, Duration};
 
@@ -60,7 +59,7 @@ impl SimulatedExecutionEngine {
     pub async fn simulate_arbitrage_execution(
         &self,
         opportunity: &MultiHopArbOpportunity,
-        dex_clients: &[Arc<dyn DexClient>],
+        _dex_clients: &[Arc<dyn DexClient>],
     ) -> Result<SimulatedTradeResult> {
         let start_time = Instant::now();
         
@@ -247,7 +246,7 @@ impl SimulatedExecutionEngine {
     }
     
     /// Calculate simulated output with additional slippage
-    fn calculate_simulated_output(&self, expected_output: u64, input_amount: u64) -> (u64, u16) {
+    fn calculate_simulated_output(&self, expected_output: u64, _input_amount: u64) -> (u64, u16) {
         // Add some random slippage on top of the configured base slippage
         let mut rng = rand::thread_rng();
         let random_slippage_bps = rng.gen_range(0..=self.config.simulation_slippage_bps);

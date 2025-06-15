@@ -3,9 +3,8 @@
 
 use super::{
     engine::SimulatedTradeResult,
-    portfolio::{PortfolioSummary, VirtualPortfolio},
+    portfolio::PortfolioSummary,
 };
-use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use solana_sdk::pubkey::Pubkey;
 use std::{
@@ -189,7 +188,7 @@ impl PaperTradingAnalytics {
     }
     
     /// Record a successful execution
-    pub fn record_successful_execution(&mut self, input_amount: u64, output_amount: u64, profit_loss: i64, fees: u64) {
+    pub fn record_successful_execution(&mut self, _input_amount: u64, _output_amount: u64, profit_loss: i64, fees: u64) {
         self.successful_executions += 1;
         self.opportunities_executed += 1;
         self.total_fees_paid += fees;
@@ -215,7 +214,7 @@ impl PaperTradingAnalytics {
     }
     
     /// Record a failed execution
-    pub fn record_failed_execution(&mut self, input_amount: u64, fees: u64, reason: String) {
+    pub fn record_failed_execution(&mut self, _input_amount: u64, fees: u64, reason: String) {
         self.failed_executions += 1;
         self.opportunities_executed += 1;
         self.total_fees_paid += fees;

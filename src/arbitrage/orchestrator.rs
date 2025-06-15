@@ -78,8 +78,6 @@ enum ExecutionRecommendation {
     ImmediateSingle,
     /// Safe to include in batch execution
     SafeToBatch,
-    /// Execute as a high-priority immediate opportunity
-    Execute,
 }
 
 /// Enhanced arbitrage engine with Sprint 2 hot cache integration and advanced execution
@@ -441,11 +439,6 @@ impl ArbitrageOrchestrator {
                     info!("📦 Opportunity {} safe for batching: {}", 
                           opportunity.id, analysis.reason);
                     safe_batch_opportunities.push(opportunity);
-                }
-                ExecutionRecommendation::Execute => {
-                    info!("🚀 Opportunity {} marked for execution: {}", 
-                          opportunity.id, analysis.reason);
-                    competitive_opportunities.push(opportunity);
                 }
             }
         }
@@ -1198,6 +1191,13 @@ impl ArbitrageOrchestrator {
             crate::utils::DexType::Whirlpool => {
                 warn!("Whirlpool live reserve fetching not yet fully implemented for pool {}", pool.address);
                 return Err(ArbError::ParseError("Whirlpool parser not fully implemented".to_string()));
+            }
+            crate::utils::DexType::Phoenix => {
+                warn!("Phoenix live reserve fetching not yet fully implemented for pool {}", pool.address);
+                return Err(ArbError::ParseError("Phoenix parser not fully implemented".to_string()));
+            }
+            crate::utils::DexType::Jupiter => {
+                return Err(ArbError::ParseError("Jupiter is an aggregator and doesn't have individual pools".to_string()));
             }
             crate::utils::DexType::Unknown(_) => {
                 return Err(ArbError::ParseError(format!("Unknown DEX type for pool {}", pool.address)));

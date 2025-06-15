@@ -26,27 +26,31 @@ pub use api::{
     DexHealthStatus
 };
 
-// Re-export discovery functionality
+// Re-export discovery functionality (actively used items)
 pub use discovery::{
-    PoolDiscoveryService, PoolValidationConfig, BannedPairsManager,
-    find_dex_client_for_pool, group_pools_by_dex, find_pools_for_pair,
-    validate_pools, validate_single_pool, POOL_PARSER_REGISTRY
+    // Used in orchestrator.rs and webhooks:
+    PoolValidationConfig, BannedPairsManager,
+    validate_pools, validate_single_pool,
+    group_pools_by_dex, find_pools_for_pair,
+    // Note: PoolDiscoveryService, find_dex_client_for_pool, POOL_PARSER_REGISTRY
+    // are imported directly from discovery in main.rs and other places
 };
 
-// Re-export live update management
+// Re-export live update management (items used in main.rs)
 pub use live_update_manager::{
     LiveUpdateManager, LiveUpdateManagerBuilder, LiveUpdateConfig,
-    LiveUpdateMetrics, LiveUpdateEvent, UpdateSource
+    // Note: LiveUpdateMetrics, LiveUpdateEvent, UpdateSource are only used internally
 };
 
-// Re-export all DEX clients
-pub use clients::{
-    OrcaClient, OrcaPoolParser,
-    RaydiumClient,
-    MeteoraClient, MeteoraPoolParser,
-    LifinityClient, LifinityPoolParser,
-    PhoenixClient, PhoenixPoolParser,
-};
+// Re-export DEX clients that are used externally (currently none are used externally)
+// The clients are only used in the get_all_* functions within this module
+// If external modules need direct access to clients, uncomment the needed ones:
+// pub use clients::{
+//     OrcaClient, OrcaPoolParser,
+//     RaydiumClient,
+//     MeteoraClient, MeteoraPoolParser, 
+//     LifinityClient, LifinityPoolParser,
+// };
 
 // Imports for client aggregation
 use crate::cache::Cache;
@@ -156,6 +160,8 @@ pub fn get_clients_by_type(
                 crate::utils::DexType::Raydium => client.get_name() == "Raydium",
                 crate::utils::DexType::Meteora => client.get_name() == "Meteora",
                 crate::utils::DexType::Lifinity => client.get_name() == "Lifinity",
+                crate::utils::DexType::Phoenix => client.get_name() == "Phoenix",
+                crate::utils::DexType::Jupiter => client.get_name() == "Jupiter",
                 crate::utils::DexType::Whirlpool => client.get_name() == "Orca", // Whirlpool is part of Orca
                 crate::utils::DexType::Unknown(name) => client.get_name() == name,
             }

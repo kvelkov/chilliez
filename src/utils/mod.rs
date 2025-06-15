@@ -9,6 +9,7 @@ use async_trait::async_trait;
 use crate::solana::rpc::SolanaRpcClient;
 use anyhow::Result;
 use std::sync::Arc;
+use std::fmt;
 
 /// Represents information about a liquidity pool on a DEX.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -163,8 +164,25 @@ pub enum DexType {
     Raydium,
     Lifinity,
     Meteora,
+    Phoenix,
+    Jupiter, // Jupiter aggregator
     Whirlpool,
     Unknown(String),
+}
+
+impl fmt::Display for DexType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            DexType::Orca => write!(f, "Orca"),
+            DexType::Raydium => write!(f, "Raydium"),
+            DexType::Lifinity => write!(f, "Lifinity"),
+            DexType::Meteora => write!(f, "Meteora"),
+            DexType::Phoenix => write!(f, "Phoenix"),
+            DexType::Jupiter => write!(f, "Jupiter"),
+            DexType::Whirlpool => write!(f, "Whirlpool"),
+            DexType::Unknown(name) => write!(f, "Unknown({})", name),
+        }
+    }
 }
 
 /// Trait for parsing pool data from different DEXs.

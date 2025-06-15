@@ -860,7 +860,7 @@ impl PoolMonitoringCoordinator {
         monitored_pools: Arc<RwLock<HashMap<Pubkey, MonitoredPool>>>,
         _config: Arc<Config>,
         validation_config: PoolValidationConfig,
-        banned_pairs_manager: Arc<BannedPairsManager>,
+        _banned_pairs_manager: Arc<BannedPairsManager>,
     ) {
         info!("🔄 Starting event processing loop...");
         

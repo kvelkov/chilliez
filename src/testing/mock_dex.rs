@@ -621,6 +621,8 @@ fn dex_type_name(dex_type: &DexType) -> &str {
         DexType::Raydium => "Raydium",
         DexType::Meteora => "Meteora",
         DexType::Lifinity => "Lifinity",
+        DexType::Phoenix => "Phoenix",
+        DexType::Jupiter => "Jupiter",
         DexType::Whirlpool => "Whirlpool",
         DexType::Unknown(name) => name,
     }

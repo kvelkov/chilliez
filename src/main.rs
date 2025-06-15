@@ -21,7 +21,7 @@ use crate::{
     dex::{
         get_all_clients_arc, get_all_discoverable_clients,
         discovery::{PoolDiscoveryService, BannedPairsManager, PoolValidationConfig},
-        live_update_manager::{LiveUpdateManager, LiveUpdateManagerBuilder, LiveUpdateConfig, UpdateSource},
+        live_update_manager::{LiveUpdateManager, LiveUpdateManagerBuilder, LiveUpdateConfig},
     },
     error::ArbError,
     metrics::Metrics,

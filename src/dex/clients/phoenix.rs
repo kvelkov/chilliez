@@ -9,7 +9,7 @@ use crate::solana::rpc::SolanaRpcClient;
 use crate::utils::{DexType, PoolInfo, PoolParser as UtilsPoolParser, PoolToken};
 use anyhow::{anyhow, Result as AnyhowResult};
 use async_trait::async_trait;
-use log::{debug, info, warn};
+use log::{info, warn};
 use solana_sdk::{
     instruction::{Instruction, AccountMeta},
     pubkey::Pubkey,
@@ -306,7 +306,7 @@ impl PoolDiscoverable for PhoenixClient {
         DexClient::discover_pools(self).await
     }
 
-    async fn fetch_pool_data(&self, market_address: Pubkey) -> AnyhowResult<PoolInfo> {
+    async fn fetch_pool_data(&self, _market_address: Pubkey) -> AnyhowResult<PoolInfo> {
         // This would fetch specific market data from on-chain
         Err(anyhow!("PhoenixClient: fetch_pool_data not yet implemented"))
     }

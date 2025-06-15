@@ -2,7 +2,6 @@
 //! Pool discovery, management, and banned pairs filtering.
 //! Consolidates pool_management.rs, banned_pairs.rs, and routing.rs functionality.
 
-use crate::cache::Cache;
 use crate::dex::{
     clients::{
         lifinity::LifinityPoolParser,
@@ -204,7 +203,7 @@ pub struct PoolDiscoveryService {
     dex_clients: Vec<Arc<dyn PoolDiscoverable>>,
     validation_config: PoolValidationConfig,
     banned_pairs_manager: Arc<tokio::sync::Mutex<BannedPairsManager>>,
-    rpc_client: Arc<SolanaRpcClient>,
+    _rpc_client: Arc<SolanaRpcClient>,
 }
 
 impl PoolDiscoveryService {
@@ -222,7 +221,7 @@ impl PoolDiscoveryService {
             dex_clients,
             validation_config,
             banned_pairs_manager: Arc::new(tokio::sync::Mutex::new(banned_pairs_manager)),
-            rpc_client,
+            _rpc_client: rpc_client,
         })
     }
 
@@ -376,6 +375,8 @@ impl PoolDiscoveryService {
                 DexType::Raydium => "Raydium",
                 DexType::Lifinity => "Lifinity",
                 DexType::Meteora => "Meteora",
+                DexType::Phoenix => "Phoenix",
+                DexType::Jupiter => "Jupiter",
                 DexType::Whirlpool => "Whirlpool",
                 DexType::Unknown(name) => name.as_str(),
             };
@@ -459,6 +460,8 @@ pub fn find_dex_client_for_pool(
             DexType::Raydium => dex_name == "Raydium",
             DexType::Lifinity => dex_name == "Lifinity",
             DexType::Meteora => dex_name == "Meteora",
+            DexType::Phoenix => dex_name == "Phoenix",
+            DexType::Jupiter => dex_name == "Jupiter",
             DexType::Whirlpool => dex_name == "Orca",
             DexType::Unknown(name) => dex_name == name,
         };
@@ -480,6 +483,8 @@ pub fn group_pools_by_dex(pools: &[PoolInfo]) -> HashMap<String, Vec<&PoolInfo>>
             DexType::Raydium => "Raydium", 
             DexType::Lifinity => "Lifinity",
             DexType::Meteora => "Meteora",
+            DexType::Phoenix => "Phoenix",
+            DexType::Jupiter => "Jupiter",
             DexType::Whirlpool => "Orca",
             DexType::Unknown(name) => name.as_str(),
         };
@@ -511,7 +516,7 @@ pub fn find_pools_for_pair(
 // =====================================================================================
 
 /// Basic pool validation function for backward compatibility
-pub fn validate_pools(pools: Vec<PoolInfo>, config: &PoolValidationConfig) -> Vec<PoolInfo> {
+pub fn validate_pools(pools: Vec<PoolInfo>, _config: &PoolValidationConfig) -> Vec<PoolInfo> {
     pools
         .into_iter()
         .filter(|pool| {

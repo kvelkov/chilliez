@@ -11,13 +11,15 @@ use crate::{
     arbitrage::{
         opportunity::MultiHopArbOpportunity,
         mev::{JitoHandler, MevProtectionConfig, JitoConfig},
+        analysis::{FeeManager, ArbitrageAnalyzer},
+        safety::{SafeTransactionHandler, TransactionSafetyConfig},
     },
     config::settings::Config,
     dex::api::DexClient,
     error::ArbError,
     metrics::Metrics,
     solana::rpc::SolanaRpcClient,
-    utils::{DexType, PoolInfo}, // Added PoolInfo import
+    utils::{DexType, PoolInfo, TokenAmount}, // Added PoolInfo import
     cache::Cache, // Redis cache
 };
 use log::{info, warn, error};
@@ -77,6 +79,10 @@ pub struct HftExecutor {
     dex_clients: Option<Arc<Mutex<HashMap<DexType, Box<dyn DexClient>>>>>,
     hot_cache: Arc<DashMap<solana_sdk::pubkey::Pubkey, Arc<PoolInfo>>>,
     pool_cache: Option<Arc<Cache>>, // This is the Redis cache
+    // Enhanced components for dynamic fee/slippage calculation
+    fee_manager: Arc<FeeManager>,
+    arbitrage_analyzer: Arc<Mutex<ArbitrageAnalyzer>>,
+    safety_handler: Arc<SafeTransactionHandler>,
 }
 
 impl HftExecutor {
@@ -88,6 +94,27 @@ impl HftExecutor {
         metrics: Arc<Mutex<Metrics>>,
         hot_cache: Arc<DashMap<solana_sdk::pubkey::Pubkey, Arc<PoolInfo>>>,
     ) -> Self {
+        // Create enhanced components with proper initialization
+        let fee_manager = Arc::new(FeeManager::default());
+        let arbitrage_analyzer = Arc::new(Mutex::new(
+            ArbitrageAnalyzer::new(&config, metrics.clone())
+        ));
+        
+        // Create simplified safety configuration based on main config
+        let safety_config = TransactionSafetyConfig::default();
+        
+        // Create SolanaRpcClient with proper parameters
+        let solana_rpc_client = Arc::new(SolanaRpcClient::new(
+            "https://api.mainnet-beta.solana.com",
+            vec![],
+            3,
+            std::time::Duration::from_millis(1000),
+        ));
+        
+        let safety_handler = Arc::new(
+            SafeTransactionHandler::new(solana_rpc_client, safety_config)
+        );
+
         Self { 
             wallet, 
             rpc_client, 
@@ -97,6 +124,9 @@ impl HftExecutor {
             dex_clients: None,
             hot_cache,
             pool_cache: None,
+            fee_manager,
+            arbitrage_analyzer,
+            safety_handler,
         }
     }
 
@@ -205,20 +235,72 @@ impl HftExecutor {
         opportunity: &MultiHopArbOpportunity,
     ) -> Result<Signature, String> {
         let start_time = Instant::now();
-        let instructions = self.build_instructions_from_multihop(opportunity).await?; // Now async
+        
+        // Step 1: Enhanced fee calculation using FeeManager
+        info!("🔄 Calculating dynamic fees for opportunity {}", opportunity.id);
+        
+        // Collect pools for fee calculation
+        let pools_for_fee_calc: Vec<Arc<PoolInfo>> = opportunity.hops.iter()
+            .filter_map(|hop| self.hot_cache.get(&hop.pool).map(|arc| arc.value().clone()))
+            .collect();
+        
+        let pools_refs: Vec<&PoolInfo> = pools_for_fee_calc.iter().map(|p| p.as_ref()).collect();
+        
+        // Estimate compute units using FeeManager
+        let estimated_cu = self.fee_manager.estimate_compute_units(&pools_refs);
+        
+        // Calculate dynamic priority fee
+        let dynamic_priority_fee = match self.fee_manager.calculate_dynamic_priority_fee(estimated_cu).await {
+            Ok(fee) => fee,
+            Err(e) => {
+                warn!("Failed to calculate dynamic priority fee: {}. Using config default.", e);
+                self.config.transaction_priority_fee_lamports
+            }
+        };
+        
+        // Calculate Jito tip for MEV protection
+        let trade_value_sol = opportunity.input_amount as f64 / 1_000_000_000.0; // Convert lamports to SOL
+        let complexity_factor = opportunity.hops.len() as f64;
+        let jito_tip = self.fee_manager.calculate_jito_tip(trade_value_sol, complexity_factor);
+        
+        info!("💰 Enhanced fee calculation - CU: {}, Priority fee: {} lamports, Jito tip: {} lamports", 
+              estimated_cu, dynamic_priority_fee, jito_tip);
+
+        // Step 2: Enhanced slippage calculation using ArbitrageAnalyzer
+        let analyzer = self.arbitrage_analyzer.lock().await;
+        
+        // Create input amount for fee breakdown calculation
+        let input_token_amount = TokenAmount {
+            amount: opportunity.input_amount as u64, // Convert f64 to u64
+            decimals: 9, // Assume SOL decimals for simplicity
+        };
+        
+        // Calculate comprehensive fee breakdown
+        let fee_breakdown = analyzer.calculate_fee_breakdown(
+            &pools_refs,
+            &input_token_amount,
+            150.0 // TODO: Get real SOL price
+        );
+        
+        info!("📊 Fee breakdown - Protocol: {:.4}%, Gas: {:.4}%, Slippage: {:.4}%, Total: {:.4}%, Risk: {:.2}", 
+              fee_breakdown.protocol_fee * 100.0,
+              fee_breakdown.gas_fee * 100.0,
+              fee_breakdown.slippage_cost * 100.0,
+              fee_breakdown.total_cost * 100.0,
+              fee_breakdown.risk_score);
+
+        // Step 3: Build instructions with enhanced calculations
+        let instructions = self.build_instructions_from_multihop(opportunity).await?;
 
         if instructions.is_empty() {
             return Err("No swap instructions generated".to_string());
         }
 
-        // Get CU limit and price from config, with defaults
-        let cu_limit = self.config.transaction_cu_limit.unwrap_or(400_000); 
-        let cu_price = self.config.transaction_priority_fee_lamports;
-
+        // Step 4: Build transaction with dynamic fees
         let recent_blockhash = self.get_latest_blockhash().await?;
         let all_instructions: Vec<Instruction> = [
-            ComputeBudgetInstruction::set_compute_unit_limit(cu_limit),
-            ComputeBudgetInstruction::set_compute_unit_price(cu_price),
+            ComputeBudgetInstruction::set_compute_unit_limit(estimated_cu),
+            ComputeBudgetInstruction::set_compute_unit_price(dynamic_priority_fee),
         ].into_iter().chain(instructions.into_iter()).collect();
 
         let transaction = Transaction::new_signed_with_payer(
@@ -228,42 +310,72 @@ impl HftExecutor {
             recent_blockhash,
         );
 
-        match self
-            .rpc_client
-            .send_and_confirm_transaction_with_spinner(&transaction)
-            .await
-        {
-            Ok(signature) => {
-                let duration = start_time.elapsed();
-                self.metrics.lock().await.record_execution_time(duration);
-                self.metrics.lock().await.log_opportunity_executed_success();
-                if let Some(sender) = &self.event_sender {
-                    let event = ExecutorEvent::OpportunityExecuted {
-                        opportunity_id: opportunity.id.clone(),
-                        signature: Some(signature),
-                        timestamp: std::time::SystemTime::now(),
-                        result: Ok(()),
-                    };
-                    if let Err(e) = sender.send(event).await {
-                        log::error!("Failed to send execution success event: {}", e);
+        // Step 5: Safe execution using SafeTransactionHandler
+        info!("🚀 Executing transaction with enhanced safety checks...");
+        match self.safety_handler.execute_with_safety_checks(
+            transaction,
+            &pools_refs,
+            opportunity.input_amount as u64,
+            opportunity.expected_output as u64,
+        ).await {
+            Ok(transaction_result) => {
+                if transaction_result.success {
+                    let duration = start_time.elapsed();
+                    self.metrics.lock().await.record_execution_time(duration);
+                    self.metrics.lock().await.log_opportunity_executed_success();
+                    
+                    // Log enhanced execution metrics
+                    info!("✅ Transaction successful - Signature: {:?}, Fee: {} lamports, Slippage: {:.2}%, Time: {}ms",
+                          transaction_result.signature,
+                          transaction_result.fee_paid,
+                          transaction_result.slippage_experienced * 100.0,
+                          transaction_result.execution_time_ms);
+                    
+                    if let Some(sender) = &self.event_sender {
+                        let signature_for_event = transaction_result.signature.as_ref().and_then(|s| s.parse().ok());
+                        let event = ExecutorEvent::OpportunityExecuted {
+                            opportunity_id: opportunity.id.clone(),
+                            signature: signature_for_event,
+                            timestamp: std::time::SystemTime::now(),
+                            result: Ok(()),
+                        };
+                        if let Err(e) = sender.send(event).await {
+                            log::error!("Failed to send execution success event: {}", e);
+                        }
                     }
+                    
+                    // Parse signature from string result
+                    let signature_str = transaction_result.signature
+                        .as_ref()
+                        .ok_or_else(|| "No signature returned".to_string())?;
+                    
+                    let signature = signature_str
+                        .parse()
+                        .map_err(|e| format!("Failed to parse signature: {}", e))?;
+                    
+                    Ok(signature)
+                } else {
+                    let error_msg = transaction_result.failure_reason
+                        .unwrap_or_else(|| "Unknown transaction failure".to_string());
+                    Err(format!("Safe transaction execution failed: {}", error_msg))
                 }
-                Ok(signature)
             }
             Err(e) => {
                 self.metrics.lock().await.log_opportunity_executed_failure();
+                error!("❌ Enhanced execution failed: {}", e);
+                
                 if let Some(sender) = &self.event_sender {
                     let event = ExecutorEvent::OpportunityExecuted {
                         opportunity_id: opportunity.id.clone(),
                         signature: None,
                         timestamp: std::time::SystemTime::now(),
-                        result: Err(format!("Transaction failed: {}", e)),
+                        result: Err(format!("Enhanced execution failed: {}", e)),
                     };
                     if let Err(send_err) = sender.send(event).await {
                         log::error!("Failed to send execution failure event: {}", send_err);
                     }
                 }
-                Err(format!("Transaction failed: {}", e))
+                Err(format!("Enhanced execution failed: {}", e))
             }
         }
     }

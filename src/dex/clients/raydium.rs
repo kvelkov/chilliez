@@ -420,7 +420,7 @@ impl PoolDiscoverable for RaydiumClient {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LiquidityFile {
     pub official: Vec<AmmPool>,
-    pub unOfficial: Vec<AmmPool>,
+    pub un_official: Vec<AmmPool>,
 }
 
 /// Individual AMM pool from Raydium API

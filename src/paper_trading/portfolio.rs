@@ -7,7 +7,7 @@ use solana_sdk::pubkey::Pubkey;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use std::time::{SystemTime, UNIX_EPOCH};
-use log::{debug, info, warn};
+use log::info;
 
 /// Virtual portfolio for tracking simulated balances and trades
 #[derive(Debug, Clone, Serialize, Deserialize)]

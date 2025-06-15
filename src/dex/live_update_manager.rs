@@ -146,6 +146,7 @@ pub struct LiveUpdateManager {
 }
 
 /// Simple rate limiter for update processing
+#[allow(dead_code)] // Planned for rate limiting implementation
 struct RateLimiter {
     max_per_second: u32,
     current_count: u32,
@@ -153,6 +154,7 @@ struct RateLimiter {
 }
 
 impl RateLimiter {
+    #[allow(dead_code)] // Planned for rate limiting implementation
     fn new(max_per_second: u32) -> Self {
         Self {
             max_per_second,
@@ -161,6 +163,7 @@ impl RateLimiter {
         }
     }
     
+    #[allow(dead_code)] // Planned for rate limiting implementation
     fn should_allow(&mut self) -> bool {
         let now = Instant::now();
         if now.duration_since(self.last_reset).as_secs() >= 1 {
@@ -415,6 +418,7 @@ impl LiveUpdateManager {
     }
     
     /// Send a live update (used by external systems)
+    #[allow(dead_code)] // Planned for external update injection
     pub async fn send_update(&self, update: LiveUpdateEvent) -> Result<()> {
         // Check rate limiting
         {
@@ -443,6 +447,7 @@ impl LiveUpdateManager {
     }
     
     /// Create an update from pool info (convenience method)
+    #[allow(dead_code)] // Planned for update event creation
     pub fn create_update(
         &self,
         pool_address: Pubkey,
@@ -531,6 +536,7 @@ impl LiveUpdateManagerBuilder {
         self
     }
     
+    #[allow(dead_code)] // Planned for individual DEX client configuration
     pub fn with_dex_client(mut self, dex_type: DexType, client: Arc<dyn DexClient>) -> Self {
         self.dex_clients.insert(dex_type, client);
         self

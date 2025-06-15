@@ -262,7 +262,6 @@ mod tests {
     use super::*;
     use std::sync::Arc;
     use crate::utils::{DexType, PoolInfo, PoolToken};
-    use solana_sdk::pubkey::Pubkey;
     use tempfile::tempdir;
 
     #[test]

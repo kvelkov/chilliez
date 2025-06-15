@@ -32,6 +32,7 @@ pub enum OrderSide {
 
 /// Phoenix order type
 #[derive(Debug, Clone, Copy)]
+#[allow(dead_code)] // Phoenix integration not yet activated
 pub enum OrderType {
     Limit,
     Market,
@@ -41,6 +42,7 @@ pub enum OrderType {
 
 /// Phoenix market state (simplified)
 #[derive(Debug, Clone)]
+#[allow(dead_code)] // Phoenix integration not yet activated
 pub struct PhoenixMarketState {
     pub market_id: Pubkey,
     pub base_mint: Pubkey,
@@ -121,6 +123,7 @@ pub struct PhoenixClient {
 }
 
 impl PhoenixClient {
+    #[allow(dead_code)] // Phoenix integration not yet activated
     pub fn new() -> Self {
         Self {
             name: "Phoenix".to_string(),

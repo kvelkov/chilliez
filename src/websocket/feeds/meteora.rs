@@ -12,6 +12,7 @@ use crate::{
 
 /// Meteora-specific WebSocket feed implementation (placeholder)
 pub struct MeteoraWebSocketFeed {
+    #[allow(dead_code)] // Planned for Meteora WebSocket configuration
     config: WebSocketConfig,
     status: ConnectionStatus,
     metrics: WebSocketMetrics,

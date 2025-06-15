@@ -83,6 +83,7 @@ pub struct OrcaApiPool {
     #[serde(rename = "sqrtPrice")]
     pub sqrt_price: String,
     #[serde(rename = "tickCurrentIndex")]
+    #[allow(dead_code)] // Used in API parsing but not currently needed in arbitrage logic
     pub tick_current_index: i32,
 }
 

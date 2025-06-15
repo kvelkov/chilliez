@@ -89,6 +89,7 @@ pub struct MeteoraPoolParser;
 
 impl MeteoraPoolParser {
     /// Identify the pool type based on program ID and account size
+    #[allow(dead_code)] // Planned for Meteora pool type detection
     pub fn identify_pool_type(program_id: &Pubkey, data_len: usize) -> Option<MeteoraPoolType> {
         match program_id {
             &METEORA_DYNAMIC_AMM_PROGRAM_ID => {

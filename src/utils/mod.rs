@@ -245,6 +245,7 @@ pub fn calculate_output_amount(
 /// Test struct to verify PoolInfo field definitions
 #[cfg(test)]
 #[derive(Debug, Clone)]
+#[allow(dead_code)] // Used for field definition verification in tests
 pub struct TestPoolInfo {
     pub address: Pubkey,
     pub name: String,

@@ -10,10 +10,10 @@ pub mod phoenix;
 pub mod jupiter; // Jupiter aggregator for additional liquidity
 
 // Re-export client structs for easier access
-pub use orca::{OrcaClient, OrcaPoolParser};
+pub use orca::OrcaClient; // OrcaPoolParser only used in pool_management.rs
 pub use raydium::RaydiumClient;
-pub use meteora::{MeteoraClient, MeteoraPoolParser};
-pub use lifinity::{LifinityClient, LifinityPoolParser};
+pub use meteora::MeteoraClient; // MeteoraPoolParser only used in pool_management.rs
+pub use lifinity::LifinityClient; // LifinityPoolParser only used in pool_management.rs
 // Note: PhoenixClient is implemented but not currently used in get_all_* functions
 // Uncomment when Phoenix integration is activated:
 // pub use phoenix::{PhoenixClient, PhoenixPoolParser};

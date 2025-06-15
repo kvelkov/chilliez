@@ -191,6 +191,9 @@ async fn main() -> Result<(), ArbError> {
         .build()
         .map_err(|e| ArbError::ConfigError(format!("Failed to create LiveUpdateManager: {}", e)))?;
     
+    // Ensure compiler recognizes LiveUpdateManager usage (false positive workaround)
+    let _: &LiveUpdateManager = &live_update_manager;
+    
     // Initialize webhook integration service
     let mut webhook_service = WebhookIntegrationService::new(app_config.clone());
     if app_config.enable_webhooks {

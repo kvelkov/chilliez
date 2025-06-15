@@ -537,7 +537,7 @@ mod tests {
 
     #[test]
     fn test_rate_limiter() {
-        let mut limiter = RateLimiter::new(10); // 10 requests per second
+        let limiter = RateLimiter::new(10); // 10 requests per second
         assert_eq!(limiter.min_interval, Duration::from_millis(100));
     }
 

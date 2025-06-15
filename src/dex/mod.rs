@@ -37,10 +37,10 @@ pub use discovery::{
 };
 
 // Re-export live update management (items used in main.rs)
-pub use live_update_manager::{
-    LiveUpdateManager, LiveUpdateManagerBuilder, LiveUpdateConfig,
-    // Note: LiveUpdateMetrics, LiveUpdateEvent, UpdateSource are only used internally
-};
+// Note: These are imported directly in main.rs from dex::live_update_manager
+// pub use live_update_manager::{
+//     LiveUpdateManager, LiveUpdateManagerBuilder, LiveUpdateConfig,
+// };
 
 // Re-export DEX clients that are used externally (currently none are used externally)
 // The clients are only used in the get_all_* functions within this module
@@ -145,6 +145,7 @@ pub async fn get_all_clients_arc(
 }
 
 /// Get clients by DEX type for targeted operations
+#[allow(dead_code)] // Planned for DEX-specific client filtering
 pub fn get_clients_by_type(
     dex_type: &crate::utils::DexType,
     cache: Arc<Cache>,
@@ -171,6 +172,7 @@ pub fn get_clients_by_type(
 }
 
 /// Enhanced DEX capabilities summary
+#[allow(dead_code)] // Planned for DEX capability introspection
 pub fn get_dex_capabilities() -> std::collections::HashMap<String, Vec<String>> {
     let mut capabilities = std::collections::HashMap::new();
     

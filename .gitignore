@@ -16,3 +16,42 @@ venv/
 
 # Env files
 .env
+# Additional ignore patterns added by cleanup script
+*.DS_Store
+.DS_Store*
+
+# Git directories (prevent accidental commits)
+*.git/
+.git/
+
+# Build and cache directories
+target/
+build/
+dist/
+*.dSYM/
+
+# Python
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Node.js
+node_modules/
+npm-debug.log*
+
+# VS Code
+*.vsix
+.vscode/settings.json.bak
+
+# Logs and temporary files
+*.log
+*.tmp
+*.cache
+*.temp
+
+# OS files
+Thumbs.db
+.Spotlight-V100
+.Trashes

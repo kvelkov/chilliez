@@ -90,36 +90,64 @@ impl MarketGraph {
     }
     
     fn calculate_exchange_rate(&self, pool: &PoolInfo, a_to_b: bool) -> f64 {
-        // This is a simplified calculation - in production you'd use proper AMM formulas
-        // Using integer-based calculations when possible for better precision
+        use rust_decimal::Decimal;
+        use rust_decimal_macros::dec;
+        use num_traits::ToPrimitive;
         
+        // Use precise arithmetic for exchange rate calculations
         if let Some(liquidity) = pool.liquidity {
             if liquidity > 0 {
                 // For CLMM pools (like Orca), the rate depends on current tick and sqrt_price
                 if let Some(sqrt_price) = pool.sqrt_price {
-                    // Use integer arithmetic for price calculation when possible
-                    let sqrt_price_u128 = sqrt_price as u128;
-                    let price_scaled = sqrt_price_u128.saturating_mul(sqrt_price_u128);
+                    // Use precise arithmetic for price calculation
+                    let sqrt_price_decimal = Decimal::from(sqrt_price);
+                    let price_decimal = sqrt_price_decimal * sqrt_price_decimal / Decimal::from(1u128 << 64);
                     
-                    // Convert to f64 only at the end for final rate calculation
-                    let price = (price_scaled as f64) / (1u128 << 64) as f64; // Scale down from Q64.64 format
-                    
-                    if a_to_b {
-                        price
+                    let rate_decimal = if a_to_b {
+                        price_decimal
                     } else {
-                        if price > 0.0 { 1.0 / price } else { 0.0 }
-                    }
+                        if !price_decimal.is_zero() {
+                            dec!(1) / price_decimal
+                        } else {
+                            Decimal::ZERO
+                        }
+                    };
+                    
+                    rate_decimal.to_f64().unwrap_or(0.0)
                 } else {
-                    // Fallback to basic liquidity-based calculation using integer division
-                    let liquidity_scaled = liquidity / 1_000_000; // Scale down liquidity
-                    let base_rate = liquidity_scaled as f64 / 1000.0; // Further scaling for rate
-                    if a_to_b { base_rate } else { if base_rate > 0.0 { 1.0 / base_rate } else { 0.0 } }
+                    // Fallback to basic AMM rate calculation using reserves
+                    let reserve_a = Decimal::from(pool.token_a.reserve);
+                    let reserve_b = Decimal::from(pool.token_b.reserve);
+                    
+                    if !reserve_a.is_zero() && !reserve_b.is_zero() {
+                        let rate_decimal = if a_to_b {
+                            reserve_b / reserve_a
+                        } else {
+                            reserve_a / reserve_b
+                        };
+                        rate_decimal.to_f64().unwrap_or(0.0)
+                    } else {
+                        0.0
+                    }
                 }
             } else {
                 0.0
             }
         } else {
-            0.0
+            // Use reserve-based rate calculation when liquidity data is not available
+            let reserve_a = Decimal::from(pool.token_a.reserve);
+            let reserve_b = Decimal::from(pool.token_b.reserve);
+            
+            if !reserve_a.is_zero() && !reserve_b.is_zero() {
+                let rate_decimal = if a_to_b {
+                    reserve_b / reserve_a
+                } else {
+                    reserve_a / reserve_b
+                };
+                rate_decimal.to_f64().unwrap_or(0.0)
+            } else {
+                0.0
+            }
         }
     }
     

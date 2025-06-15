@@ -418,28 +418,32 @@ impl HftExecutor {
             let dest_mint = dest_token_details.mint;
             let dest_decimals = dest_token_details.decimals;
 
-            // --- Calculate amounts in smallest units ---
-            let input_amount_u64 = (hop.input_amount * 10f64.powi(source_decimals as i32)) as u64;
+            // --- Calculate amounts using precise decimal arithmetic ---
+            use rust_decimal::Decimal;
+            use rust_decimal_macros::dec;
+            use num_traits::{ToPrimitive, FromPrimitive};
             
-            // Integer-only slippage calculation for better security and reliability
-            let max_slippage_percentage = self.config.max_slippage_pct; // Assuming this is a percentage like 0.5 for 0.5%
+            // Convert to Decimal for precise calculations
+            let input_amount_decimal = Decimal::from_f64(hop.input_amount).unwrap_or(Decimal::ZERO);
+            let expected_output_decimal = Decimal::from_f64(hop.expected_output).unwrap_or(Decimal::ZERO);
+            let max_slippage_decimal = Decimal::from_f64(self.config.max_slippage_pct / 100.0).unwrap_or(dec!(0.005)); // Convert percentage to decimal
             
-            // Convert expected_output to integer units first
-            let expected_output_base_units = (hop.expected_output * 10f64.powi(dest_decimals as i32)) as u128;
+            // Scale to token units with precise arithmetic
+            let scale_factor_input = Decimal::from(10u64.pow(source_decimals as u32));
+            let scale_factor_output = Decimal::from(10u64.pow(dest_decimals as u32));
             
-            // Calculate slippage using integer arithmetic only
-            // slippage_factor_bps = max_slippage_percentage * 100 (convert to basis points)
-            // For 0.5%, this becomes 50 basis points
-            let slippage_bps = (max_slippage_percentage * 100.0) as u128;
+            let input_amount_u64 = (input_amount_decimal * scale_factor_input)
+                .floor()
+                .to_u64()
+                .unwrap_or(0);
             
-            // Calculate minimum output using checked arithmetic
-            let minimum_output_amount_u64 = expected_output_base_units
-                .checked_mul(10000_u128.checked_sub(slippage_bps).ok_or_else(|| "Slippage calculation underflow".to_string())?)
-                .ok_or_else(|| "Slippage calculation overflow in multiplication".to_string())?
-                .checked_div(10000)
-                .ok_or_else(|| "Slippage calculation division error".to_string())?
-                .try_into()
-                .map_err(|_| "Minimum output amount too large for u64".to_string())?;
+            // Calculate minimum output with precise slippage protection
+            let slippage_factor = dec!(1) - max_slippage_decimal;
+            let minimum_output_decimal = expected_output_decimal * scale_factor_output * slippage_factor;
+            let minimum_output_amount_u64 = minimum_output_decimal
+                .floor()
+                .to_u64()
+                .unwrap_or(0);
 
             // --- Get user's ATAs ---
             let user_source_token_account = get_associated_token_address(&self.wallet.pubkey(), &source_mint);

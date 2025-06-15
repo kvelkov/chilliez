@@ -380,21 +380,39 @@ impl SafeTransactionHandler {
 
     /// Estimate actual output (simplified implementation)
     async fn estimate_actual_output(&self, expected_output: u64, _pools: &[&PoolInfo]) -> u64 {
-        // Simulate some slippage
-        let slippage_factor = 0.98; // 2% slippage
-        (expected_output as f64 * slippage_factor) as u64
+        use rust_decimal::Decimal;
+        use rust_decimal_macros::dec;
+        
+        // Simulate some slippage using precise decimal arithmetic
+        let expected_decimal = Decimal::from(expected_output);
+        let slippage_factor = dec!(0.98); // 2% slippage
+        let actual_decimal = expected_decimal * slippage_factor;
+        
+        // Convert back to u64 via string parsing to avoid precision loss
+        if let Ok(actual_str) = actual_decimal.round().to_string().parse::<u64>() {
+            actual_str
+        } else {
+            expected_output
+        }
     }
 
-    /// Calculate slippage experienced
+    /// Calculate slippage experienced with precise decimal arithmetic
     fn calculate_slippage_experienced(&self, expected: u64, actual: u64) -> f64 {
+        use rust_decimal::Decimal;
+        use num_traits::ToPrimitive;
+        
         if expected == 0 {
             return 0.0;
         }
         
-        let expected_f64 = expected as f64;
-        let actual_f64 = actual as f64;
+        // Use precise decimal arithmetic for slippage calculation
+        let expected_decimal = Decimal::from(expected);
+        let actual_decimal = Decimal::from(actual);
         
-        (expected_f64 - actual_f64) / expected_f64
+        let slippage_decimal = (expected_decimal - actual_decimal) / expected_decimal;
+        
+        // Convert back to f64 only for API compatibility
+        slippage_decimal.to_f64().unwrap_or(0.0)
     }
 
     /// Estimate transaction fee

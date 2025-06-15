@@ -564,10 +564,44 @@ impl AdvancedArbitrageMath {
         Ok(outputs)
     }
 
-    /// Calculate output for a single pool
-    fn calculate_pool_output(&self, _pool: &PoolInfo, input_amount: Decimal) -> Result<Decimal> {
-        // Simplified calculation - would implement actual AMM formulas
-        Ok(input_amount * Decimal::from_str("0.997")?) // Assume 0.3% fee
+    /// Calculate output for a single pool using precise AMM formulas
+    fn calculate_pool_output(&self, pool: &PoolInfo, input_amount: Decimal) -> Result<Decimal> {
+        use rust_decimal_macros::dec;
+        
+        // Use different calculation methods based on DEX type
+        match pool.dex_type {
+            DexType::Raydium | DexType::Orca => {
+                // Constant product formula for AMM: output = (reserve_out * input_after_fees) / (reserve_in + input_after_fees)
+                let reserve_in = Decimal::from(pool.token_a.reserve);
+                let reserve_out = Decimal::from(pool.token_b.reserve);
+                
+                if reserve_in.is_zero() || reserve_out.is_zero() {
+                    return Ok(Decimal::ZERO);
+                }
+                
+                // Apply fee (default 0.3% = 30 basis points)
+                let fee_rate_bips = pool.fee_rate_bips.unwrap_or(30);
+                let fee_rate = Decimal::from(fee_rate_bips) / dec!(10000);
+                let input_after_fees = input_amount * (dec!(1) - fee_rate);
+                
+                // Constant product calculation
+                let output = (reserve_out * input_after_fees) / (reserve_in + input_after_fees);
+                Ok(output.max(Decimal::ZERO))
+            }
+            DexType::Whirlpool => {
+                // For CLMM pools, use simplified calculation (would need tick math in production)
+                let fee_rate_bips = pool.fee_rate_bips.unwrap_or(25);
+                let fee_rate = Decimal::from(fee_rate_bips) / dec!(10000);
+                let output = input_amount * (dec!(1) - fee_rate);
+                Ok(output * dec!(0.995)) // Additional price impact assumption
+            }
+            _ => {
+                // Fallback: simplified fee calculation
+                let fee_rate_bips = pool.fee_rate_bips.unwrap_or(30);
+                let fee_rate = Decimal::from(fee_rate_bips) / dec!(10000);
+                Ok(input_amount * (dec!(1) - fee_rate))
+            }
+        }
     }
 
     /// Simulate multi-hop output
@@ -704,29 +738,36 @@ impl FeeManager {
         final_tip
     }
 
-    /// Calculate comprehensive fees for multihop arbitrage
+    /// Calculate comprehensive fees for multihop arbitrage with precise arithmetic
     pub fn calculate_multihop_fees(
         &self,
         pools: &[&PoolInfo],
         input_amount: &TokenAmount,
         sol_price_usd: f64,
     ) -> FeeBreakdown {
-        let mut total_protocol_fee = 0.0;
-        let mut gas_cost = 0.0;
-        let mut slippage_cost = 0.0;
+        use rust_decimal::Decimal;
+        use rust_decimal_macros::dec;
+        use num_traits::ToPrimitive;
+        
+        let mut total_protocol_fee_decimal = Decimal::ZERO;
+        let mut gas_cost_decimal = Decimal::ZERO;
+        let mut slippage_cost_decimal = Decimal::ZERO;
         let mut risk_score = 0.0;
+        
+        let sol_price_decimal = Decimal::from_f64(sol_price_usd).unwrap_or(dec!(150));
+        let input_amount_decimal = Decimal::from(input_amount.amount);
 
-        // Calculate protocol fees for each hop
+        // Calculate protocol fees for each hop using precise arithmetic
         for pool in pools {
-            let fee_rate = if let Some(bips) = pool.fee_rate_bips {
-                bips as f64 / 10000.0
+            let fee_rate_decimal = if let Some(bips) = pool.fee_rate_bips {
+                Decimal::from(bips) / dec!(10000)
             } else {
-                0.003 // Default 0.3%
+                dec!(0.003) // Default 0.3%
             };
-            total_protocol_fee += fee_rate;
+            total_protocol_fee_decimal += fee_rate_decimal;
 
-            // Add gas cost per hop
-            let hop_gas_cost = match pool.dex_type {
+            // Add gas cost per hop using precise arithmetic
+            let hop_gas_lamports = match pool.dex_type {
                 DexType::Orca => 80_000,
                 DexType::Raydium => 100_000,
                 DexType::Jupiter => 120_000,
@@ -734,19 +775,21 @@ impl FeeManager {
                 DexType::Meteora => 85_000,
                 DexType::Lifinity => 95_000,
                 _ => 90_000,
-            } as f64 * 0.000000001; // Convert lamports to SOL
+            };
             
-            gas_cost += hop_gas_cost * sol_price_usd;
+            let hop_gas_sol = Decimal::from(hop_gas_lamports) / dec!(1000000000); // Convert lamports to SOL
+            gas_cost_decimal += hop_gas_sol * sol_price_decimal;
 
-            // Estimate slippage based on trade size vs liquidity
+            // Estimate slippage based on trade size vs liquidity using precise arithmetic
             if let Some(liquidity) = pool.liquidity {
                 if liquidity > 0 {
-                    let trade_impact = (input_amount.amount as f64) / (liquidity as f64);
-                    slippage_cost += trade_impact * 0.1; // Simplified slippage model
+                    let liquidity_decimal = Decimal::from(liquidity);
+                    let trade_impact = input_amount_decimal / liquidity_decimal;
+                    slippage_cost_decimal += trade_impact * dec!(0.1); // Simplified slippage model
                 }
             }
 
-            // Basic risk scoring
+            // Basic risk scoring (unchanged as it's not critical for precision)
             risk_score += match pool.dex_type {
                 DexType::Orca | DexType::Raydium => 0.1,
                 DexType::Jupiter => 0.2, // Aggregator has more complexity
@@ -754,7 +797,13 @@ impl FeeManager {
             };
         }
 
-        let total_cost = total_protocol_fee + gas_cost + slippage_cost;
+        let total_cost_decimal = total_protocol_fee_decimal + gas_cost_decimal + slippage_cost_decimal;
+        
+        // Convert back to f64 for API compatibility
+        let total_protocol_fee = total_protocol_fee_decimal.to_f64().unwrap_or(0.0);
+        let gas_cost = gas_cost_decimal.to_f64().unwrap_or(0.0);
+        let slippage_cost = slippage_cost_decimal.to_f64().unwrap_or(0.0);
+        let total_cost = total_cost_decimal.to_f64().unwrap_or(0.0);
         
         FeeBreakdown {
             protocol_fee: total_protocol_fee,
@@ -955,41 +1004,48 @@ impl<'a> ArbitrageCostFunction<'a> {
         }
     }
     
-    /// Simulate Orca CLMM swap (Concentrated Liquidity Market Maker)
+    /// Simulate Orca CLMM swap (Concentrated Liquidity Market Maker) with precise arithmetic
     fn simulate_orca_clmm_swap(&self, pool: &PoolInfo, input_amount: f64) -> f64 {
+        use rust_decimal::Decimal;
+        use rust_decimal_macros::dec;
+        use num_traits::ToPrimitive;
+        
         // For CLMM, we need to consider current tick, liquidity density, and price impact
         if let (Some(liquidity), Some(sqrt_price)) = (pool.liquidity, pool.sqrt_price) {
             if liquidity > 0 && sqrt_price > 0 {
+                // Convert input to Decimal for precise calculations
+                let input_decimal = Decimal::from_f64(input_amount).unwrap_or(Decimal::ZERO);
+                if input_decimal.is_zero() {
+                    return 0.0;
+                }
+                
                 // Use integer arithmetic for price calculation when possible
                 let sqrt_price_u128 = sqrt_price as u128;
                 let price_scaled = sqrt_price_u128.saturating_mul(sqrt_price_u128);
-                let price = (price_scaled as f64) / ((1u128 << 64) as f64); // Scale down from Q64.64 format
+                let price_decimal = Decimal::from(price_scaled) / Decimal::from(1u128 << 64); // Scale down from Q64.64 format
                 
                 let fee_rate_bips = pool.fee_rate_bips.unwrap_or(25);
                 
-                // Calculate slippage using integer arithmetic
-                let input_amount_scaled = (input_amount * 1_000_000.0) as u128; // Scale up for precision
-                let liquidity_scaled = liquidity / 1000; // Scale down liquidity to prevent overflow
-                
-                // Calculate slippage in basis points: slippage_bps = (input / liquidity) * 10000
-                let slippage_bps = if liquidity_scaled > 0 {
-                    (input_amount_scaled / (liquidity_scaled as u128)).min(1000) // Cap at 10% (1000 bps)
-                } else {
-                    1000 // 10% default slippage if no liquidity data
-                };
+                // Calculate slippage using precise arithmetic
+                let liquidity_decimal = Decimal::from(liquidity);
+                let slippage_factor = input_decimal / (liquidity_decimal / dec!(1000)); // Scaled liquidity
+                let slippage_bps = (slippage_factor * dec!(10000)).min(dec!(1000)); // Cap at 10% (1000 bps)
                 
                 // Apply slippage: effective_price = price * (1 + slippage_factor)
-                // Convert slippage from basis points to factor
-                let price_impact_factor = (10000 + slippage_bps) as f64 / 10000.0;
-                let effective_price = price * price_impact_factor;
+                let price_impact_factor = (dec!(10000) + slippage_bps) / dec!(10000);
+                let effective_price = price_decimal * price_impact_factor;
                 
-                let output_before_fees = input_amount / effective_price;
+                if effective_price.is_zero() {
+                    return 0.0;
+                }
                 
-                // Apply fees using integer arithmetic
-                let fee_factor = (10000 - fee_rate_bips) as f64 / 10000.0;
+                let output_before_fees = input_decimal / effective_price;
+                
+                // Apply fees using precise arithmetic
+                let fee_factor = (dec!(10000) - Decimal::from(fee_rate_bips)) / dec!(10000);
                 let output_after_fees = output_before_fees * fee_factor;
                 
-                output_after_fees.max(0.0)
+                output_after_fees.max(Decimal::ZERO).to_f64().unwrap_or(0.0)
             } else {
                 0.0
             }
@@ -998,31 +1054,31 @@ impl<'a> ArbitrageCostFunction<'a> {
         }
     }
     
-    /// Simulate Raydium constant product AMM swap
+    /// Simulate Raydium constant product AMM swap with precise arithmetic
     fn simulate_raydium_amm_swap(&self, pool: &PoolInfo, input_amount: f64) -> f64 {
-        // Constant product formula: x * y = k, using integer arithmetic for precision
-        let reserve_a_u128 = pool.token_a.reserve as u128;
-        let reserve_b_u128 = pool.token_b.reserve as u128;
+        use rust_decimal::Decimal;
+        use num_traits::ToPrimitive;
+        
+        // Constant product formula: x * y = k, using Decimal arithmetic for precision
+        let reserve_a = Decimal::from(pool.token_a.reserve);
+        let reserve_b = Decimal::from(pool.token_b.reserve);
         let fee_rate_bips = pool.fee_rate_bips.unwrap_or(25);
         
-        if reserve_a_u128 > 0 && reserve_b_u128 > 0 {
-            // Scale input amount for integer arithmetic
-            let input_amount_scaled = (input_amount * 1_000_000.0) as u128;
+        if reserve_a > Decimal::ZERO && reserve_b > Decimal::ZERO {
+            let input_decimal = Decimal::from_f64(input_amount).unwrap_or(Decimal::ZERO);
+            if input_decimal.is_zero() {
+                return 0.0;
+            }
             
-            // Apply fees using integer arithmetic: input_after_fees = input * (10000 - fee_bips) / 10000
-            let input_after_fees = input_amount_scaled
-                .saturating_mul(10000u128.saturating_sub(fee_rate_bips as u128))
-                .saturating_div(10000);
+            // Apply fees using precise arithmetic: input_after_fees = input * (10000 - fee_bips) / 10000
+            let fee_factor = (Decimal::from(10000) - Decimal::from(fee_rate_bips)) / Decimal::from(10000);
+            let input_after_fees = input_decimal * fee_factor;
             
             // Constant product calculation: output = (reserve_b * input_after_fees) / (reserve_a + input_after_fees)
-            let denominator = reserve_a_u128.saturating_add(input_after_fees);
-            if denominator > 0 {
-                let output_scaled = reserve_b_u128
-                    .saturating_mul(input_after_fees)
-                    .saturating_div(denominator);
-                
-                // Convert back to f64 (scale down)
-                (output_scaled as f64) / 1_000_000.0
+            let denominator = reserve_a + input_after_fees;
+            if denominator > Decimal::ZERO {
+                let output = (reserve_b * input_after_fees) / denominator;
+                output.to_f64().unwrap_or(0.0)
             } else {
                 0.0
             }
@@ -1031,15 +1087,27 @@ impl<'a> ArbitrageCostFunction<'a> {
         }
     }
     
-    /// Simulate Meteora DLMM swap
+    /// Simulate Meteora DLMM swap with precise arithmetic
     fn simulate_meteora_swap(&self, pool: &PoolInfo, input_amount: f64) -> f64 {
+        use rust_decimal::Decimal;
+        use rust_decimal_macros::dec;
+        use num_traits::ToPrimitive;
+        
         // Meteora uses Dynamic Liquidity Market Maker (DLMM) - simplified version
         if let Some(liquidity) = pool.liquidity {
             if liquidity > 0 {
-                let fee_rate = pool.fee_rate_bips.unwrap_or(25) as f64 / 10000.0;
-                let base_rate = (liquidity as f64) / 1_000_000.0;
-                let output = input_amount * base_rate * (1.0 - fee_rate);
-                output.max(0.0)
+                let input_decimal = Decimal::from_f64(input_amount).unwrap_or(Decimal::ZERO);
+                if input_decimal.is_zero() {
+                    return 0.0;
+                }
+                
+                let fee_rate_bips = pool.fee_rate_bips.unwrap_or(25);
+                let fee_rate = Decimal::from(fee_rate_bips) / dec!(10000);
+                let liquidity_decimal = Decimal::from(liquidity);
+                let base_rate = liquidity_decimal / dec!(1000000);
+                
+                let output = input_decimal * base_rate * (dec!(1) - fee_rate);
+                output.max(Decimal::ZERO).to_f64().unwrap_or(0.0)
             } else {
                 0.0
             }
@@ -1048,15 +1116,27 @@ impl<'a> ArbitrageCostFunction<'a> {
         }
     }
     
-    /// Simulate Lifinity proactive market making swap
+    /// Simulate Lifinity proactive market making swap with precise arithmetic
     fn simulate_lifinity_swap(&self, pool: &PoolInfo, input_amount: f64) -> f64 {
+        use rust_decimal::Decimal;
+        use rust_decimal_macros::dec;
+        use num_traits::ToPrimitive;
+        
         // Lifinity uses proactive market making - simplified version
         if let Some(liquidity) = pool.liquidity {
             if liquidity > 0 {
-                let fee_rate = pool.fee_rate_bips.unwrap_or(30) as f64 / 10000.0; // Slightly higher fees
-                let base_rate = (liquidity as f64) / 1_200_000.0; // Different scaling
-                let output = input_amount * base_rate * (1.0 - fee_rate);
-                output.max(0.0)
+                let input_decimal = Decimal::from_f64(input_amount).unwrap_or(Decimal::ZERO);
+                if input_decimal.is_zero() {
+                    return 0.0;
+                }
+                
+                let fee_rate_bips = pool.fee_rate_bips.unwrap_or(30); // Slightly higher fees
+                let fee_rate = Decimal::from(fee_rate_bips) / dec!(10000);
+                let liquidity_decimal = Decimal::from(liquidity);
+                let base_rate = liquidity_decimal / dec!(1200000); // Different scaling for Lifinity
+                
+                let output = input_decimal * base_rate * (dec!(1) - fee_rate);
+                output.max(Decimal::ZERO).to_f64().unwrap_or(0.0)
             } else {
                 0.0
             }
@@ -1160,24 +1240,66 @@ pub fn calculate_cycle_detection_weights(pools: &[&PoolInfo]) -> Result<Vec<Deci
     Ok(weights)
 }
 
-/// Legacy function for backward compatibility
+/// Precise multi-hop profit and slippage calculation (replaces legacy f64 version)
 pub fn calculate_multihop_profit_and_slippage(
-    _pools: &[&PoolInfo],
+    pools: &[&PoolInfo],
     input_amount_float: f64,
     _sol_price_usd: f64,
 ) -> OpportunityCalculationResult {
-    // Simplified implementation for backward compatibility
-    let output = input_amount_float * 0.99; // Assume 1% total fees
-    let profit = output - input_amount_float;
+    use rust_decimal::Decimal;
+    use rust_decimal_macros::dec;
+    use num_traits::ToPrimitive;
+    
+    // Convert input to Decimal for precise calculations
+    let input_decimal = Decimal::from_f64(input_amount_float).unwrap_or(Decimal::ZERO);
+    
+    if pools.is_empty() || input_decimal.is_zero() {
+        return OpportunityCalculationResult {
+            input_amount: input_amount_float,
+            output_amount: input_amount_float,
+            profit: 0.0,
+            profit_percentage: 0.0,
+        };
+    }
+    
+    // Simulate trading through each pool with precise arithmetic
+    let mut current_amount = input_decimal;
+    
+    for pool in pools {
+        // Use proper AMM formulas for each pool
+        let reserve_in = Decimal::from(pool.token_a.reserve);
+        let reserve_out = Decimal::from(pool.token_b.reserve);
+        
+        if reserve_in.is_zero() || reserve_out.is_zero() {
+            // If any pool has no liquidity, return zero profit
+            return OpportunityCalculationResult {
+                input_amount: input_amount_float,
+                output_amount: 0.0,
+                profit: -input_amount_float,
+                profit_percentage: -100.0,
+            };
+        }
+        
+        // Apply fee (default 0.3% = 30 basis points)
+        let fee_rate_bips = pool.fee_rate_bips.unwrap_or(30);
+        let fee_rate = Decimal::from(fee_rate_bips) / dec!(10000);
+        let input_after_fees = current_amount * (dec!(1) - fee_rate);
+        
+        // Constant product calculation: output = (reserve_out * input_after_fees) / (reserve_in + input_after_fees)
+        current_amount = (reserve_out * input_after_fees) / (reserve_in + input_after_fees);
+    }
+    
+    let output_float = current_amount.to_f64().unwrap_or(0.0);
+    let profit = output_float - input_amount_float;
     let profit_percentage = if input_amount_float > 0.0 {
-        profit / input_amount_float
+        (profit / input_amount_float) * 100.0
     } else {
         0.0
     };
 
     OpportunityCalculationResult {
         input_amount: input_amount_float,
-        output_amount: output,
+        output_amount: output_float,
         profit,
         profit_percentage,
     }

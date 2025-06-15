@@ -63,7 +63,7 @@ enum ExecutionStrategy {
 #[derive(Debug, Clone)]
 pub struct CompetitivenessAnalysis {
     #[allow(dead_code)]
-    competitive_score: f64,
+    competitive_score: Decimal,
     /// Factors that affect competitiveness (latency, gas, etc.)
     #[allow(dead_code)]
     risk_factors: Vec<String>,
@@ -407,13 +407,13 @@ impl ArbitrageOrchestrator {
     /// Advanced decision logic optimized for speed vs competition dynamics
     async fn determine_execution_strategy(&self, opportunities: &[MultiHopArbOpportunity]) -> ExecutionStrategy {
         let total_opportunities = opportunities.len();
-        let minimum_profit_threshold = 0.3; // 0.3% minimum profit after all fees
+        let minimum_profit_threshold = Decimal::from_str("0.3").unwrap(); // 0.3% minimum profit after all fees
         
         info!("🧠 Analyzing {} opportunities for optimal execution strategy", total_opportunities);
         
         // Filter opportunities that meet minimum profit threshold
         let profitable_opportunities: Vec<_> = opportunities.iter()
-            .filter(|opp| opp.profit_pct >= minimum_profit_threshold)
+            .filter(|opp| Decimal::from_f64(opp.profit_pct).unwrap_or(Decimal::ZERO) >= minimum_profit_threshold)
             .cloned()
             .collect();
             
@@ -483,19 +483,22 @@ impl ArbitrageOrchestrator {
         
         // Factor 1: Pool depth analysis
         let avg_pool_depth = self.calculate_average_pool_depth(opportunity).await;
-        if avg_pool_depth < 50_000.0 { // $50k average depth indicates high competition
+        if avg_pool_depth < Decimal::from(50_000) { // $50k average depth indicates high competition
             competitive_factors += 3;
-            reasons.push(format!("Low pool depth (${:.0}k) indicates high competition", avg_pool_depth / 1000.0));
-        } else if avg_pool_depth < 200_000.0 { // $200k moderate competition
+            reasons.push(format!("Low pool depth (${:.0}k) indicates high competition", 
+                               avg_pool_depth / Decimal::from(1000)));
+        } else if avg_pool_depth < Decimal::from(200_000) { // $200k moderate competition
             competitive_factors += 1;
-            reasons.push(format!("Moderate pool depth (${:.0}k)", avg_pool_depth / 1000.0));
+            reasons.push(format!("Moderate pool depth (${:.0}k)", 
+                               avg_pool_depth / Decimal::from(1000)));
         }
         
         // Factor 2: Profit margin analysis
-        if opportunity.profit_pct > 2.0 { // >2% profit attracts more bots
+        let profit_pct_decimal = Decimal::from_f64(opportunity.profit_pct).unwrap_or(Decimal::ZERO);
+        if profit_pct_decimal > Decimal::from_str("2.0").unwrap() { // >2% profit attracts more bots
             competitive_factors += 2;
             reasons.push(format!("High profit ({:.2}%) attracts competition", opportunity.profit_pct));
-        } else if opportunity.profit_pct > 1.0 { // >1% moderate attention
+        } else if profit_pct_decimal > Decimal::from_str("1.0").unwrap() { // >1% moderate attention
             competitive_factors += 1;
             reasons.push(format!("Moderate profit ({:.2}%)", opportunity.profit_pct));
         }
@@ -546,7 +549,7 @@ impl ArbitrageOrchestrator {
         };
         
         CompetitivenessAnalysis {
-            competitive_score: opportunity.expected_output.to_f64().unwrap_or(0.0),
+            competitive_score: Decimal::from_f64(opportunity.expected_output).unwrap_or(Decimal::ZERO),
             execution_recommendation: calculated_recommendation, // Use the calculated recommendation
             reason: summary_reason, // Use the calculated summary_reason
             risk_factors: reasons,
@@ -554,16 +557,16 @@ impl ArbitrageOrchestrator {
     }
 
     /// Calculate average pool depth for an opportunity
-    async fn calculate_average_pool_depth(&self, opportunity: &MultiHopArbOpportunity) -> f64 {
-        let mut total_depth = 0.0;
+    async fn calculate_average_pool_depth(&self, opportunity: &MultiHopArbOpportunity) -> Decimal {
+        let mut total_depth = Decimal::ZERO;
         let mut pool_count = 0;
         
         for hop in &opportunity.hops {
             if let Some(pool) = self.hot_cache.get(&hop.pool) {
-                // Calculate pool depth using the actual PoolInfo fields
-                let depth_a = pool.token_a.reserve as f64 * 1.0; // Simplified pricing
-                let depth_b = pool.token_b.reserve as f64 * 1.0; // In practice, use real prices
-                let pool_depth = depth_a.min(depth_b);
+                // Calculate pool depth using the actual PoolInfo fields with Decimal precision
+                let depth_a = Decimal::from(pool.token_a.reserve); // Use reserve as lamports/microunits
+                let depth_b = Decimal::from(pool.token_b.reserve); // Use reserve as lamports/microunits
+                let pool_depth = std::cmp::min(depth_a, depth_b);
                 
                 total_depth += pool_depth;
                 pool_count += 1;
@@ -571,9 +574,9 @@ impl ArbitrageOrchestrator {
         }
         
         if pool_count > 0 {
-            total_depth / pool_count as f64
+            total_depth / Decimal::from(pool_count)
         } else {
-            0.0
+            Decimal::ZERO
         }
     }
 
@@ -1492,7 +1495,16 @@ impl ArbitrageOrchestrator {
                     opportunity.input_amount = optimal_result.optimal_input.to_f64().unwrap_or(opportunity.input_amount);
                     opportunity.expected_output = opportunity.input_amount + optimal_result.max_net_profit.to_f64().unwrap_or(0.0);
                     opportunity.total_profit = optimal_result.max_net_profit.to_f64().unwrap_or(0.0);
-                    opportunity.profit_pct = (optimal_result.max_net_profit.to_f64().unwrap_or(0.0) / opportunity.input_amount) * 100.0;
+                    
+                    // Calculate profit percentage using Decimal precision
+                    let profit_decimal = optimal_result.max_net_profit;
+                    let input_decimal = Decimal::from_f64(opportunity.input_amount).unwrap_or(Decimal::ZERO);
+                    if !input_decimal.is_zero() {
+                        let profit_pct_decimal = (profit_decimal / input_decimal) * Decimal::from(100);
+                        opportunity.profit_pct = profit_pct_decimal.to_f64().unwrap_or(0.0);
+                    } else {
+                        opportunity.profit_pct = 0.0;
+                    }
                     
                     // Determine execution strategy based on optimization results
                     if optimal_result.requires_flash_loan {
@@ -1504,8 +1516,10 @@ impl ArbitrageOrchestrator {
                     }
                     
                     // Estimate gas cost in USD (assuming SOL price ~$100)
-                    let gas_cost_usd = optimal_result.gas_cost_sol.to_f64().unwrap_or(0.005) * 100.0;
-                    opportunity.estimated_gas_cost = Some((gas_cost_usd * 1_000_000.0) as u64); // Convert to micro-cents
+                    let sol_price_usd = Decimal::from(100); // SOL price assumption
+                    let gas_cost_usd = optimal_result.gas_cost_sol * sol_price_usd;
+                    let gas_cost_micro_cents = (gas_cost_usd * Decimal::from(1_000_000)).to_u64().unwrap_or(5000);
+                    opportunity.estimated_gas_cost = Some(gas_cost_micro_cents); // Convert to micro-cents
                     
                     // Only include if still profitable after optimization
                     if optimal_result.max_net_profit > Decimal::ZERO && 
@@ -1676,7 +1690,7 @@ impl ArbitrageOrchestrator {
                             result.input_amount,
                             result.output_amount,
                             result.output_amount as i64 - result.input_amount as i64, // profit/loss
-                            result.slippage_bps as f64 / 10000.0, // Convert bps to percentage
+                            (Decimal::from(result.slippage_bps) / Decimal::from(10000)).to_f64().unwrap_or(0.0), // Convert bps to percentage
                             result.fee_amount,
                             result.success,
                             result.error_message,

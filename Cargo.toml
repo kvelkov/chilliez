@@ -67,6 +67,7 @@ redis = { version = "0.25.0", features = ["aio", "tokio-comp", "connection-manag
 
 # === Advanced DEX Math Libraries ===
 rust_decimal = "1.32"
+rust_decimal_macros = "1.32"
 num-bigint = "0.4"
 num-traits = "0.2"
 # Orca SDK for math utilities (e.g., PriceMath, constants)

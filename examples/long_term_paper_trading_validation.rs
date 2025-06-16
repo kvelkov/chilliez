@@ -188,7 +188,7 @@ pub struct LongTermValidator {
     config: ValidationConfig,
     performance_manager: Arc<PerformanceManager>,
     paper_trading_engine: PaperTradingEngine,
-    smart_router: SmartRouter,
+    _smart_router: SmartRouter, // Prefixed as it's not read
     validation_results: ValidationResults,
     security_audit_log: Vec<SecurityEvent>,
 }
@@ -263,7 +263,7 @@ impl LongTermValidator {
             config,
             performance_manager,
             paper_trading_engine,
-            smart_router,
+            _smart_router: smart_router,
             validation_results,
             security_audit_log: Vec::new(),
         })

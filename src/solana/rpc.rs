@@ -394,21 +394,5 @@ impl SolanaRpcClient {
 // Set the environment variable HELIUS_RPC_URL or SOLANA_RPC_URL to your Helius endpoint.
 // ---
 
-use std::env;
 
-/// Create a SolanaRpcClient from environment variables.
-///
-/// Priority:
-/// 1. HELIUS_RPC_URL
-/// 2. SOLANA_RPC_URL
-/// 3. Default mainnet-beta endpoint
-pub fn create_client_from_env() -> SolanaRpcClient {
-    let primary_url = env::var("HELIUS_RPC_URL")
-        .or_else(|_| env::var("SOLANA_RPC_URL"))
-        .unwrap_or_else(|_| "https://api.mainnet-beta.solana.com".to_string());
-    // Optionally, support fallback URLs from env (comma-separated)
-    let fallback_urls = env::var("SOLANA_RPC_FALLBACKS")
-        .map(|s| s.split(',').map(|s| s.trim().to_string()).collect())
-        .unwrap_or_else(|_| Vec::new());
-    SolanaRpcClient::new(&primary_url, fallback_urls, 3, Duration::from_millis(500))
-}
+

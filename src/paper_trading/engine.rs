@@ -31,17 +31,16 @@ pub struct SimulatedTradeResult {
 #[derive(Debug)]
 pub struct SimulatedExecutionEngine {
     config: PaperTradingConfig,
-    portfolio: SafeVirtualPortfolio,
+    portfolio: Arc<SafeVirtualPortfolio>,
     sol_mint: Pubkey, // Native SOL mint pubkey
 }
 
 impl SimulatedExecutionEngine {
     /// Create a new simulated execution engine
-    pub fn new(config: PaperTradingConfig) -> Self {
-        let portfolio = SafeVirtualPortfolio::new(config.initial_balances.clone());
-        
-        // Use a placeholder for SOL mint - in production this should be the actual native mint
-        let sol_mint = Pubkey::default();
+    pub fn new(config: PaperTradingConfig, portfolio: Arc<SafeVirtualPortfolio>) -> Self {
+        // Use the actual SOL mint from constants
+        let sol_mint: Pubkey = "So11111111111111111111111111111111111111112".parse()
+            .expect("Invalid SOL mint address");
         
         Self {
             config,

@@ -22,6 +22,7 @@ pub mod opportunity;
 pub mod tests;
 pub mod calculator_tests;
 pub mod jupiter_fallback_tests; // Jupiter fallback integration tests
+pub mod jito_client;            // Jito bundle client for MEV protection
 
 // Jupiter-specific components (Phase 3.2: Intelligent Caching)
 pub mod jupiter;          // Jupiter-specific arbitrage components (cache, integration)
@@ -59,6 +60,7 @@ pub use self::execution::{
     BatchExecutionConfig, OpportunityBatch, SimulationResult, 
     JitoBundle, BundleExecutionResult, ExecutionMetrics
 };
+pub use self::jito_client::{JitoClient, JitoConfig as JitoClientConfig, BundleStats, BundleBuilder};
 pub use self::analysis::{
     ArbitrageAnalyzer, OpportunityCalculationResult, OptimalArbitrageResult,
     VolatilityTracker, DynamicThresholdUpdater, FeeBreakdown, SlippageModel, XYKSlippageModel,

@@ -97,13 +97,25 @@ pub enum ArbError {
     #[error("Unknown Error: {0}")]
     Unknown(String),
     
+    /// Insufficient profit for trade execution
+    #[error("Insufficient Profit: {0}")]
+    InsufficientProfit(String),
+    
+    /// Transaction failed after retries
+    #[error("Transaction Failed: {0}")]
+    TransactionFailed(String),
+    
+    /// Invalid input parameters
+    #[error("Invalid Input: {0}")]
+    InvalidInput(String),
+    
+    /// Execution disabled
+    #[error("Execution Disabled: {0}")]
+    ExecutionDisabled(String),
+    
     /// Errors that should not be retried
     #[error("Non-Recoverable Error: {0}")]
     NonRecoverable(String),
-    
-    /// Execution is currently disabled
-    #[error("Execution Disabled: {0}")]
-    ExecutionDisabled(String),
     
     /// Resource exhausted (rate limits, concurrency limits, etc.)
     #[error("Resource Exhausted: {0}")]
@@ -191,6 +203,9 @@ impl ArbError {
             ArbError::AccountNotFound(_) => false, // Account not found, not recoverable by retry
             ArbError::ConfigurationError(_) => false, // Configuration needs fixing
             ArbError::InstructionError(_) => false, // Instruction errors usually need code fixes
+            ArbError::InsufficientProfit(_) => false, // Profit threshold not met, not recoverable by retry
+            ArbError::TransactionFailed(_) => true, // Transaction failures can be retried
+            ArbError::InvalidInput(_) => false, // Invalid input needs fixing, not recoverable by retry
         }
     }
 
@@ -216,6 +231,9 @@ impl ArbError {
                 msg.contains("network") || msg.contains("timeout") || msg.contains("congestion")
             },
             ArbError::Unknown(_) => false, // Don't immediately retry unknown errors
+            ArbError::InsufficientProfit(_) => false, // Profit threshold not met, no point in immediate retry
+            ArbError::TransactionFailed(_) => true, // Transaction failures might be recoverable
+            ArbError::InvalidInput(_) => false, // Invalid input needs fixing first
             _ => false,
         }
     }
@@ -252,6 +270,9 @@ impl ArbError {
             ArbError::SafetyModeActive(_) => ErrorCategory::Safety,
             ArbError::AccountNotFound(_) => ErrorCategory::Configuration,
             ArbError::ConfigurationError(_) => ErrorCategory::Configuration,
+            ArbError::InsufficientProfit(_) => ErrorCategory::Trading,
+            ArbError::TransactionFailed(_) => ErrorCategory::Trading,
+            ArbError::InvalidInput(_) => ErrorCategory::Configuration,
         }
     }
 }
@@ -340,9 +361,9 @@ impl CircuitBreaker {
     }
 
     #[allow(dead_code)]
-    pub async fn execute<F, T, E>(&mut self, operation: F) -> Result<T, ArbError>
+    pub async fn execute<F, T, E>(&mut self, operation: F) -> crate::error::Result<T>
     where
-        F: std::future::Future<Output = Result<T, E>>,
+        F: std::future::Future<Output = std::result::Result<T, E>>,
         E: Into<ArbError>,
     {
         // Check if circuit breaker is open
@@ -420,10 +441,10 @@ impl RetryPolicy {
 
     /// Execute operation with retry logic
     #[allow(dead_code)]
-    pub async fn execute<F, T, E, Fut>(&self, mut operation: F) -> Result<T, ArbError>
+    pub async fn execute<F, T, E, Fut>(&self, mut operation: F) -> crate::error::Result<T>
     where
         F: FnMut() -> Fut,
-        Fut: std::future::Future<Output = Result<T, E>>,
+        Fut: std::future::Future<Output = std::result::Result<T, E>>,
         E: Into<ArbError>,
     {
         let mut last_error = None;
@@ -442,7 +463,7 @@ impl RetryPolicy {
                     return Ok(result);
                 },
                 Err(e) => {
-                    let arb_error = e.into();
+                    let arb_error: ArbError = e.into();
                     
                     if !arb_error.should_retry() {
                         warn!("Non-retryable error on attempt {}: {}", attempt + 1, arb_error);
@@ -463,25 +484,5 @@ impl RetryPolicy {
 }
 
 // Convenience type aliases
-#[allow(dead_code)] // Type alias is not yet used
-pub type ArbResult<T> = Result<T, ArbError>;
-
-// Default configurations
-impl Default for RetryPolicy {
-    fn default() -> Self {
-        Self::new(
-            3, // max attempts
-            Duration::from_millis(100), // base delay
-            Duration::from_secs(5), // max delay
-        )
-    }
-}
-
-impl Default for CircuitBreaker {
-    fn default() -> Self {
-        Self::new(
-            5, // failure threshold
-            Duration::from_secs(30), // recovery timeout
-        )
-    }
-}
+#[allow(dead_code)]
+pub type Result<T> = std::result::Result<T, ArbError>;

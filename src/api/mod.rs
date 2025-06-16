@@ -10,6 +10,7 @@
 pub mod rate_limiter;
 pub mod connection_pool;
 pub mod manager;
+pub mod enhanced_error_handling;
 
 pub use rate_limiter::{
     AdvancedRateLimiter, 
@@ -36,4 +37,13 @@ pub use manager::{
     ApiRequest,
     ApiResponse,
     ApiError,
+};
+
+pub use enhanced_error_handling::{
+    EnhancedApiErrorHandler,
+    EnhancedRetryExecutor,
+    ApiErrorType,
+    BanDetectionConfig,
+    BackoffStrategy,
+    BanStatusReport,
 };

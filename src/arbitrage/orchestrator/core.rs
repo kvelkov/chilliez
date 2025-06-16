@@ -172,7 +172,7 @@ impl ArbitrageOrchestrator {
                     .map_err(|e| warn!("Failed to create paper trading reporter: {}", e))
                     .ok()
                     .map(Arc::new);
-                let engine = Arc::new(SimulatedExecutionEngine::new(paper_config_with_balances));
+                let engine = Arc::new(SimulatedExecutionEngine::new(paper_config_with_balances, portfolio.clone()));
                 
                 (Some(engine), Some(portfolio), Some(analytics), reporter)
             } else {

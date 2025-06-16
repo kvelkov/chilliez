@@ -1,0 +1,38 @@
+[paper_trading]
+enabled = true
+initial_balance_lamports = 1_000_000_000  # 1 SOL
+log_all_trades = true
+simulate_network_latency = true
+simulate_slippage = true
+
+[risk_management]
+max_position_size_lamports = 100_000_000  # 0.1 SOL
+min_profit_threshold_lamports = 50_000     # 0.00005 SOL
+max_slippage_bps = 100                     # 1%
+max_trades_per_minute = 10
+emergency_stop_loss_pct = 5.0
+
+[monitoring]
+enable_metrics = true
+metrics_port = 9090
+log_level = "info"
+export_trades_csv = true
+trades_csv_path = "logs/paper-trades.csv"
+
+[dex_protocols]
+# Enable/disable specific DEX protocols for testing
+jupiter = true
+orca = true
+raydium = true
+meteora = true
+
+[market_data]
+price_feed_interval_ms = 1000
+pool_data_refresh_interval_ms = 5000
+enable_websocket_feeds = true
+
+[execution]
+simulate_jito_bundles = true
+simulate_mev_protection = true
+bundle_simulation_success_rate = 0.95  # 95% success rate
+average_confirmation_time_ms = 1500

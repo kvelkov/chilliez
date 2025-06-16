@@ -16,6 +16,7 @@ use tokio::sync::{mpsc, RwLock};
 
 /// Configuration for event-driven balance monitoring
 #[derive(Debug, Clone)]
+#[allow(dead_code)] // Used in examples, fields accessed via methods
 pub struct EventDrivenBalanceConfig {
     pub base_config: BalanceMonitorConfig,
     pub monitored_accounts: HashSet<Pubkey>,
@@ -37,6 +38,7 @@ impl Default for EventDrivenBalanceConfig {
 }
 
 /// Event-driven balance monitor that reacts to webhook events
+#[allow(dead_code)] // Used in examples, methods called but some fields unused internally
 pub struct EventDrivenBalanceMonitor {
     balance_monitor: BalanceMonitor,
     config: EventDrivenBalanceConfig,
@@ -55,6 +57,7 @@ pub struct EventDrivenBalanceMonitor {
 
 /// Internal event that triggers balance updates
 #[derive(Debug, Clone)]
+#[allow(dead_code)] // Planned for future webhook integration
 pub enum BalanceEventTrigger {
     WebhookEvent {
         notification: HeliusWebhookNotification,
@@ -73,6 +76,7 @@ pub enum BalanceEventTrigger {
 
 /// Statistics for event-driven balance monitoring
 #[derive(Debug, Clone, Default)]
+#[allow(dead_code)] // Used for monitoring stats, fields accessed via methods
 pub struct EventStats {
     pub total_webhook_events: u64,
     pub balance_triggering_events: u64,
@@ -82,6 +86,7 @@ pub struct EventStats {
     pub last_event_timestamp: u64,
 }
 
+#[allow(dead_code)] // Used in examples, methods called but some implementations incomplete
 impl EventDrivenBalanceMonitor {
     /// Create a new event-driven balance monitor
     pub fn new(config: EventDrivenBalanceConfig) -> Self {

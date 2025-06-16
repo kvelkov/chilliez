@@ -48,9 +48,7 @@ impl<T> CacheEntry<T> {
         &self.value
     }
 
-    fn age(&self) -> Duration {
-        self.created_at.elapsed().unwrap_or(Duration::ZERO)
-    }
+
 }
 
 /// High-performance cache manager with multiple cache types

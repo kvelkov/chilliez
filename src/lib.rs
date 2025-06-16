@@ -26,6 +26,8 @@ pub use api::{
     ApiManager, ApiRequest, ApiResponse, ApiError,
     AdvancedRateLimiter, RequestPriority, RateLimitStats,
     RpcConnectionPool, EndpointHealth, EndpointStatus,
+    EnhancedApiErrorHandler, EnhancedRetryExecutor, ApiErrorType,
+    BanDetectionConfig, BackoffStrategy, BanStatusReport,
 };
 
 // Re-export key performance components

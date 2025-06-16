@@ -248,7 +248,7 @@ struct AccuracyValidation {
 struct LongTermValidationSession {
     config: LongTermValidationConfig,
     performance_manager: Arc<PerformanceManager>,
-    smart_router: Arc<SmartRouter>,
+    _smart_router: Arc<SmartRouter>, // Prefixed as it's not read
     start_time: Instant,
     accuracy_validations: Arc<tokio::sync::Mutex<Vec<AccuracyValidation>>>,
     security_audits: Arc<tokio::sync::Mutex<Vec<SecurityAudit>>>,
@@ -291,7 +291,7 @@ impl LongTermValidationSession {
         Ok(Self {
             config,
             performance_manager,
-            smart_router,
+            _smart_router: smart_router,
             start_time: Instant::now(),
             accuracy_validations: Arc::new(tokio::sync::Mutex::new(Vec::new())),
             security_audits: Arc::new(tokio::sync::Mutex::new(Vec::new())),
@@ -389,7 +389,7 @@ impl LongTermValidationSession {
     
     async fn run_optimized_trading_cycle(&self) -> Result<()> {
         // Create a route request for testing
-        let route_request = RouteRequest {
+        let _route_request = RouteRequest { // Prefixed as it's not used
             input_token: "SOL".to_string(),
             output_token: "USDC".to_string(),
             amount: 1000,

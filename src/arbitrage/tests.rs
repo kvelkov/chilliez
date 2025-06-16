@@ -10,7 +10,7 @@ mod tests {
     // use crate::arbitrage::detector::ArbitrageDetector; // TODO: Re-enable when banned pairs are implemented
     use crate::solana::rpc::SolanaRpcClient;
     use crate::config::settings::Config;
-    use crate::metrics::Metrics;
+    use crate::local_metrics::Metrics;
     use std::collections::HashMap;
     use std::sync::Arc;
     use tokio::sync::Mutex;
@@ -61,7 +61,7 @@ mod tests {
         // For our updated Metrics, if constructor takes parameters, ensure they are provided.
         // For instance, if Metrics::new accepts an initial profit value or TTL; adjust as needed.
         // Here we assume a simple constructor exists.
-        Arc::new(Mutex::new(Metrics::default()))
+        Arc::new(Mutex::new(Metrics::new()))
     }
 
     // Creates dummy pools for testing.
@@ -437,7 +437,7 @@ mod tests {
     async fn test_engine_initialization_with_dex_clients() {
         let config = Arc::new(Config::test_default());
         let pools = Arc::new(DashMap::new());
-        let metrics = Arc::new(Mutex::new(Metrics::default()));
+        let metrics = Arc::new(Mutex::new(Metrics::new()));
 
         let mock_dex_client1 = Arc::new(MockDexClient::new("Raydium"));
         let mock_dex_client2 = Arc::new(MockDexClient::new("Orca"));

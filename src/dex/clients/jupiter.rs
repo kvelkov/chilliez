@@ -11,12 +11,18 @@ use std::{
     sync::Arc,
     time::{Duration, Instant},
 };
+use tokio::time::sleep;
+use tokio::sync::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
+use once_cell::sync::Lazy;
 
 use crate::{
     dex::{DexClient, PoolDiscoverable, Quote, SwapInfo, CommonSwapInfo, DexHealthStatus},
     utils::PoolInfo,
     error::ArbError,
 };
+
+static INFLIGHT_REQUESTS: Lazy<AtomicUsize> = Lazy::new(|| AtomicUsize::new(0));
 
 /// Jupiter API v6 endpoints
 const JUPITER_API_BASE: &str = "https://quote-api.jup.ag/v6";
@@ -50,40 +56,40 @@ struct JupiterQuoteRequest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JupiterQuoteResponse {
     #[serde(rename = "inputMint")]
-    input_mint: String,
+    pub input_mint: String,
     #[serde(rename = "inAmount")]
-    in_amount: String,
+    pub in_amount: String,
     #[serde(rename = "outputMint")]
-    output_mint: String,
+    pub output_mint: String,
     #[serde(rename = "outAmount")]
-    out_amount: String,
+    pub out_amount: String,
     #[serde(rename = "otherAmountThreshold")]
-    other_amount_threshold: String,
+    pub other_amount_threshold: String,
     #[serde(rename = "swapMode")]
-    swap_mode: String,
+    pub swap_mode: String,
     #[serde(rename = "slippageBps")]
-    slippage_bps: u16,
+    pub slippage_bps: u16,
     #[serde(rename = "platformFee")]
-    platform_fee: Option<JupiterPlatformFee>,
+    pub platform_fee: Option<JupiterPlatformFee>,
     #[serde(rename = "priceImpactPct")]
-    price_impact_pct: String,
+    pub price_impact_pct: String,
     #[serde(rename = "routePlan")]
-    route_plan: Vec<JupiterRoutePlan>,
+    pub route_plan: Vec<JupiterRoutePlan>,
     #[serde(rename = "contextSlot")]
-    context_slot: Option<u64>,
+    pub context_slot: Option<u64>,
     #[serde(rename = "timeTaken")]
-    time_taken: Option<f64>,
+    pub time_taken: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct JupiterPlatformFee {
+pub struct JupiterPlatformFee {
     amount: String,
     #[serde(rename = "feeBps")]
     fee_bps: u16,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct JupiterRoutePlan {
+pub struct JupiterRoutePlan {
     #[serde(rename = "swapInfo")]
     swap_info: JupiterSwapInfo,
     percent: u8,
@@ -209,12 +215,37 @@ impl RateLimiter {
     }
 }
 
+#[derive(Debug)]
+struct CircuitBreaker {
+    failure_count: u32,
+    last_failure: Option<Instant>,
+    state: CircuitState,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum CircuitState {
+    Closed,
+    Open(Instant), // time when opened
+    HalfOpen,
+}
+
+impl CircuitBreaker {
+    pub fn new() -> Self {
+        CircuitBreaker {
+            failure_count: 0,
+            last_failure: None,
+            state: CircuitState::Closed,
+        }
+    }
+}
+
 /// Jupiter aggregator client for price comparisons and routing
 pub struct JupiterClient {
     client: Client,
     rate_limiter: Arc<tokio::sync::Mutex<RateLimiter>>,
     supported_tokens: Arc<tokio::sync::RwLock<HashMap<String, JupiterToken>>>,
     last_token_refresh: Arc<tokio::sync::RwLock<Instant>>,
+    circuit_breaker: Arc<Mutex<CircuitBreaker>>,
 }
 
 impl JupiterClient {
@@ -231,7 +262,97 @@ impl JupiterClient {
             rate_limiter: Arc::new(tokio::sync::Mutex::new(RateLimiter::new(JUPITER_REQUESTS_PER_SECOND))),
             supported_tokens: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
             last_token_refresh: Arc::new(tokio::sync::RwLock::new(Instant::now() - Duration::from_secs(3600))),
+            circuit_breaker: Arc::new(Mutex::new(CircuitBreaker::new())),
         }
+    }
+
+    /// Helper for GET requests with retry and exponential backoff
+    async fn get_with_retry(&self, url: &str, query: Option<&impl serde::Serialize>) -> Result<reqwest::Response> {
+        let mut attempt = 0;
+        let max_attempts = 3;
+        let mut delay = Duration::from_millis(300);
+        let failure_threshold = 5;
+        let cooldown = Duration::from_secs(30);
+        let _start_time = Instant::now();
+        let _inflight = INFLIGHT_REQUESTS.fetch_add(1, AtomicOrdering::SeqCst) + 1;
+        // gauge!("jupiter_inflight_requests", [("role", "client")], inflight as f64);
+        let result = loop {
+            // Circuit breaker check
+            {
+                let mut cb = self.circuit_breaker.lock().await;
+                match cb.state {
+                    CircuitState::Open(opened_at) => {
+                        if opened_at.elapsed() < cooldown {
+                            // counter!("jupiter_circuit_breaker_open");
+                            break Err(anyhow!("Jupiter API circuit breaker is OPEN. Try again later."));
+                        } else {
+                            cb.state = CircuitState::HalfOpen;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            let req = self.client.get(url);
+            let req = if let Some(q) = query { req.query(q) } else { req };
+            let send_result = req.send().await;
+            let mut cb = self.circuit_breaker.lock().await;
+            match &send_result {
+                Ok(resp) if resp.status().is_success() => {
+                    // counter!("jupiter_request_success");
+                    // histogram!("jupiter_request_latency_ms", start_time.elapsed().as_millis() as f64);
+                    if cb.state == CircuitState::HalfOpen {
+                        cb.state = CircuitState::Closed;
+                        cb.failure_count = 0;
+                    }
+                    break Ok(send_result.unwrap());
+                }
+                Ok(resp) if resp.status().is_server_error() => {
+                    // counter!("jupiter_request_failure");
+                    // counter!("jupiter_server_error");
+                    cb.failure_count += 1;
+                    cb.last_failure = Some(Instant::now());
+                    warn!("Jupiter GET {}: server error {} (attempt {}/{})", url, resp.status(), attempt+1, max_attempts);
+                }
+                Ok(resp) if resp.status().is_client_error() => {
+                    // counter!("jupiter_request_failure");
+                    // counter!("jupiter_client_error");
+                    warn!("Jupiter GET {}: client error {} (attempt {}/{})", url, resp.status(), attempt+1, max_attempts);
+                }
+                Err(e) => {
+                    // counter!("jupiter_request_failure");
+                    // counter!("jupiter_network_error");
+                    cb.failure_count += 1;
+                    cb.last_failure = Some(Instant::now());
+                    warn!("Jupiter GET {}: network error {} (attempt {}/{})", url, e, attempt+1, max_attempts);
+                }
+                _ => {}
+            }
+            if cb.failure_count >= failure_threshold {
+                cb.state = CircuitState::Open(Instant::now());
+                warn!("Jupiter API circuit breaker OPENED after {} consecutive failures", failure_threshold);
+                // counter!("jupiter_circuit_breaker_open");
+                break Err(anyhow!("Jupiter API circuit breaker is OPEN. Try again later."));
+            }
+            attempt += 1;
+            drop(cb); // Release lock before sleeping
+            if attempt >= max_attempts {
+                break send_result.map_err(|e| anyhow!("Jupiter GET {} failed after {} attempts: {}", url, max_attempts, e))
+                    .and_then(|resp| {
+                        let status = resp.status();
+                        if status.is_success() {
+                            Ok(resp)
+                        } else {
+                            Err(anyhow!("Jupiter GET {} failed after {} attempts: HTTP {}", url, max_attempts, status))
+                        }
+                    });
+            }
+            sleep(delay).await;
+            delay *= 2;
+        };
+        let _inflight = INFLIGHT_REQUESTS.fetch_sub(1, AtomicOrdering::SeqCst) - 1;
+        // gauge!("jupiter_inflight_requests", inflight as f64);
+        // histogram!("jupiter_request_latency_ms", start_time.elapsed().as_millis() as f64);
+        result
     }
 
     /// Get a quote from Jupiter for a specific trade
@@ -259,12 +380,7 @@ impl JupiterClient {
         
         debug!("🔍 Requesting Jupiter quote: {} {} -> {}", amount, input_mint, output_mint);
 
-        let response = self.client
-            .get(&url)
-            .query(&request)
-            .send()
-            .await
-            .map_err(|e| anyhow!("Jupiter API request failed: {}", e))?;
+        let response = self.get_with_retry(&url, Some(&request)).await?;
 
         if !response.status().is_success() {
             let status = response.status();
@@ -291,12 +407,7 @@ impl JupiterClient {
         
         debug!("📊 Requesting Jupiter prices for {} tokens", token_mints.len());
 
-        let response = self.client
-            .get(&url)
-            .query(&[("ids", &ids), ("vsToken", &"USDC".to_string())])
-            .send()
-            .await
-            .map_err(|e| anyhow!("Jupiter price API request failed: {}", e))?;
+        let response = self.get_with_retry(&url, Some(&[("ids", &ids), ("vsToken", &"USDC".to_string())])).await?;
 
         if !response.status().is_success() {
             let status = response.status();

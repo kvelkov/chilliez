@@ -217,7 +217,7 @@ mod existing_tests { // Assuming these were from your original file
     use std::collections::HashMap;
     use tokio::sync::{Mutex, RwLock};
     use crate::arbitrage::engine::ArbitrageEngine; // Adjust path if needed
-    use crate::metrics::Metrics; // Adjust path if needed
+    use crate::local_metrics::Metrics; // Adjust path if needed
     use crate::dex::DexClient; // Adjust path if needed
     use super::*;
 

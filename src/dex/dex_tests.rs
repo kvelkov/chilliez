@@ -396,13 +396,14 @@ mod integration_tests {
         let clients = get_all_clients(cache, config);
         
         // Should include all DEX clients including new ones
-        assert_eq!(clients.len(), 4); // Orca, Raydium, Meteora, Lifinity
+        assert_eq!(clients.len(), 5); // Orca, Raydium, Meteora, Lifinity, Jupiter
         
         let client_names: Vec<&str> = clients.iter().map(|c| c.get_name()).collect();
         assert!(client_names.contains(&"Orca"));
         assert!(client_names.contains(&"Raydium"));
         assert!(client_names.contains(&"Meteora"));
         assert!(client_names.contains(&"Lifinity"));
+        assert!(client_names.contains(&"Jupiter"));
     }
 
     #[tokio::test]
@@ -412,7 +413,7 @@ mod integration_tests {
         
         let clients = get_all_discoverable_clients(cache, config);
         
-        assert_eq!(clients.len(), 4);
+        assert_eq!(clients.len(), 5);
         
         for client in &clients {
             assert!(!client.dex_name().is_empty());

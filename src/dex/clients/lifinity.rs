@@ -263,6 +263,8 @@ impl DexClient for LifinityClient {
             destination_token_mint: swap_info.pool.token_b.mint,
             input_amount: swap_info.amount_in,
             minimum_output_amount: swap_info.min_output_amount,
+            priority_fee_lamports: None, // Set as needed
+            slippage_bps: None, // Set as needed
         };
         
         // Create a pool_info Arc for the enhanced method

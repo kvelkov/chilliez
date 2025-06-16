@@ -17,6 +17,4 @@ pub use lifinity::LifinityClient; // LifinityPoolParser only used in pool_manage
 // Note: PhoenixClient is implemented but not currently used in get_all_* functions
 // Uncomment when Phoenix integration is activated:
 // pub use phoenix::{PhoenixClient, PhoenixPoolParser};
-// Note: JupiterClient is implemented but not currently used in get_all_* functions
-// Uncomment when Jupiter integration is activated:
-// pub use jupiter::JupiterClient;
+pub use jupiter::JupiterClient;

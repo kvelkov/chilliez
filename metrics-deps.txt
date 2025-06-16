@@ -1,0 +1,2 @@
+metrics = "0.22"
+metrics-exporter-prometheus = "0.13"

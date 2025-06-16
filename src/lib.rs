@@ -1,5 +1,5 @@
 pub mod arbitrage;
-pub mod metrics;
+pub mod local_metrics;
 pub mod config;
 pub mod dex;
 pub mod solana;

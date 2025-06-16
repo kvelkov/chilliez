@@ -6,7 +6,7 @@ mod tests {
     use crate::arbitrage::fee_manager::FeeManager;
     use crate::arbitrage::opportunity::MultiHopArbOpportunity;
     use crate::config::settings::Config;
-    use crate::metrics::Metrics;
+    use crate::local_metrics::Metrics;
     use crate::solana::rpc::SolanaRpcClient;
     use crate::utils::{DexType, PoolInfo, PoolToken, TokenAmount};
     use solana_sdk::pubkey::Pubkey;
@@ -138,7 +138,7 @@ mod tests {
     #[test]
     fn test_exercise_all_metrics_and_fee_manager() {
         use crate::arbitrage::fee_manager::{FeeManager, XYKSlippageModel, FeeHistoryTracker};
-        use crate::metrics::Metrics;
+        use crate::local_metrics::Metrics;
         use solana_sdk::pubkey::Pubkey;
         use std::sync::Arc;
         let mut metrics = Metrics::default();
@@ -171,7 +171,7 @@ mod tests {
         use crate::arbitrage::detector::ArbitrageDetector;
         use crate::arbitrage::opportunity::MultiHopArbOpportunity;
         use crate::config::settings::Config;
-        use crate::metrics::Metrics;
+        use crate::local_metrics::Metrics;
         use crate::solana::rpc::SolanaRpcClient;
         use solana_sdk::pubkey::Pubkey;
         use std::sync::Arc;

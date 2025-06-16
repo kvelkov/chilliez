@@ -8,7 +8,7 @@ pub use fee::*;
 pub use math::*;
 
 use crate::config::settings::Config;
-use crate::metrics::Metrics;
+use crate::local_metrics::Metrics;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 

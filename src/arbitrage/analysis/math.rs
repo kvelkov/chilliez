@@ -36,7 +36,7 @@ impl AdvancedArbitrageMath {
 pub struct VolatilityTracker;
 pub struct DynamicThresholdUpdater;
 impl DynamicThresholdUpdater {
-    pub fn new(_config: &crate::config::settings::Config, _metrics: std::sync::Arc<tokio::sync::Mutex<crate::metrics::Metrics>>) -> Self {
+    pub fn new(_config: &crate::config::settings::Config, _metrics: std::sync::Arc<tokio::sync::Mutex<crate::local_metrics::Metrics>>) -> Self {
         DynamicThresholdUpdater
     }
 }

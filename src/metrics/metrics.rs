@@ -1,6 +1,7 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 use log::info;
+use metrics::{counter, gauge, histogram};
 
 pub struct Metrics {
     // Atomic counters for thread-safe incrementing
@@ -40,6 +41,10 @@ impl Metrics {
     /// - `updated`: The number of existing pools updated.
     /// - `total`: The total number of pools in the system.
     pub fn log_pools_updated(&self, new: u64, updated: u64, total: usize) {
+        counter!("pools_new");
+        counter!("pools_updated");
+        gauge!("total_pools", total as f64);
+
         self.pools_new.fetch_add(new, Ordering::Relaxed);
         self.pools_updated.fetch_add(updated, Ordering::Relaxed);
         self.total_pools.store(total as u64, Ordering::Relaxed);
@@ -47,46 +52,58 @@ impl Metrics {
 
     /// Logs the number of opportunities detected during a detection scan.
     pub fn log_opportunities_detected(&self, count: u64) {
+        counter!("opportunities_detected");
+
         self.opportunities_detected.fetch_add(count, Ordering::Relaxed);
     }
 
     /// Call this method immediately after a successful execution.
     pub fn log_opportunity_executed_success(&self) {
-        self.opportunities_executed_success.fetch_add(1, Ordering::Relaxed);
+        counter!("opportunities_executed_success");
         info!("Metrics: Successful execution recorded");
     }
 
     /// Call this method immediately after a failed execution.
     pub fn log_opportunity_executed_failure(&self) {
-        self.opportunities_executed_failure.fetch_add(1, Ordering::Relaxed);
+        counter!("opportunities_executed_failure");
         info!("Metrics: Failed execution recorded");
     }
 
     /// Updates the total profit, handling both positive and negative values.
     pub fn update_profit(&self, profit: f64) {
+        gauge!("total_profit", profit);
+
         let mut total = self.total_profit.lock().unwrap();
         *total += profit;
     }
 
     /// Records the execution time of an operation.
     pub fn record_execution_time(&self, duration_ms: u64) {
+        histogram!("execution_time_ms", duration_ms as f64);
+        counter!("execution_count");
+
         self.execution_count.fetch_add(1, Ordering::Relaxed);
         self.total_execution_ms.fetch_add(duration_ms, Ordering::Relaxed);
     }
 
     /// Logs dynamic threshold updates.
     pub fn log_dynamic_threshold_update(&self, new_threshold: f64) {
-        self.dynamic_threshold_updates.fetch_add(1, Ordering::Relaxed);
+        counter!("dynamic_threshold_updates");
+        gauge!("current_dynamic_threshold", new_threshold);
         info!("Dynamic threshold updated to: {:.4}%", new_threshold);
     }
 
     /// Records the duration of a main cycle.
     pub fn record_main_cycle_duration(&self, duration_ms: u64) {
+        histogram!("main_cycle_duration_ms", duration_ms as f64);
+
         self.record_execution_time(duration_ms);
     }
 
     /// Increments the main cycles counter.
     pub fn increment_main_cycles(&self) {
+        counter!("main_cycles_executed");
+
         self.execution_count.fetch_add(1, Ordering::Relaxed);
     }
 
@@ -97,7 +114,7 @@ impl Metrics {
 
     /// Logs the number of pools fetched.
     pub fn log_pools_fetched(&self, count: usize) {
-        self.total_pools.store(count as u64, Ordering::Relaxed);
+        gauge!("pools_fetched", count as f64);
         info!("Fetched {} pools", count);
     }
 
@@ -140,7 +157,7 @@ impl Metrics {
         input_amount_usd: Option<f64>,
         dex_path: Vec<String>,
     ) -> Result<(), String> {
-        self.opportunities_detected.fetch_add(1, Ordering::Relaxed);
+        counter!("opportunities_detected");
         info!(
             "Detected opportunity: {} -> {} -> {}, Profit: {:.4}%, Est. USD: {:?}, Input USD: {:?}, Path: {:?}",
             input_token, intermediate_token, input_token, profit_pct, estimated_profit_usd, input_amount_usd, dex_path

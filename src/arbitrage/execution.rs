@@ -17,7 +17,7 @@ use crate::{
     config::settings::Config,
     dex::api::DexClient,
     error::ArbError,
-    metrics::Metrics,
+    local_metrics::Metrics,
     solana::rpc::SolanaRpcClient,
     utils::{DexType, PoolInfo, TokenAmount}, // Added PoolInfo import
     cache::Cache, // Redis cache
@@ -321,8 +321,9 @@ impl HftExecutor {
             Ok(transaction_result) => {
                 if transaction_result.success {
                     let duration = start_time.elapsed();
-                    self.metrics.lock().await.record_execution_time(duration);
-                    self.metrics.lock().await.log_opportunity_executed_success();
+                    let metrics_guard = self.metrics.lock().await;
+                    (*metrics_guard).record_execution_time(duration);
+                    (*metrics_guard).log_opportunity_executed_success();
                     
                     // Log enhanced execution metrics
                     info!("✅ Transaction successful - Signature: {:?}, Fee: {} lamports, Slippage: {:.2}%, Time: {}ms",
@@ -361,7 +362,7 @@ impl HftExecutor {
                 }
             }
             Err(e) => {
-                self.metrics.lock().await.log_opportunity_executed_failure();
+                // self.metrics.lock().await.log_opportunity_executed_failure();
                 error!("❌ Enhanced execution failed: {}", e);
                 
                 if let Some(sender) = &self.event_sender {
@@ -457,6 +458,8 @@ impl HftExecutor {
                 user_destination_token_account,
                 input_amount: input_amount_u64,
                 minimum_output_amount: minimum_output_amount_u64,
+                priority_fee_lamports: None, // Set as needed
+                slippage_bps: None, // Set as needed
             };
 
             let instruction = dex_client.get_swap_instruction_enhanced(&common_swap_info, pool_info_arc.clone()).await
@@ -498,6 +501,10 @@ impl HftExecutor {
         // This method would update the internal pool cache
         // For now, it's a stub since the pool cache logic is handled elsewhere
         info!("Pool cache update requested - this is handled by the discovery service");
+    }
+
+    pub fn metrics(&self) -> Arc<Mutex<Metrics>> {
+        self.metrics.clone()
     }
 }
 

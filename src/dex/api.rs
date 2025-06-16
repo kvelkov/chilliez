@@ -128,6 +128,8 @@ pub struct CommonSwapInfo {
     pub destination_token_mint: Pubkey,
     pub input_amount: u64,
     pub minimum_output_amount: u64,
+    pub slippage_bps: Option<u16>, // Added for Jupiter and general use
+    pub priority_fee_lamports: Option<u64>, // Added for Jupiter and general use
 }
 
 // =====================================================================================

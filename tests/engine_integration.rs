@@ -79,10 +79,7 @@ async fn reference_all_engine_methods_and_fields() {
         webhook_url: Some("http://localhost:8080/webhook".to_string()),
         enable_webhooks: false,
     }); // Semicolon was missing here, added for correctness
-    let metrics = Arc::new(Mutex::new(solana_arb_bot::metrics::Metrics::new(
-        config.sol_price_usd.unwrap_or(100.0), // Provide SOL price from config or a default
-        config.metrics_log_path.clone(),      // Provide log path from config
-    )));
+    let metrics = Arc::new(Mutex::new(solana_arb_bot::local_metrics::Metrics::new()));
     let dex_api_clients: Vec<Arc<dyn DexClient>> = vec![];
     let executor: Option<Arc<solana_arb_bot::arbitrage::execution::HftExecutor>> = None; // No executor for this test
     let batch_engine: Option<Arc<solana_arb_bot::arbitrage::execution::BatchExecutor>> = None; // No batch engine for this test

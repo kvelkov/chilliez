@@ -5,7 +5,7 @@ mod config;
 mod utils;
 mod dex;
 mod error;
-mod metrics;
+mod local_metrics;
 mod solana;
 pub mod websocket;
 pub mod webhooks;
@@ -24,7 +24,7 @@ use crate::{
         live_update_manager::{LiveUpdateManager, LiveUpdateManagerBuilder, LiveUpdateConfig},
     },
     error::ArbError,
-    metrics::Metrics,
+    local_metrics::Metrics,
     solana::rpc::SolanaRpcClient,
     utils::{setup_logging, PoolInfo},
     webhooks::integration::WebhookIntegrationService,
@@ -54,6 +54,12 @@ impl PriceDataProvider for SimplePriceProvider {
 
 #[tokio::main]
 async fn main() -> Result<(), ArbError> {
+    // Initialize the StatsD exporter for metrics (UDP to 127.0.0.1:8125)
+    let recorder = metrics_exporter_statsd::StatsdBuilder::from("127.0.0.1", 8125)
+        .build(None)
+        .expect("failed to build StatsD recorder");
+    metrics::set_global_recorder(recorder).expect("failed to set global metrics recorder");
+
     setup_logging().expect("Failed to initialize logging");
     
     // Parse command line arguments
@@ -117,10 +123,7 @@ async fn main() -> Result<(), ArbError> {
     let app_config = Arc::new(app_config);
     app_config.validate_and_log();
     
-    let metrics = Arc::new(Mutex::new(Metrics::new(
-        app_config.sol_price_usd.unwrap_or(100.0), 
-        app_config.metrics_log_path.clone()
-    )));
+    let metrics = Arc::new(Mutex::new(Metrics::new()));
     
     let ha_solana_rpc_client = Arc::new(SolanaRpcClient::new(
         &app_config.rpc_url, 
@@ -166,7 +169,7 @@ async fn main() -> Result<(), ArbError> {
         hot_cache.insert(pool_info.address, pool_info.clone());
     }
     
-    metrics.lock().await.log_pools_fetched(hot_cache.len());
+    // metrics.lock().await.log_pools_fetched(hot_cache.len());
     info!("🔥 Hot cache initialized with {} pools", hot_cache.len());
 
     // --- Initialize Modern Real-Time Architecture ---
@@ -346,7 +349,7 @@ async fn main() -> Result<(), ArbError> {
     // --- Performance Monitoring with LiveUpdateManager Metrics ---
     let live_update_manager_arc = Arc::new(live_update_manager);
     let monitoring_live_manager = live_update_manager_arc.clone();
-    let monitoring_metrics = metrics.clone();
+    let _monitoring_metrics = metrics.clone();
     let monitoring_engine = arbitrage_engine.clone();
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
@@ -366,7 +369,7 @@ async fn main() -> Result<(), ArbError> {
             live_metrics.log_summary();
             
             // Update metrics
-            monitoring_metrics.lock().await.log_pools_fetched(cache_size);
+            // monitoring_metrics.lock().await.log_pools_fetched(cache_size);
         }
     });
 

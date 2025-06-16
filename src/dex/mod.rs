@@ -72,6 +72,7 @@ pub fn get_all_clients(
         Box::new(clients::RaydiumClient::new()),
         Box::new(clients::MeteoraClient::new()),
         Box::new(clients::LifinityClient::new()),
+        Box::new(clients::JupiterClient::new()),
         // Note: Phoenix client can be enabled once dependency conflicts are resolved
         // Box::new(clients::PhoenixClient::new()),
     ];
@@ -98,6 +99,7 @@ pub fn get_all_discoverable_clients(
         Arc::new(clients::RaydiumClient::new()),
         Arc::new(clients::MeteoraClient::new()),
         Arc::new(clients::LifinityClient::new()),
+        Arc::new(clients::JupiterClient::new()),
         // Arc::new(clients::PhoenixClient::new()), // Enable when ready
     ]
 }

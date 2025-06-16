@@ -6,7 +6,7 @@
 use crate::arbitrage::opportunity::MultiHopArbOpportunity;
 use crate::config::Config;
 use crate::error::ArbError;
-use crate::metrics::Metrics;
+use crate::local_metrics::Metrics;
 use crate::utils::PoolInfo;
 use log::{info, warn, debug};
 use solana_sdk::pubkey::Pubkey;

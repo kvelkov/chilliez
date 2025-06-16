@@ -8,7 +8,7 @@
 //! - mev: MEV protection and Jito integration
 //! - safety: Transaction safety, retry logic, and recovery
 
-use crate::metrics::Metrics;
+use crate::local_metrics::Metrics;
 use std::sync::Arc;
 use tokio::sync::{mpsc::{self, Receiver, Sender}, Mutex};
 use log::{info, error};
@@ -136,20 +136,20 @@ impl ArbitrageCoordinator {
                                 opp.id, signature
                             );
                             // Refined metrics update for successful trade
-                            let mut metrics_guard = self.metrics.lock().await;
-                            metrics_guard.log_opportunity_executed_success();
+                            let metrics_guard = self.metrics.lock().await;
+                            // metrics_guard.log_opportunity_executed_success();
                             if let Some(profit_usd) = opp.estimated_profit_usd {
-                                metrics_guard.total_profit_usd += profit_usd;
+                                metrics_guard.add_to_total_profit(profit_usd);
                             }
-                            metrics_guard.successful_trades_count += 1; // Explicitly increment successful trades
-                            metrics_guard.last_successful_trade_timestamp = Some(chrono::Utc::now());
+                            metrics_guard.log_opportunity_executed_success();
+                            // metrics_guard.last_successful_trade_timestamp = Some(chrono::Utc::now());
                         }
                         Err(err) => {
                             error!(
                                 "Execution failed for opportunity {}: {:?}",
                                 opp.id, err
                             );
-                            self.metrics.lock().await.log_opportunity_executed_failure();
+                            // self.metrics.lock().await.log_opportunity_executed_failure();
                         }
                     }
                 }

@@ -1,5 +1,12 @@
 # Arbitrage Module Documentation
 
+## Jupiter DEX Aggregator Support
+
+The arbitrage engine now supports Jupiter as a DEX aggregator. Jupiter is integrated as a first-class DEX client and participates in price discovery, route finding, and swap execution. See `src/dex/clients/jupiter.rs` and `docs/jupiter_readme.txt` for details.
+
+- Jupiter is enabled by default in all DEX client vectors.
+- End-to-end and integration tests for Jupiter are in `tests/jupiter_test.rs`.
+
 ## Structure of the `arbitrage` Folder
 
 The `arbitrage` folder contains all logic related to decentralized exchange (DEX) arbitrage on Solana. The code is organized into modular components for clarity, maintainability, and extensibility.

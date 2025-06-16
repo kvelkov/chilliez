@@ -12,7 +12,7 @@ use crate::{
     config::settings::Config,
     dex::{DexClient, PoolValidationConfig, BannedPairsManager},
     error::ArbError,
-    metrics::Metrics,
+    local_metrics::Metrics,
     solana::{rpc::SolanaRpcClient, websocket::SolanaWebsocketManager, BalanceMonitor},
     utils::{PoolInfo, DexType},
     paper_trading::{

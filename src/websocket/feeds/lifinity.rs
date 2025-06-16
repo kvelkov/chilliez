@@ -47,7 +47,7 @@ pub enum LifinityMessage {
         oracle_price: Option<f64>,
         concentration: u16,
         concentration_level: ConcentrationLevel,
-        liquidity: u128,
+        liquidity: u64,
         inventory_ratio: f64,
         timestamp: u64,
     },
@@ -241,7 +241,7 @@ impl LifinityWebSocketFeed {
                     timestamp,
                     price_a_to_b: price,
                     price_b_to_a: 1.0 / price,
-                    liquidity: Some(liquidity),
+                    liquidity: Some(liquidity.into()),
                     volume_24h: None, // Volume data not provided in this message
                 };
 
@@ -441,7 +441,7 @@ impl WebSocketFeed for LifinityWebSocketFeed {
                     timestamp,
                     price_a_to_b: price,
                     price_b_to_a: 1.0 / price,
-                    liquidity: Some(liquidity),
+                    liquidity: Some(liquidity.into()),
                     volume_24h: None, // Volume data not provided in this message
                 };
                 Ok(vec![price_update])

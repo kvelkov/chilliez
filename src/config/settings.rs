@@ -95,7 +95,7 @@ impl Config {
             rpc_url: env::var("RPC_URL").expect("RPC_URL must be set"),
             rpc_url_secondary: env::var("RPC_URL_SECONDARY").ok(),
             ws_url: env::var("WS_URL").expect("WS_URL must be set"),
-            wallet_path: env::var("WALLET_PATH").expect("WALLET_PATH must be set"),
+            wallet_path: env::var("WALLET_PATH").unwrap_or_else(|_| "".to_string()), // Make optional for paper trading
             min_profit_pct: env::var("MIN_PROFIT_PCT")
                 .unwrap_or_else(|_| "0.001".to_string())
                 .parse()
@@ -265,7 +265,11 @@ impl Config {
             log::info!("Secondary RPC URL (RPC_URL_SECONDARY) is not configured. Only primary RPC will be used.");
         }
         if self.trader_wallet_keypair_path.as_ref().map_or(true, |s| s.is_empty()) {
-            log::error!("CRITICAL: TRADER_WALLET_KEYPAIR_PATH environment variable is not set or empty.");
+            if !self.paper_trading {
+                log::error!("CRITICAL: TRADER_WALLET_KEYPAIR_PATH environment variable is not set or empty.");
+            } else {
+                log::info!("📄 Paper trading mode: Wallet not required (using virtual funds).");
+            }
         }
         if self.min_profit_pct <= 0.0 || self.min_profit_pct >= 1.0 {
             log::warn!("MIN_PROFIT_PCT ({}) is outside the typical range (0.0 to 1.0, exclusive of 0). Ensure it's a fraction (e.g., 0.001 for 0.1%).", self.min_profit_pct);

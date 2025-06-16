@@ -20,10 +20,10 @@ pub enum ExecutionStrategy {
 /// Analysis of opportunity competitiveness for execution decision
 #[derive(Debug, Clone)]
 pub struct CompetitivenessAnalysis {
-    #[allow(dead_code)]
+    #[allow(dead_code)] // not in use - Field is marked dead_code.
     pub competitive_score: Decimal,
     /// Factors that affect competitiveness (latency, gas, etc.)
-    #[allow(dead_code)]
+    #[allow(dead_code)] // not in use - Field is marked dead_code.
     pub risk_factors: Vec<String>,
     pub execution_recommendation: ExecutionRecommendation,
     pub reason: String,
@@ -51,7 +51,7 @@ pub struct DetectionMetrics {
 
 /// Health status for various components
 #[derive(Debug, Clone)]
-pub struct HealthStatus {
+pub struct HealthStatus { // not in use - Defined but not instantiated or used elsewhere in the provided codebase.
     pub is_healthy: bool,
     pub last_check: std::time::Instant,
     pub error_count: u64,
@@ -61,7 +61,7 @@ pub struct HealthStatus {
 /// Pool validation configuration
 #[derive(Debug, Clone)]
 pub struct PoolValidationMetrics {
-    pub total_pools_validated: u64,
+    pub total_pools_validated: u64, // not in use - Defined but not instantiated or used elsewhere in the provided codebase.
     pub pools_passed: u64,
     pub pools_failed: u64,
     pub validation_errors: HashMap<String, u64>,

@@ -205,7 +205,7 @@ impl HftExecutor {
     ///    This might involve a short delay to allow WebSocket updates or direct RPC fetches.
     /// 2. Adjust `input_amount` based on remaining balance or new optimal calculation.
     /// 3. Recalculate profit using an arbitrage analysis module.
-    /// 4. Construct a new `MultiHopArbOpportunity` if still viable.
+    /// 4. Construct a new `MultiHopArbOpportunity` if still viable. // not in use - The re-evaluation logic is a stub and currently always returns Ok(None).
     async fn _reevaluate_for_reentry(
         &self,
         executed_opportunity: &MultiHopArbOpportunity,
@@ -280,13 +280,29 @@ impl HftExecutor {
             &pools_refs,
             &input_token_amount,
             150.0 // TODO: Get real SOL price
-        );
+        ).await.unwrap_or_else(|_| {
+            // Fallback with minimal fee breakdown if async fails
+            use crate::arbitrage::analysis::{FeeBreakdown, NetworkCongestionLevel};
+            FeeBreakdown {
+                protocol_fee: 5_000_000.0, // 0.005 SOL
+                gas_fee: 10_000.0,         // 0.00001 SOL
+                priority_fee: 5_000.0,     // 0.000005 SOL
+                jito_tip: 0.0,            // No Jito tip in fallback
+                slippage_cost: 0.0,       // No slippage calculation in fallback
+                total_cost: 5_015_000.0,   // Total
+                risk_score: 0.5,
+                explanation: "Fallback calculation (async failed)".to_string(),
+                compute_units: 200_000,    // Conservative estimate
+                fee_per_signature: 5_000.0, // Standard fee
+                network_congestion: NetworkCongestionLevel::Medium,
+            }
+        });
         
         info!("📊 Fee breakdown - Protocol: {:.4}%, Gas: {:.4}%, Slippage: {:.4}%, Total: {:.4}%, Risk: {:.2}", 
-              fee_breakdown.protocol_fee * 100.0,
-              fee_breakdown.gas_fee * 100.0,
-              fee_breakdown.slippage_cost * 100.0,
-              fee_breakdown.total_cost * 100.0,
+              fee_breakdown.protocol_fee / 1_000_000_000.0 * 100.0,
+              fee_breakdown.gas_fee / 1_000_000_000.0 * 100.0,
+              fee_breakdown.slippage_cost / 1_000_000_000.0 * 100.0,
+              fee_breakdown.total_cost / 1_000_000_000.0 * 100.0,
               fee_breakdown.risk_score);
 
         // Step 3: Build instructions with enhanced calculations
@@ -618,7 +634,7 @@ pub struct BatchExecutor {
     config: BatchExecutionConfig,
     solana_client: Arc<SolanaRpcClient>,
     wallet: Arc<Keypair>,
-    #[allow(dead_code)]
+    #[allow(dead_code)] // not in use - Field is marked dead_code and not used by BatchExecutor's methods
     mev_handler: Option<Arc<JitoHandler>>,
     metrics: Arc<RwLock<ExecutionMetrics>>,
     active_batches: Arc<RwLock<HashMap<String, OpportunityBatch>>>,

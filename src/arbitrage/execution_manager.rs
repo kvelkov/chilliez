@@ -26,14 +26,14 @@ pub struct ExecutionManager {
     pub executor: Option<Arc<HftExecutor>>,
     pub batch_execution_engine: Option<Arc<BatchExecutor>>,
     pub execution_enabled: Arc<AtomicBool>,
-    pub opportunity_sender: Option<mpsc::UnboundedSender<MultiHopArbOpportunity>>,
+    pub opportunity_sender: Option<mpsc::UnboundedSender<MultiHopArbOpportunity>>, // not in use - Initialized but not used within ExecutionManager's methods.
     pub balance_monitor: Option<Arc<BalanceMonitor>>,
     
     // Paper trading components
     pub paper_trading_engine: Option<Arc<SimulatedExecutionEngine>>,
     pub paper_trading_portfolio: Option<Arc<SafeVirtualPortfolio>>,
     pub paper_trading_analytics: Option<Arc<Mutex<PaperTradingAnalytics>>>,
-    pub paper_trading_reporter: Option<Arc<PaperTradingReporter>>,
+    pub paper_trading_reporter: Option<Arc<PaperTradingReporter>>, // not in use - Initialized but not used within ExecutionManager's methods.
     pub is_paper_trading: bool,
 }
 

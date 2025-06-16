@@ -28,7 +28,7 @@ pub trait PriceDataProvider: Send + Sync {
 pub struct MarketDataManager {
     pub hot_cache: Arc<DashMap<Pubkey, Arc<PoolInfo>>>,
     pub ws_manager: Option<Arc<Mutex<SolanaWebsocketManager>>>,
-    pub price_provider: Option<Arc<dyn PriceDataProvider>>,
+    pub price_provider: Option<Arc<dyn PriceDataProvider>>, // not in use - Initialized but not used by MarketDataManager's methods.
     pub rpc_client: Option<Arc<SolanaRpcClient>>,
     pub dex_providers: Vec<Arc<dyn DexClient>>,
     pub degradation_mode: Arc<AtomicBool>,

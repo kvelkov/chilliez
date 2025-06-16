@@ -139,7 +139,7 @@ impl NetworkConditions {
         Self {
             current_congestion_level: 0.5,
             average_priority_fee: 10_000,
-            recent_block_times: Vec::new(),
+            recent_block_times: Vec::new(), // not in use - Populated in update_network_conditions, but not read by other JitoHandler methods.
             mempool_size_estimate: 1000,
             last_update: Instant::now(),
         }
@@ -497,13 +497,13 @@ impl JitoHandler {
 
     /// Create MEV-protected transaction bundle
     pub async fn create_mev_protected_bundle(
-        &self,
+        &self, // not in use - This function is public but its current implementation for flashloan_protection and timing_randomization are placeholders.
         opportunities: Vec<MultiHopArbOpportunity>,
         instructions_per_opportunity: Vec<Vec<Instruction>>,
         payer_signer: Arc<Keypair>, // The wallet that pays for and signs the arbitrage transactions
     ) -> Result<Vec<Transaction>, ArbError> {
         if !self.mev_config.bundle_transactions {
-            return Err(ArbError::ConfigError("Transaction bundling is disabled".to_string()));
+            return Err(ArbError::ConfigError("Transaction bundling is disabled".to_string())); // not in use - Path only taken if bundling is disabled.
         }
 
         info!("📦 Creating MEV-protected transaction bundle for {} opportunities", opportunities.len());
@@ -518,7 +518,7 @@ impl JitoHandler {
             let estimated_cu = self.estimate_compute_units(&instructions).await;
             
             if total_compute_units + estimated_cu > MAX_COMPUTE_UNITS_PER_TX {
-                warn!("⚠️ Opportunity {} would exceed compute unit limit, creating separate transaction", i);
+                warn!("⚠️ Opportunity {} would exceed compute unit limit, creating separate transaction", i); // not in use - Path only taken if CU limit exceeded for a single opportunity.
                 continue;
             }
 
@@ -908,14 +908,14 @@ impl JitoHandler {
 
     /// Create flash loan protection instructions
     async fn create_flashloan_protection_instructions(&self) -> Result<Vec<Instruction>, ArbError> {
-        // Placeholder for flash loan protection logic
+        // Placeholder for flash loan protection logic // not in use
         debug!("⚡ Creating flash loan protection instructions");
         Ok(vec![])
     }
 
     /// Create timing randomization instructions
     async fn create_timing_randomization_instructions(&self) -> Result<Vec<Instruction>, ArbError> {
-        // Placeholder for timing randomization logic
+        // Placeholder for timing randomization logic // not in use
         debug!("🎲 Creating timing randomization instructions");
         Ok(vec![])
     }
@@ -1028,7 +1028,7 @@ impl JitoHandler {
 
     /// Get optimal tip amount based on network conditions
     pub async fn get_optimal_tip(&self, base_tip: u64) -> Result<u64, ArbError> {
-        // In real implementation, this would:
+        // In real implementation, this would: // not in use - Current implementation is a placeholder.
         // 1. Query current network congestion
         // 2. Check recent bundle success rates
         // 3. Calculate optimal tip amount

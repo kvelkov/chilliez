@@ -52,7 +52,7 @@ pub struct EnhancedArbHop {
 
 /// Legacy ArbHop structure for backward compatibility
 #[derive(Debug, Clone)]
-pub struct LegacyArbHop {
+pub struct LegacyArbHop { // not in use - Defined but not instantiated or used elsewhere in the provided codebase.
     /// The DEX used for the swap.
     pub dex: DexType,
     /// The pool where the swap takes place.
@@ -235,7 +235,7 @@ impl MultiHopArbOpportunity {
 
     /// SIMULATION: Provides a placeholder simulation execution.
     /// In a full implementation, this might recalculate expected outputs given updated reserves.
-    pub fn simulate_execution(&self) -> Self {
+    pub fn simulate_execution(&self) -> Self { // not in use - Current implementation is a placeholder.
         // Placeholder: simply returns a copy.
         // In a real implementation, this would use market data (via calculator/fee_manager) to recalc outcomes.
         self.clone()
@@ -250,7 +250,7 @@ impl MultiHopArbOpportunity {
 
     /// Calculates a simple risk score and sets it on the opportunity.
     /// This placeholder risk score is inversely proportional to profit_pct.
-    pub fn calculate_risk_score(&mut self) {
+    pub fn calculate_risk_score(&mut self) { // not in use - Current implementation is a placeholder.
         if self.profit_pct > 0.0 {
             self.risk_score = Some(1.0 / self.profit_pct);
         } else {

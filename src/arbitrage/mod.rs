@@ -36,6 +36,7 @@ pub mod analysis;         // Mathematical analysis, fees, thresholds
 pub mod mev;              // MEV protection and Jito integration
 pub mod safety;           // Transaction safety, retry logic, and recovery
 pub mod price_aggregator; // Price aggregation with Jupiter fallback
+pub mod routing;          // Advanced multi-hop and smart order routing
 
 // New modular architecture (refactored from orchestrator.rs) - temporarily disabled
 // pub mod types;            // Common types and enums

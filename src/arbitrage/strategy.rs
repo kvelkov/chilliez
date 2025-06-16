@@ -23,7 +23,7 @@ struct EdgeWeight {
     weight: f64,           // -ln(exchange_rate) 
     exchange_rate: f64,    // Original exchange rate
     pool_address: Pubkey,  // Pool where this swap occurs
-    _liquidity: Option<u128>, // Available liquidity (not yet used in calculations)
+    _liquidity: Option<u128>, // not in use - Field has a leading underscore and is not read in current calculations.
 }
 
 /// Market graph using petgraph for efficient algorithms

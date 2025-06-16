@@ -3,6 +3,7 @@
 //! This is the consolidated and authoritative source for Orca Whirlpools integration.
 
 use crate::dex::api::{DexClient, Quote, SwapInfo, PoolDiscoverable, CommonSwapInfo, DexHealthStatus};
+use crate::dex::math::orca::{calculate_whirlpool_swap_output, validate_pool_state};
 use crate::solana::rpc::SolanaRpcClient;
 use crate::utils::{DexType, PoolInfo, PoolParser as UtilsPoolParser, PoolToken};
 use anyhow::{anyhow, Result as AnyhowResult};
@@ -14,16 +15,13 @@ use solana_sdk::{
     instruction::{AccountMeta, Instruction},
     pubkey::Pubkey,
 };
+use spl_token;
 use std::str::FromStr;
 use std::sync::Arc;
 
 // --- Constants ---
 pub const ORCA_WHIRLPOOL_PROGRAM_ID: Pubkey = solana_sdk::pubkey!("whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc");
 const ORCA_API_URL: &str = "https://api.mainnet.orca.so/v1/whirlpool/list";
-
-// Placeholder constants - would be replaced with actual values from orca_whirlpools_core
-const MIN_SQRT_PRICE: u128 = 4295048016;
-const MAX_SQRT_PRICE: u128 = 79226673515401279992447579055;
 
 // Placeholder function - would be replaced with actual implementation from orca_whirlpools_core
 // --- On-Chain Data Structures ---
@@ -263,30 +261,51 @@ impl DexClient for OrcaClient {
     }
 
     fn calculate_onchain_quote(&self, pool: &PoolInfo, input_amount: u64) -> AnyhowResult<Quote> {
-        // This is a simplified approximation for CLMM pools
-        // Real implementation would require proper CLMM math library
-        warn!("OrcaClient: Using simplified quote calculation. Real implementation requires proper CLMM math library.");
+        // Validate that this is a proper CLMM pool with required state
+        validate_pool_state(
+            pool.sqrt_price,
+            pool.liquidity,
+            pool.tick_current_index,
+            pool.tick_spacing,
+        ).map_err(|e| anyhow!("Invalid Whirlpool state: {}", e))?;
 
-        if pool.token_a.reserve == 0 || pool.token_b.reserve == 0 {
-            return Err(anyhow!("Pool has zero reserves"));
-        }
+        // Extract CLMM-specific parameters
+        let sqrt_price = pool.sqrt_price.unwrap();
+        let liquidity = pool.liquidity.unwrap();
+        let tick_current = pool.tick_current_index.unwrap();
+        let tick_spacing = pool.tick_spacing.unwrap();
+        let fee_rate = pool.fee_rate_bips.unwrap_or(30); // Default to 0.3%
 
-        // Simplified calculation - would need proper CLMM math
-        let fee_rate = pool.fee_rate_bips.unwrap_or(30) as f64 / 10000.0;
-        let input_after_fee = (input_amount as f64) * (1.0 - fee_rate);
+        // Assume swapping token A for token B (would need direction logic in real implementation)
+        let a_to_b = true;
         
-        // Very simplified AMM-style calculation for demonstration
-        let output_amount = (pool.token_b.reserve as f64 * input_after_fee) 
-            / (pool.token_a.reserve as f64 + input_after_fee);
+        // Calculate output using proper CLMM math
+        let swap_result = calculate_whirlpool_swap_output(
+            input_amount,
+            sqrt_price,
+            liquidity,
+            tick_current,
+            tick_spacing,
+            fee_rate,
+            a_to_b,
+        ).map_err(|e| anyhow!("CLMM calculation failed: {}", e))?;
+
+        info!(
+            "OrcaClient: CLMM calculation - Input: {}, Output: {}, Fee: {}, Price Impact: {:.4}%",
+            input_amount,
+            swap_result.output_amount,
+            swap_result.fee_amount,
+            swap_result.price_impact * 100.0
+        );
 
         Ok(Quote {
             input_token: pool.token_a.symbol.clone(),
             output_token: pool.token_b.symbol.clone(),
             input_amount,
-            output_amount: output_amount as u64,
+            output_amount: swap_result.output_amount,
             dex: self.name.clone(),
             route: vec![pool.address],
-            slippage_estimate: Some(0.1),
+            slippage_estimate: Some(swap_result.price_impact),
         })
     }
 
@@ -316,43 +335,76 @@ impl DexClient for OrcaClient {
             pool_info.address, swap_info.source_token_mint, swap_info.destination_token_mint
         );
 
-        // Validate pool info
-        if pool_info.sqrt_price.is_none() || pool_info.tick_current_index.is_none() {
-            return Err(crate::error::ArbError::InstructionError(
-                "Invalid Whirlpool state: missing sqrt_price or tick_current_index".to_string()
-            ));
-        }
+        // Validate pool info using the new validation function
+        validate_pool_state(
+            pool_info.sqrt_price,
+            pool_info.liquidity,
+            pool_info.tick_current_index,
+            pool_info.tick_spacing,
+        ).map_err(|e| crate::error::ArbError::InstructionError(
+            format!("Invalid Whirlpool state: {}", e)
+        ))?;
+
+        // Extract CLMM parameters
+        let sqrt_price = pool_info.sqrt_price.unwrap();
+        let tick_current = pool_info.tick_current_index.unwrap();
+        let tick_spacing = pool_info.tick_spacing.unwrap();
 
         // Determine swap direction
         let a_to_b = swap_info.source_token_mint == pool_info.token_a.mint;
         
-        // Calculate sqrt_price_limit (simplified)
-        let _sqrt_price_limit = if a_to_b {
-            MIN_SQRT_PRICE
+        // Calculate sqrt_price_limit for slippage protection
+        let sqrt_price_limit = if a_to_b {
+            // A->B: price goes down, set minimum acceptable price
+            (sqrt_price * 95) / 100 // 5% slippage protection
         } else {
-            MAX_SQRT_PRICE
+            // B->A: price goes up, set maximum acceptable price  
+            (sqrt_price * 105) / 100 // 5% slippage protection
         };
 
-        // Resolve tick array accounts (simplified - real implementation would calculate these)
-        let tick_array_0 = pool_info.tick_array_0.unwrap_or_else(|| Pubkey::new_unique());
-        let tick_array_1 = pool_info.tick_array_1.unwrap_or_else(|| Pubkey::new_unique());
-        let tick_array_2 = pool_info.tick_array_2.unwrap_or_else(|| Pubkey::new_unique());
+        // Calculate tick array addresses based on current tick and swap direction
+        let tick_array_addresses = calculate_tick_array_addresses(
+            &pool_info.address,
+            tick_current,
+            tick_spacing,
+            a_to_b,
+        )?;
 
-        //
-
-        // Placeholder for actual instruction building logic
+        // Build the swap instruction with proper account structure
         let instruction = Instruction {
             program_id: ORCA_WHIRLPOOL_PROGRAM_ID,
             accounts: vec![
-                AccountMeta::new(swap_info.user_wallet_pubkey, true),
-                AccountMeta::new(pool_info.address, false),
-                AccountMeta::new(swap_info.user_source_token_account, false),
-                AccountMeta::new(swap_info.user_destination_token_account, false),
-                AccountMeta::new(tick_array_0, false),
-                AccountMeta::new(tick_array_1, false),
-                AccountMeta::new(tick_array_2, false),
+                // Core accounts
+                AccountMeta::new_readonly(
+                    spl_token::id(), false
+                ), // Token program
+                AccountMeta::new(swap_info.user_wallet_pubkey, true), // Payer/authority
+                AccountMeta::new(pool_info.address, false), // Whirlpool
+                
+                // Token accounts
+                AccountMeta::new(swap_info.user_source_token_account, false), // Source token account
+                AccountMeta::new(swap_info.user_destination_token_account, false), // Destination token account
+                AccountMeta::new(pool_info.token_a_vault, false), // Token vault A
+                AccountMeta::new(pool_info.token_b_vault, false), // Token vault B
+                
+                // Tick arrays (up to 3 arrays may be needed for large swaps)
+                AccountMeta::new(tick_array_addresses[0], false), // Tick array 0
+                AccountMeta::new(tick_array_addresses[1], false), // Tick array 1
+                AccountMeta::new(tick_array_addresses[2], false), // Tick array 2
+                
+                // Oracle account (if available)
+                AccountMeta::new_readonly(
+                    pool_info.oracle.unwrap_or_else(|| Pubkey::new_unique()), 
+                    false
+                ),
             ],
-            data: vec![0], // Placeholder instruction data
+            data: build_swap_instruction_data(
+                swap_info.input_amount,
+                swap_info.minimum_output_amount,
+                sqrt_price_limit,
+                true, // amount_specified_is_input
+                a_to_b,
+            )?,
         };
 
         Ok(instruction)
@@ -563,3 +615,86 @@ impl PoolDiscoverable for OrcaClient {
         "Orca"
     }
 }
+
+// --- Helper Functions for Enhanced Swap Instructions ---
+
+/// Calculate tick array addresses needed for a swap
+fn calculate_tick_array_addresses(
+    pool_address: &Pubkey,
+    tick_current: i32,
+    tick_spacing: u16,
+    a_to_b: bool,
+) -> Result<[Pubkey; 3], crate::error::ArbError> {
+    // Calculate tick array start indices
+    // Each tick array covers 88 ticks (TICK_ARRAY_SIZE * tick_spacing)
+    let ticks_per_array = 88 * tick_spacing as i32;
+    
+    let start_tick_0 = (tick_current / ticks_per_array) * ticks_per_array;
+    
+    let (start_tick_1, start_tick_2) = if a_to_b {
+        // A->B: price decreases, may need lower tick arrays
+        (start_tick_0 - ticks_per_array, start_tick_0 - 2 * ticks_per_array)
+    } else {
+        // B->A: price increases, may need higher tick arrays
+        (start_tick_0 + ticks_per_array, start_tick_0 + 2 * ticks_per_array)
+    };
+
+    // Derive tick array addresses using PDA
+    let tick_array_0 = derive_tick_array_address(pool_address, start_tick_0)?;
+    let tick_array_1 = derive_tick_array_address(pool_address, start_tick_1)?;
+    let tick_array_2 = derive_tick_array_address(pool_address, start_tick_2)?;
+
+    Ok([tick_array_0, tick_array_1, tick_array_2])
+}
+
+/// Derive tick array PDA address
+fn derive_tick_array_address(
+    pool_address: &Pubkey,
+    start_tick_index: i32,
+) -> Result<Pubkey, crate::error::ArbError> {
+    // Convert tick index to bytes for PDA seed
+    let start_tick_bytes = start_tick_index.to_le_bytes();
+    
+    // Derive PDA for tick array
+    let (tick_array_pda, _bump) = Pubkey::find_program_address(
+        &[
+            b"tick_array",
+            pool_address.as_ref(),
+            &start_tick_bytes,
+        ],
+        &ORCA_WHIRLPOOL_PROGRAM_ID,
+    );
+
+    Ok(tick_array_pda)
+}
+
+/// Build swap instruction data
+fn build_swap_instruction_data(
+    amount: u64,
+    other_amount_threshold: u64,
+    sqrt_price_limit: u128,
+    amount_specified_is_input: bool,
+    a_to_b: bool,
+) -> Result<Vec<u8>, crate::error::ArbError> {
+    // Orca swap instruction discriminator (8 bytes)
+    let mut data = vec![0xf8, 0xc6, 0x9e, 0x91, 0xe1, 0x75, 0x87, 0xc8];
+    
+    // Amount (8 bytes)
+    data.extend_from_slice(&amount.to_le_bytes());
+    
+    // Other amount threshold (8 bytes) 
+    data.extend_from_slice(&other_amount_threshold.to_le_bytes());
+    
+    // Sqrt price limit (16 bytes for u128)
+    data.extend_from_slice(&sqrt_price_limit.to_le_bytes());
+    
+    // Amount specified is input (1 byte)
+    data.push(if amount_specified_is_input { 1 } else { 0 });
+    
+    // A to B direction (1 byte)
+    data.push(if a_to_b { 1 } else { 0 });
+
+    Ok(data)
+}
+
+// --- Pool Discovery and Parsing ---

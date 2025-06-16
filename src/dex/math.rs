@@ -11,6 +11,9 @@ use num_traits::ToPrimitive;
 use rust_decimal::Decimal;
 use std::str::FromStr;
 
+/// Orca Whirlpools CLMM math implementation
+pub mod orca;
+
 /// High-precision CLMM calculations for concentrated liquidity pools
 pub mod clmm {
     use super::*;
@@ -155,52 +158,6 @@ pub mod raydium {
         
         input_with_fee.to_u64()
             .ok_or_else(|| anyhow!("Input amount calculation overflow"))
-    }
-}
-
-/// Orca-specific calculations for both Whirlpools (CLMM) and legacy pools
-pub mod orca {
-    use super::*;
-    
-    /// Calculate Orca Whirlpool (CLMM) output with tick-aware pricing
-    #[allow(dead_code)] // Advanced math function for Orca Whirlpool calculations
-    pub fn calculate_whirlpool_output(
-        input_amount: u64,
-        sqrt_price_x64: u128,
-        liquidity: u128,
-        fee_rate: u16, // Fee rate in hundredths of a basis point
-    ) -> Result<u64> {
-        // Convert Orca's fee rate format (hundredths of bps) to our standard bps
-        let fee_bps = fee_rate / 100;
-        
-        // Use CLMM calculation with Orca-specific parameters
-        super::clmm::calculate_clmm_output(
-            input_amount,
-            sqrt_price_x64,
-            liquidity,
-            -887272, // Full range tick lower (approximate)
-            887272,  // Full range tick upper (approximate)  
-            fee_bps as u32,
-        )
-    }
-    
-    /// Calculate legacy Orca pool output (constant product)
-    #[allow(dead_code)] // Advanced math function for legacy Orca pool calculations
-    pub fn calculate_legacy_orca_output(
-        input_amount: u64,
-        input_reserve: u64,
-        output_reserve: u64,
-        fee_numerator: u64,
-        fee_denominator: u64,
-    ) -> Result<u64> {
-        // Legacy Orca uses same constant product formula as Raydium
-        super::raydium::calculate_raydium_output(
-            input_amount,
-            input_reserve,
-            output_reserve,
-            fee_numerator,
-            fee_denominator,
-        )
     }
 }
 
@@ -469,20 +426,25 @@ mod tests {
 
     #[test]
     fn test_orca_whirlpool_calculation() {
-        // Test Orca Whirlpool calculation
+        // Test Orca Whirlpool calculation using proper CLMM math
         let input_amount = 1000000;
-        let sqrt_price_x64 = (1u128 << 64) * 3; // Price of 3
+        let sqrt_price = 1u128 << 64; // sqrt(1) in Q64.64 format
         let liquidity = 500000000u128;
-        let fee_rate = 3000; // Orca format: hundredths of basis points
+        let fee_rate = 30; // 0.3% in basis points
 
-        let output = orca::calculate_whirlpool_output(
+        let result = orca::calculate_whirlpool_swap_output(
             input_amount,
-            sqrt_price_x64,
+            sqrt_price,
             liquidity,
+            0,       // current tick
+            64,      // tick spacing 
             fee_rate,
+            true,    // A to B
         ).unwrap();
 
-        assert!(output > 0, "Whirlpool output should be greater than 0");
+        assert!(result.output_amount > 0, "Whirlpool output should be greater than 0");
+        assert!(result.fee_amount > 0, "Fee amount should be greater than 0");
+        assert!(result.price_impact >= 0.0, "Price impact should be non-negative");
     }
 
     #[test]

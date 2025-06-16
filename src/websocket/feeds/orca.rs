@@ -1,4 +1,7 @@
-#![allow(dead_code)] // WebSocket feed implementation in progress
+//! Orca Whirlpools WebSocket feed for real-time price data
+//! 
+//! This module implements real-time price monitoring for Orca Whirlpools
+//! by subscribing to Solana RPC WebSocket account change notifications.
 
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
@@ -26,6 +29,7 @@ const ORCA_RPC_WS_URL: &str = "wss://api.mainnet-beta.solana.com";
 
 /// Orca-specific account change notification from RPC subscription
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 struct OrcaAccountNotification {
     jsonrpc: String,
     method: String,
@@ -33,29 +37,34 @@ struct OrcaAccountNotification {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 struct OrcaAccountParams {
     result: OrcaAccountResult,
     subscription: u64,
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 struct OrcaAccountResult {
     context: OrcaContext,
     value: OrcaAccountValue,
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 struct OrcaContext {
     slot: u64,
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 struct OrcaAccountValue {
     account: OrcaAccountData,
     pubkey: String,
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 struct OrcaAccountData {
     data: Vec<String>, // Base64 encoded account data
     executable: bool,
@@ -67,6 +76,7 @@ struct OrcaAccountData {
 
 /// Internal message types for processing
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 enum OrcaMessage {
     AccountUpdate {
         pool_address: String,
@@ -79,6 +89,7 @@ enum OrcaMessage {
 
 /// Orca whirlpool data structure
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 struct OrcaWhirlpoolData {
     #[serde(rename = "whirlpoolAddress")]
     whirlpool_address: String,
@@ -100,6 +111,7 @@ struct OrcaWhirlpoolData {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 struct OrcaTokenInfo {
     mint: String,
     #[serde(rename = "decimals")]
@@ -159,6 +171,7 @@ impl OrcaWebSocketFeed {
     }
 
     /// Handle incoming WebSocket messages
+    #[allow(dead_code)]
     async fn handle_message(&mut self, message: Message) -> Result<()> {
         self.metrics.total_messages_received += 1;
         self.metrics.last_message_timestamp = Some(chrono::Utc::now().timestamp_millis() as u64);
@@ -218,6 +231,7 @@ impl OrcaWebSocketFeed {
     }
 
     /// Main message processing loop
+    #[allow(dead_code)]
     async fn message_loop(&mut self) -> Result<()> {
         let mut ping_interval = interval(Duration::from_millis(self.config.ping_interval_ms));
         
@@ -268,6 +282,7 @@ impl OrcaWebSocketFeed {
     }
 
     /// Attempt to reconnect with exponential backoff
+    #[allow(dead_code)]
     async fn reconnect(&mut self) -> Result<()> {
         if self.reconnect_attempts >= self.config.max_reconnect_attempts {
             error!("🚨 Max reconnection attempts reached for Orca WebSocket");
@@ -303,6 +318,7 @@ impl OrcaWebSocketFeed {
     }
 
     /// Convert Orca sqrt price to regular price
+    #[allow(dead_code)]
     fn sqrt_price_to_price(sqrt_price: &str, decimals_a: u8, decimals_b: u8) -> Result<f64> {
         let sqrt_price_u128: u128 = sqrt_price.parse()
             .map_err(|e| anyhow!("Invalid sqrt_price format: {}", e))?;

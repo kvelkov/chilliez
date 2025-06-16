@@ -1,0 +1,175 @@
+# Jupiter Price Aggregator Fallback Implementation TODO
+
+## Implementation Status: Planning Phase
+**Target Completion**: Week 1 (June 15-21, 2025)
+
+## 🎯 Implementation Plan Overview
+
+Implement Jupiter as a fallback price aggregator that activates when primary DEX pathfinding fails to find profitable arbitrage opportunities. This provides additional market coverage and trading opportunities.
+
+## 📋 Task Breakdown
+
+### Phase 1: Core API Infrastructure ⚠️ NOT STARTED
+
+#### 1.1 Jupiter API Data Structures
+- [ ] **File**: `src/dex/clients/jupiter_api.rs` (NEW)
+  - [ ] Define `QuoteRequest` struct for Jupiter V6 /quote endpoint
+  - [ ] Define `QuoteResponse` struct with complete field mapping
+  - [ ] Define `SwapRequest` struct for Jupiter V6 /swap endpoint  
+  - [ ] Define `SwapResponse` struct with base64 transaction handling
+  - [ ] Add proper error handling types for Jupiter API failures
+  - [ ] Include rate limiting and retry logic structures
+
+#### 1.2 Enhanced Jupiter Client
+- [ ] **File**: `src/dex/clients/jupiter.rs` (ENHANCE EXISTING)
+  - [ ] Add `get_quote_with_fallback()` method for price aggregation
+  - [ ] Implement `create_swap_transaction()` method 
+  - [ ] Add request retry logic with exponential backoff
+  - [ ] Implement rate limiting (Jupiter allows 10 req/sec)
+  - [ ] Add comprehensive error handling and logging
+  - [ ] Create circuit breaker for API failures
+
+#### 1.3 Configuration Management
+- [ ] **File**: `src/config/settings.rs` (ENHANCE EXISTING)
+  - [ ] Add `jupiter_fallback_enabled: bool` setting
+  - [ ] Add `jupiter_api_timeout_ms: u64` setting
+  - [ ] Add `jupiter_max_retries: u32` setting
+  - [ ] Add `jupiter_fallback_min_profit_pct: f64` setting
+  - [ ] Add `jupiter_slippage_tolerance_bps: u16` setting
+
+### Phase 2: Orchestrator Integration ⚠️ NOT STARTED
+
+#### 2.1 Detection Engine Fallback Logic
+- [ ] **File**: `src/arbitrage/orchestrator/core.rs` (ENHANCE EXISTING)
+  - [ ] Add `try_jupiter_fallback()` method to ArbitrageOrchestrator
+  - [ ] Implement fallback trigger logic in opportunity detection
+  - [ ] Add profit threshold validation for Jupiter quotes
+  - [ ] Integrate with existing opportunity execution pipeline
+  - [ ] Add metrics tracking for fallback usage
+
+#### 2.2 Price Aggregation Strategy
+- [ ] **File**: `src/arbitrage/strategy.rs` (ENHANCE EXISTING)
+  - [ ] Add Jupiter quote comparison in `find_arbitrage_opportunities()`
+  - [ ] Implement fallback activation when primary pathfinding fails
+  - [ ] Add Jupiter-based opportunity creation logic
+  - [ ] Ensure Jupiter opportunities integrate with existing validation
+
+#### 2.3 Execution Pipeline Integration
+- [ ] **File**: `src/arbitrage/execution.rs` (ENHANCE EXISTING)
+  - [ ] Add Jupiter transaction handling in `execute_opportunities()`
+  - [ ] Implement Jupiter swap instruction decoding
+  - [ ] Add Jupiter-specific error handling and retry logic
+  - [ ] Ensure Jupiter transactions work with existing safety checks
+
+### Phase 3: Error Handling & Safety ⚠️ NOT STARTED
+
+#### 3.1 Error Management
+- [ ] **File**: `src/error/mod.rs` (ENHANCE EXISTING)
+  - [ ] Add `JupiterApiError(String)` variant to ArbError enum
+  - [ ] Add `JupiterRateLimitError` variant
+  - [ ] Add `JupiterTimeoutError` variant
+  - [ ] Add proper error message mapping for Jupiter failures
+
+#### 3.2 Safety & Validation
+- [ ] **File**: `src/arbitrage/safety.rs` (ENHANCE EXISTING)
+  - [ ] Add Jupiter quote validation rules
+  - [ ] Implement slippage protection for Jupiter swaps
+  - [ ] Add position size limits for Jupiter-based trades
+  - [ ] Create emergency stop mechanism for Jupiter failures
+
+### Phase 4: Testing & Validation ⚠️ NOT STARTED
+
+#### 4.1 Unit Tests
+- [ ] **File**: `tests/jupiter_fallback_test.rs` (NEW)
+  - [ ] Test Jupiter API client methods with mock server
+  - [ ] Test fallback trigger conditions
+  - [ ] Test Jupiter quote validation logic
+  - [ ] Test error handling for all failure scenarios
+  - [ ] Test rate limiting and retry mechanisms
+
+#### 4.2 Integration Tests
+- [ ] **File**: `tests/integration/jupiter_integration.rs` (NEW)
+  - [ ] Test end-to-end fallback workflow
+  - [ ] Test Jupiter + primary DEX comparison
+  - [ ] Test configuration flag behavior
+  - [ ] Test emergency stop scenarios
+  - [ ] Test paper trading with Jupiter fallback
+
+#### 4.3 Paper Trading Validation
+- [ ] **File**: `examples/paper_trading_demo.rs` (ENHANCE EXISTING)
+  - [ ] Add Jupiter fallback scenarios to paper trading
+  - [ ] Test fallback performance vs primary strategies
+  - [ ] Validate profit calculations with Jupiter quotes
+  - [ ] Monitor fallback frequency and success rates
+
+### Phase 5: Monitoring & Logging ⚠️ NOT STARTED
+
+#### 5.1 Metrics & Monitoring
+- [ ] **File**: `src/local_metrics/metrics.rs` (ENHANCE EXISTING)
+  - [ ] Add `jupiter_fallback_attempts` counter
+  - [ ] Add `jupiter_fallback_successes` counter
+  - [ ] Add `jupiter_api_response_time_ms` histogram
+  - [ ] Add `jupiter_quotes_vs_primary` comparison metrics
+
+#### 5.2 Logging & Alerting
+- [ ] **Implementation**: Throughout Jupiter-related files
+  - [ ] Add INFO logs when fallback is triggered
+  - [ ] Add DEBUG logs for all Jupiter API requests/responses
+  - [ ] Add WARN logs for rate limiting hits
+  - [ ] Add ERROR logs for Jupiter API failures
+  - [ ] Create alerts for high fallback frequency
+
+## 🚨 Critical Requirements
+
+### Before Fallback Activation:
+- [ ] Jupiter API client fully tested with live API
+- [ ] Rate limiting properly implemented (10 req/sec max)
+- [ ] Fallback profit thresholds validated
+- [ ] Error handling covers all failure modes
+- [ ] Paper trading shows consistent results
+
+### Safety Checklist:
+- [ ] Jupiter transactions pass all existing safety checks
+- [ ] Slippage protection active for Jupiter swaps
+- [ ] Emergency stop works for Jupiter-based trades
+- [ ] Position sizing limits apply to Jupiter opportunities
+- [ ] Circuit breaker prevents API spam
+
+## 📊 Success Metrics
+
+### Performance Targets:
+- [ ] Jupiter fallback adds <50ms to detection latency
+- [ ] Fallback success rate >80% when triggered
+- [ ] Jupiter quotes within 2% of market prices
+- [ ] Fallback usage <10% of total opportunities (indicates healthy primary system)
+
+### Quality Targets:
+- [ ] Zero Jupiter API errors in 24-hour test runs
+- [ ] Proper handling of all Jupiter API failure modes
+- [ ] Fallback opportunities show positive simulated returns
+- [ ] No conflicts between Jupiter and primary DEX executions
+
+## 🔄 Implementation Priority
+
+1. **Phase 1** (Days 1-2): Core API infrastructure and Jupiter client enhancement
+2. **Phase 2** (Days 2-3): Orchestrator integration and fallback logic
+3. **Phase 3** (Day 3): Error handling and safety measures
+4. **Phase 4** (Days 4-5): Comprehensive testing
+5. **Phase 5** (Days 5-6): Monitoring and validation
+
+## 📝 Notes
+
+- Jupiter V6 API is production-ready and stable
+- Existing Jupiter client needs enhancement for fallback use case
+- Integration should be non-disruptive to existing DEX operations
+- Fallback should be clearly distinguishable in logs and metrics
+- Consider Jupiter as "last resort" - primary DEXs should remain preferred
+
+## ✅ Completion Criteria
+
+- [ ] Jupiter fallback activates only when primary pathfinding fails
+- [ ] Jupiter quotes properly validated and profitable
+- [ ] Fallback transactions execute successfully in paper trading
+- [ ] All error scenarios handled gracefully
+- [ ] Performance impact within acceptable limits
+- [ ] 48+ hours of stable operation with fallback enabled

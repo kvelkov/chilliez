@@ -58,9 +58,7 @@ mod tests {
 
     // Dummy metrics constructor.
     fn dummy_metrics() -> Arc<Mutex<Metrics>> {
-        // For our updated Metrics, if constructor takes parameters, ensure they are provided.
-        // For instance, if Metrics::new accepts an initial profit value or TTL; adjust as needed.
-        // Here we assume a simple constructor exists.
+        // Use Metrics::new() instead of Metrics::default()
         Arc::new(Mutex::new(Metrics::new()))
     }
 

@@ -148,7 +148,7 @@ impl Default for OptimizerConfig {
 }
 
 /// Main route optimizer implementation
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct RouteOptimizer {
     #[allow(dead_code)]
     config: OptimizerConfig,

@@ -59,6 +59,7 @@ regex = "1.10.0"
 rayon = "1.8"
 lb_clmm = "0.1.1"
 num_cpus = "1.16.0"
+sysinfo = "0.30.0"
 
 # === Graph & ID & Cache ===
 petgraph = "0.6"

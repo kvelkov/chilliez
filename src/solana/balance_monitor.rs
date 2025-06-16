@@ -12,7 +12,7 @@ use std::{
         atomic::{AtomicBool, AtomicU64, Ordering},
         Arc,
     },
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use tokio::{
     sync::{mpsc, RwLock},
@@ -53,7 +53,7 @@ impl Default for BalanceMonitorConfig {
             balance_sync_timeout_ms: 30_000, // 30 seconds
             max_balance_age_ms: 60_000, // 1 minute
             enable_emergency_pause: true,
-            balance_check_interval_ms: 5_000, // Check every 5 seconds
+            balance_check_interval_ms: 30_000, // Reduced from 5s to 30s for event-driven mode
         }
     }
 }
@@ -581,6 +581,89 @@ impl BalanceMonitor {
     #[allow(dead_code)]
     pub fn get_balance_update_sender(&self) -> &mpsc::UnboundedSender<BalanceUpdate> {
         &self.balance_update_sender
+    }
+
+    /// Trigger balance update from external event (e.g., webhook)
+    pub async fn trigger_balance_update_from_event(
+        &self, 
+        account: Pubkey, 
+        expected_balance_change: Option<i64>,
+        event_source: &str
+    ) -> Result<()> {
+        debug!("🔔 External event triggered balance update for {}: {} ({})", 
+            account, 
+            expected_balance_change.map_or("unknown".to_string(), |c| c.to_string()),
+            event_source
+        );
+        
+        // Force a balance check for this account by simulating a WebSocket update
+        // In a real implementation, this would query the RPC directly
+        
+        // For now, we'll update the optimistic balance and trigger validation
+        if let Some(change) = expected_balance_change {
+            let current_balance = self.get_confirmed_balance(account).await
+                .map(|(balance, _)| balance)
+                .unwrap_or(0);
+            
+            let new_balance = if change >= 0 {
+                current_balance.saturating_add(change as u64)
+            } else {
+                current_balance.saturating_sub((-change) as u64)
+            };
+            
+            self.update_optimistic_balance(account, new_balance).await;
+            
+            // Emit balance update event
+            let balance_update = BalanceUpdate {
+                account,
+                token_mint: None, // TODO: Extract from event data
+                balance: new_balance,
+                timestamp: SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs(),
+                slot: 0, // Would be extracted from event
+                previous_balance: Some(current_balance),
+                change,
+            };
+            
+            if let Err(e) = self.balance_update_sender.send(balance_update) {
+                warn!("Failed to send balance update event: {}", e);
+            }
+        }
+        
+        Ok(())
+    }
+
+    /// Batch trigger balance updates from multiple events
+    pub async fn trigger_batch_balance_updates(
+        &self,
+        updates: Vec<(Pubkey, Option<i64>)>,
+        event_source: &str
+    ) -> Result<()> {
+        debug!("🔔 Batch external event triggered {} balance updates ({})", 
+            updates.len(), event_source);
+        
+        for (account, change) in updates {
+            if let Err(e) = self.trigger_balance_update_from_event(account, change, event_source).await {
+                warn!("Failed to trigger balance update for {}: {}", account, e);
+            }
+        }
+        
+        Ok(())
+    }
+
+    /// Set event-driven mode (reduces polling frequency)
+    pub fn set_event_driven_mode(&mut self, enabled: bool) {
+        if enabled {
+            // Increase polling interval for event-driven mode
+            self.config.balance_check_interval_ms = 60_000; // 1 minute
+            info!("📡 Event-driven mode enabled - reduced polling to 60s");
+        } else {
+            // Restore normal polling
+            self.config.balance_check_interval_ms = 5_000; // 5 seconds
+            info!("📡 Event-driven mode disabled - restored normal polling (5s)");
+        }
     }
 }
 

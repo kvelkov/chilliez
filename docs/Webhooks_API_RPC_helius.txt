@@ -1,0 +1,185 @@
+Helius webhooks transaction types: 
+
+This are all the transaction types a webhjook can fascilitate 
+- UNKNOWN
+- NFT_BID 
+- NFT_BID_CANCELLED
+- NFT_LISTING
+- NFT_CANCEL_LISTING
+- NFT_SALE
+- NFT_MINT
+- NFT_AUCTION_CREATED
+- NFT_AUCTION_UPDATED
+- NFT_AUCTION_CANCELLED
+- NFT_PARTICIPATION_REWARD 
+- NFT_MINT_REJECTED
+- CREATE_STORE
+- WHITELIST_CREATOR
+- ADD_TO_WHITELIST
+- REMOVE_FROM_WHITELIST
+- AUCTION_MANAGER_CLAIM_BID
+- EMPTY_PAYMENT_ACCOUNT
+- UPDATE_PRIMARY_SALE_METADATA
+- ADD_TOKEN_TO_VAULT
+- ACTIVATE_VAULT
+- INIT_VAULT
+- INIT_BANK
+- INIT_STAKE
+- MERGE_STAKE
+- SPLIT_STAKE
+- SET_BANK_FLAGS
+- SET_VAULT_LOCK
+- UPDATE_VAULT_OWNER
+- UPDATE_BANK_MANAGER
+- RECORD_RARITY_POINTS
+- ADD_RARITIES_TO_BANK
+- INIT_FARM
+- INIT_FARMER
+- REFRESH_FARMER
+- UPDATE_FARM
+- AUTHORIZE_FUNDER
+- DEAUTHORIZE_FUNDER
+- FUND_REWARD
+- CANCEL_REWARD
+- LOCK_REWARD
+- PAYOUT
+- VALIDATE_SAFETY_DEPOSIT_BOX_V2
+- SET_AUTHORITY
+- INIT_AUCTION_MANAGER_V2
+- UPDATE_EXTERNAL_PRICE_ACCOUNT
+- AUCTION_HOUSE_CREATE
+- CLOSE_ESCROW_ACCOUNT
+- WITHDRAW
+- DEPOSIT 
+- TRANSFER
+- BURN
+- BURN_NFT
+- PLATFORM_FEE
+- LOAN
+- REPAY_LOAN
+- ADD_TO_POOL
+- REMOVE_FROM_POOL
+- CLOSE_POSITION
+- UNLABELED
+- CLOSE_ACCOUNT
+- WITHDRAW_GEM
+- DEPOSIT_GEM
+- STAKE_TOKEN
+- UNSTAKE_TOKEN
+- STAKE_SOL
+- UNSTAKE_SOL
+- CLAIM_REWARDS
+- BUY_SUBSCRIPTION
+- BUY
+- SELL
+- SWAP
+- INIT_SWAP
+- CANCEL_SWAP
+- REJECT_SWAP
+- INITIALIZE_ACCOUNT
+- TOKEN_MINT
+- CREATE_APPARAISAL
+- FUSE
+- DEPOSIT_FRACTIONAL_POOL
+- FRACTIONALIZE
+- CREATE_RAFFLE
+- BUY_TICKETS
+- UPDATE_ITEM
+- LIST_ITEM
+- DELIST_ITEM
+- ADD_ITEM
+- CLOSE_ITEM
+- BUY_ITEM
+- FILL_ORDER
+- UPDATE_ORDER
+- CREATE_ORDER
+- CLOSE_ORDER
+- CANCEL_ORDER
+- KICK_ITEM
+- UPGRADE_FOX
+- UPGRADE_FOX_REQUEST
+- LOAN_FOX
+- BORROW_FOX
+- SWITCH_FOX_REQUEST
+- SWITCH_FOX
+- CREATE_ESCROW
+- ACCEPT_REQUEST_ARTIST
+- CANCEL_ESCROW
+- ACCEPT_ESCROW_ARTIST
+- ACCEPT_ESCROW_USER
+- PLACE_BET
+- PLACE_SOL_BET
+- CREATE_BET
+- NFT_RENT_UPDATE_LISTING
+- NFT_RENT_ACTIVATE
+- NFT_RENT_CANCEL_LISTING
+- NFT_RENT_LISTING
+- FINALIZE_PROGRAM_INSTRUCTION
+- UPGRADE_PROGRAM_INSTRUCTION
+- NFT_GLOBAL_BID
+- NFT_GLOBAL_BID_CANCELLED
+- EXECUTE_TRANSACTION
+- APPROVE_TRANSACTION
+- ACTIVATE_TRANSACTION
+- CREATE_TRANSACTION
+- REJECT_TRANSACTION
+- CANCEL_TRANSACTION
+- ADD_INSTRUCTION
+- ATTACH_METADATA
+- REQUEST_PNFT_MIGRATION
+- START_PNFT_MIGRATION
+- MIGRATE_TO_PNFT
+- UPDATE_RAFFLE
+- CREATE_POOL
+- ADD_LIQUIDITY
+- WITHDRAW_LIQUIDITY
+
+RPC methods: 
+
+RPC URL
+https://mainnet.helius-rpc.com/?api-key=e3158aa5-8fa4-441b-9049-c8e318e28d4b
+
+Secure RPC URL
+https://carmina-t0db4l-fast-mainnet.helius-rpc.com
+
+Parse Transaction(s)
+https://api.helius.xyz/v0/transactions/?api-key=e3158aa5-8fa4-441b-9049-c8e318e28d4b
+
+Parse Transaction History
+https://api.helius.xyz/v0/addresses/{address}/transactions/?api-key=e3158aa5-8fa4-441b-9049-c8e318e28d4b
+
+✅ 1. WebSocket Usage (Helius)
+
+From your websocket.rs and general architecture:
+
+Do you need to use Helius WebSockets?
+
+**Yes, absolutely—**especially for real-time reaction to:
+	•	💸 Token transfers
+	•	🌀 Swaps (DEX activity)
+	•	🧠 Arbitrage opportunities
+	•	🧾 NFT transfers or mint events (if relevant)
+
+Helius WebSockets provide filters like:
+	•	"SWAP": catch DEX actions across Orca, Jupiter, Meteora, etc.
+	•	"TRANSFER": to monitor token movements
+	•	"PAYMENT": useful for native SOL movements
+	•	"INSTRUCTIONS": more granular, for protocols
+
+    Action:
+
+Use WebSocket filters to trigger your event-driven logic (opportunity scanner, path validator, executor trigger).
+
+⸻
+
+✅ 2. RPC Usage (Helius)
+
+Primary RPC (mainnet):
+https://mainnet.helius-rpc.com/?api-key=e3158aa5-8fa4-441b-9049-c8e318e28d4b
+This is the standard high-throughput RPC endpoint. You should use it as your primary client, like:
+let rpc = RpcClient::new_with_commitment(
+    "https://mainnet.helius-rpc.com/?api-key=...",
+    CommitmentConfig::confirmed()
+);
+
+✅ Tip: Use the standard RPC for indexing + scanning, and fast RPC for trade execution (bundles, tx sending).

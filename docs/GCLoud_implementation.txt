@@ -1,0 +1,192 @@
+Before you begin, ensure you have the following installed and configured:
+
+Google Cloud SDK: Install and initialize the gcloud CLI.
+Docker: Install Docker on your local machine to build container images.
+kubectl: The Kubernetes command-line tool. You can install it via gcloud components install kubectl.
+A Google Cloud Project: Create a new project in the Google Cloud Console.
+Step 1: Containerize Your Rust Application
+The first step is to package your Rust bot into a Docker container. This makes it portable and easy to deploy.
+
+Create a Dockerfile in the root of your project (kvelkov/chilliez/chilliez-39e9e0cb0a2695f241c150cfe12ba5019fee334e/). This file will define how to build your Rust application.
+
+Dockerfile
+
+# Use the official Rust image as a builder
+FROM rust:1.78 as builder
+
+# Create a new empty shell project
+WORKDIR /usr/src/app
+COPY . .
+
+# Build the application
+# This will cache dependencies
+RUN cargo build --release
+
+# Create a new, smaller image for the final container
+FROM debian:buster-slim
+RUN apt-get update && apt-get install -y openssl libssl-dev ca-certificates && rm -rf /var/lib/apt/lists/*
+
+# Copy the built binary from the builder stage
+COPY --from=builder /usr/src/app/target/release/solana-arb-bot /usr/local/bin/solana-arb-bot
+
+# Set the entrypoint
+CMD ["solana-arb-bot"]
+Create a .dockerignore file in the same directory to exclude unnecessary files from the container, which will speed up the build process.
+
+.git
+.gitignore
+target/
+.vscode/
+Step 2: Push the Docker Image to Google Artifact Registry
+Store your container image in Google Artifact Registry, a private and secure Docker registry.
+
+Enable the Artifact Registry API:
+
+Bash
+
+gcloud services enable artifactregistry.googleapis.com
+Create a Docker repository:
+
+Bash
+
+gcloud artifacts repositories create arbitrage-bots \
+    --repository-format=docker \
+    --location=us-west1 \
+    --description="Docker repository for arbitrage bots"
+Configure Docker to authenticate with Artifact Registry:
+
+Bash
+
+gcloud auth configure-docker us-west1-docker.pkg.dev
+Build and push the image:
+Replace [PROJECT-ID] with your Google Cloud project ID.
+
+Bash
+
+# Build the Docker image
+docker build . -t us-west1-docker.pkg.dev/[PROJECT-ID]/arbitrage-bots/solana-arb-bot:latest
+
+# Push the image to Artifact Registry
+docker push us-west1-docker.pkg.dev/[PROJECT-ID]/arbitrage-bots/solana-arb-bot:latest
+Step 3: Set Up Google Kubernetes Engine (GKE)
+GKE provides a managed Kubernetes environment to run your containerized application.
+
+Create a GKE cluster:
+A regional cluster in us-west1 is a good choice for low latency to Solana validators.
+
+Bash
+
+gcloud container clusters create arbitrage-cluster \
+    --region us-west1 \
+    --num-nodes=1 \
+    --machine-type=e2-high-cpu-2 \
+    --enable-autoscaling --min-nodes=1 --max-nodes=3
+Configure kubectl to connect to your new cluster:
+
+Bash
+
+gcloud container clusters get-credentials arbitrage-cluster --region us-west1
+Step 4: Deploy the Bot to GKE
+Deploy your bot using Kubernetes manifest files.
+
+Create bot-deployment.yaml: This file describes how to run your bot's container.
+
+YAML
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: solana-arb-bot
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: solana-arb-bot
+  template:
+    metadata:
+      labels:
+        app: solana-arb-bot
+    spec:
+      containers:
+      - name: bot-container
+        image: us-west1-docker.pkg.dev/[PROJECT-ID]/arbitrage-bots/solana-arb-bot:latest
+        # Add environment variables for configuration
+        env:
+        - name: RUST_LOG
+          value: "info"
+        # Add more configuration from your Cargo.toml and other files here
+        # For secrets, use Kubernetes Secrets (see Step 8)
+Apply the deployment:
+
+Bash
+
+kubectl apply -f bot-deployment.yaml
+Verify the deployment:
+
+Bash
+
+kubectl get pods
+You should see a pod with a name like solana-arb-bot-... in the Running state.
+
+Step 5: Set Up Vertex AI for ML Tasks
+For your Python scripts (app.py, check_mps.py), Vertex AI provides a managed environment for ML development and execution.
+
+Enable the Vertex AI API:
+
+Bash
+
+gcloud services enable aiplatform.googleapis.com
+Create a Vertex AI Notebook:
+
+Go to the Vertex AI section in the Google Cloud Console.
+Navigate to Workbench > Managed Notebooks.
+Click New Notebook and configure it with a suitable machine type (e.g., n1-standard-4) and a GPU if needed.
+Choose a Python 3 environment.
+Clone your repository into the notebook and run your scripts. This will provide a powerful, managed environment for your AI tasks.
+
+Step 6: Configure Monitoring and Logging
+Leverage Google Cloud's Operations Suite for powerful monitoring and logging.
+
+Logging: GKE automatically integrates with Cloud Logging. You can view your bot's logs by navigating to Logging > Logs Explorer in the Cloud Console and filtering by your GKE cluster and pod name.
+Monitoring: Your prometheus.yml and metrics-exporter-statsd can be integrated with Cloud Monitoring.
+Set up a Prometheus instance in your cluster to scrape metrics.
+Use the Google Cloud Managed Service for Prometheus to ingest these metrics into Cloud Monitoring without managing a full Prometheus server.
+Create Dashboards in Cloud Monitoring to visualize metrics like trade volume, profit, and latency.
+Set up Alerting to be notified of critical events.
+Step 7: Set up Notifications with Pub/Sub
+Use Pub/Sub for a reliable and scalable notification system.
+
+Create a Pub/Sub topic:
+
+Bash
+
+gcloud pubsub topics create trade-notifications
+Modify your Rust bot to publish messages to this topic whenever a significant event occurs (e.g., a profitable trade). You will need to use the google-cloud-pubsub crate.
+
+Create a Cloud Function to subscribe to the topic and send a notification (e.g., via email or a messaging app).
+
+Go to Cloud Functions in the Cloud Console.
+Click Create Function.
+Set the trigger to Cloud Pub/Sub and select the trade-notifications topic.
+Write a simple function (e.g., in Python) to process the message and send a notification.
+Step 8: Manage Configuration and Secrets
+Never hardcode secrets in your container images. Use Kubernetes Secrets for sensitive data.
+
+Create a Kubernetes Secret for your API keys and wallet information:
+
+Bash
+
+kubectl create secret generic bot-secrets \
+    --from-literal=GOOGLE_API_KEY='your-google-api-key' \
+    --from-file=wallet.json='/path/to/your/wallet.json'
+Mount the secret in your bot-deployment.yaml:
+
+YAML
+
+# ... inside the container spec
+envFrom:
+- secretRef:
+    name: bot-secrets
+This will make the secrets available as environment variables inside your container.
+
+This setup provides a robust, scalable, and manageable infrastructure for your arbitrage bot, allowing you to focus on developing and improving your trading strategies.

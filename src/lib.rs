@@ -13,6 +13,8 @@ pub mod testing; // Testing infrastructure
 pub mod paper_trading; // Paper trading simulation system
 pub mod monitoring; // Enhanced monitoring and alerting
 pub mod api; // NEW: Production API management (rate limiting, connection pooling, failover)
+pub mod wallet; // NEW: Wallet management features
+pub mod performance; // NEW: Performance optimization and monitoring
 
 // Re-export key testing components for easy access
 pub use testing::{
@@ -24,4 +26,11 @@ pub use api::{
     ApiManager, ApiRequest, ApiResponse, ApiError,
     AdvancedRateLimiter, RequestPriority, RateLimitStats,
     RpcConnectionPool, EndpointHealth, EndpointStatus,
+};
+
+// Re-export key performance components
+pub use performance::{
+    PerformanceManager, PerformanceConfig, PerformanceReport,
+    ParallelExecutor, ParallelStats, CacheManager, CacheStats,
+    MetricsCollector, MetricsSummary, BenchmarkRunner, BenchmarkResults,
 };

@@ -24,6 +24,8 @@ use crate::{
     },
 };
 
+use crate::performance::PerformanceManager;
+
 use dashmap::DashMap;
 use log::{info, warn, debug};
 use solana_sdk::pubkey::Pubkey;
@@ -94,6 +96,9 @@ pub struct ArbitrageOrchestrator {
     pub execution_semaphore: Arc<Semaphore>,
     pub concurrent_executions: Arc<AtomicUsize>,
     pub max_concurrent_executions: usize,
+    
+    // Performance optimization system
+    pub performance_manager: Option<Arc<PerformanceManager>>,
 }
 
 #[derive(Debug, Default)]
@@ -249,6 +254,7 @@ impl ArbitrageOrchestrator {
             execution_semaphore: Arc::new(Semaphore::new(config.max_concurrent_executions.unwrap_or(10))),
             concurrent_executions: Arc::new(AtomicUsize::new(0)),
             max_concurrent_executions: config.max_concurrent_executions.unwrap_or(10),
+            performance_manager: None, // Initialize performance manager as None
         }
     }
 

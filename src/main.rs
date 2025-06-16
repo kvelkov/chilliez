@@ -10,6 +10,7 @@ mod solana;
 pub mod websocket;
 pub mod webhooks;
 pub mod paper_trading; // Add paper trading module
+pub mod performance; // Add performance module
 
 use crate::{
     arbitrage::{

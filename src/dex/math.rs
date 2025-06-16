@@ -6,13 +6,15 @@
 //! in quote calculations and minimize slippage discrepancies.
 
 use anyhow::{anyhow, Result};
-use num_bigint::BigUint;
 use num_traits::ToPrimitive;
 use rust_decimal::Decimal;
 use std::str::FromStr;
 
 /// Orca Whirlpools CLMM math implementation
 pub mod orca;
+
+/// Raydium V4 AMM math implementation  
+pub mod raydium;
 
 /// High-precision CLMM calculations for concentrated liquidity pools
 pub mod clmm {
@@ -80,87 +82,6 @@ pub mod clmm {
     }
 }
 
-/// Raydium-specific AMM calculations using constant product formula
-pub mod raydium {
-    use super::*;
-    
-    /// Enhanced Raydium quote calculation with high precision
-    /// Implements the exact formula used by Raydium V4 pools
-    #[allow(dead_code)] // Advanced math function for high-precision Raydium calculations
-    pub fn calculate_raydium_output(
-        input_amount: u64,
-        input_reserve: u64,
-        output_reserve: u64,
-        fee_numerator: u64,
-        fee_denominator: u64,
-    ) -> Result<u64> {
-        if input_reserve == 0 || output_reserve == 0 {
-            return Err(anyhow!("Reserves cannot be zero"));
-        }
-        
-        if fee_denominator == 0 {
-            return Err(anyhow!("Fee denominator cannot be zero"));
-        }
-        
-        // Use BigUint to prevent overflow in intermediate calculations
-        let input_big = BigUint::from(input_amount);
-        let input_reserve_big = BigUint::from(input_reserve);
-        let output_reserve_big = BigUint::from(output_reserve);
-        let fee_num_big = BigUint::from(fee_numerator);
-        let fee_den_big = BigUint::from(fee_denominator);
-        
-        // Calculate fee: fee = input_amount * fee_numerator / fee_denominator
-        let fee = (&input_big * &fee_num_big) / &fee_den_big;
-        let input_after_fee = &input_big - &fee;
-        
-        // Constant product formula: output = output_reserve - (input_reserve * output_reserve) / (input_reserve + input_after_fee)
-        let k = &input_reserve_big * &output_reserve_big;
-        let new_input_reserve = &input_reserve_big + &input_after_fee;
-        let new_output_reserve = &k / &new_input_reserve;
-        let output_amount = &output_reserve_big - &new_output_reserve;
-        
-        output_amount.to_u64()
-            .ok_or_else(|| anyhow!("Output amount calculation overflow"))
-    }
-    
-    /// Calculate optimal input amount for a target output (reverse quote)
-    #[allow(dead_code)] // Advanced math function for reverse quote calculations
-    pub fn calculate_raydium_input_for_output(
-        target_output: u64,
-        input_reserve: u64,
-        output_reserve: u64,
-        fee_numerator: u64,
-        fee_denominator: u64,
-    ) -> Result<u64> {
-        if input_reserve == 0 || output_reserve == 0 {
-            return Err(anyhow!("Reserves cannot be zero"));
-        }
-        
-        if target_output >= output_reserve {
-            return Err(anyhow!("Target output exceeds available liquidity"));
-        }
-        
-        let target_big = BigUint::from(target_output);
-        let input_reserve_big = BigUint::from(input_reserve);
-        let output_reserve_big = BigUint::from(output_reserve);
-        let fee_num_big = BigUint::from(fee_numerator);
-        let fee_den_big = BigUint::from(fee_denominator);
-        
-        // Reverse calculation: find input needed for target output
-        let k = &input_reserve_big * &output_reserve_big;
-        let new_output_reserve = &output_reserve_big - &target_big;
-        let new_input_reserve = &k / &new_output_reserve;
-        let input_before_fee = &new_input_reserve - &input_reserve_big;
-        
-        // Account for fee: input_with_fee = input_before_fee * fee_denominator / (fee_denominator - fee_numerator)
-        let fee_multiplier = &fee_den_big / (&fee_den_big - &fee_num_big);
-        let input_with_fee = &input_before_fee * &fee_multiplier;
-        
-        input_with_fee.to_u64()
-            .ok_or_else(|| anyhow!("Input amount calculation overflow"))
-    }
-}
-
 /// Meteora-specific calculations for dynamic AMM and DLMM pools
 pub mod meteora {
     use super::*;
@@ -177,13 +98,15 @@ pub mod meteora {
         let total_fee_bps = base_fee_bps + dynamic_fee_bps;
         
         // Use enhanced constant product with dynamic fee
-        super::raydium::calculate_raydium_output(
+        let result = super::raydium::calculate_raydium_swap_output(
             input_amount,
             input_reserve,
             output_reserve,
             total_fee_bps as u64,
             10000, // Fee denominator for basis points
-        )
+        )?;
+        
+        Ok(result.output_amount)
     }
     
     /// Calculate Meteora DLMM (Dynamic Liquidity Market Maker) output
@@ -248,13 +171,15 @@ pub mod lifinity {
         oracle_price: Option<u64>, // External price oracle for proactive MM
     ) -> Result<u64> {
         // Base calculation using constant product
-        let base_output = super::raydium::calculate_raydium_output(
+        let base_result = super::raydium::calculate_raydium_swap_output(
             input_amount,
             input_reserve,
             output_reserve,
             fee_bps as u64,
             10000,
         )?;
+        
+        let base_output = base_result.output_amount;
         
         // Apply Lifinity's proactive market making adjustment if oracle price available
         if let Some(oracle_price) = oracle_price {
@@ -387,7 +312,7 @@ mod tests {
         let fee_numerator = 25; // 0.25%
         let fee_denominator = 10000;
 
-        let output = raydium::calculate_raydium_output(
+        let result = raydium::calculate_raydium_swap_output(
             input_amount,
             input_reserve,
             output_reserve,
@@ -395,11 +320,13 @@ mod tests {
             fee_denominator,
         ).unwrap();
 
-        assert!(output > 0, "Output should be greater than 0");
-        assert!(output < input_amount * 2, "Output should be reasonable given reserves");
+        assert!(result.output_amount > 0, "Output should be greater than 0");
+        assert!(result.output_amount < input_amount * 2, "Output should be reasonable given reserves");
+        assert!(result.fee_amount > 0, "Fee should be collected");
+        assert!(result.price_impact >= 0.0, "Price impact should be non-negative");
         
         // Output should be less than input due to fees
-        assert!(output < input_amount * 2, "Output should account for fees");
+        assert!(result.output_amount < input_amount * 2, "Output should account for fees");
     }
 
     #[test]

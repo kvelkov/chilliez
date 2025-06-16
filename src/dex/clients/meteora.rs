@@ -14,9 +14,12 @@ use solana_sdk::{
     system_program,
 };
 use std::sync::Arc;
+use std::str::FromStr;
+use num_traits::ToPrimitive;
 
-// Import our local math functions for Meteora calculations
+// Import our math functions for Meteora calculations
 use crate::dex::math::meteora::{calculate_dlmm_output, calculate_dynamic_amm_output};
+use crate::dex::math::clmm::calculate_price_impact;
 
 // --- Constants (Made Public for tests) ---
 pub const METEORA_DYNAMIC_AMM_PROGRAM_ID: Pubkey = solana_sdk::pubkey!("Eo7WjKq67rjJQSZxS6z3YkapzY3eMj6Xy8X5EQVn5UaB");
@@ -441,22 +444,38 @@ impl DexClient for MeteoraClient {
                     input_amount,
                     pool.token_a.reserve,
                     pool.token_b.reserve,
-                    pool.fee_rate_bips.unwrap_or(25).into(), // base fee
-                    0u32, // dynamic fee (set to 0 for now)
+                    pool.fee_rate_bips.unwrap_or(25) as u32, // Base fee
+                    0, // No dynamic fee for simplified calculation
                 ).map_err(|e| anyhow!("Dynamic AMM calculation failed: {}", e))?
             }
             MeteoraPoolType::Dlmm => {
                 // Use DLMM calculation from math module
-                let active_id = pool.tick_current_index.unwrap_or(0) as u32;
-                let bin_step = pool.tick_spacing.unwrap_or(1);
+                let active_id = pool.tick_current_index.unwrap_or(8388608) as u32; // 2^23 neutral bin
+                let bin_step = pool.tick_spacing.unwrap_or(1) as u16;
+                let liquidity_in_bin = pool.liquidity.unwrap_or(1_000_000_000_000) as u128;
                 
                 calculate_dlmm_output(
                     input_amount,
                     active_id,
                     bin_step,
-                    1000u128, // default liquidity in bin
+                    liquidity_in_bin,
                     pool.fee_rate_bips.unwrap_or(25),
                 ).map_err(|e| anyhow!("DLMM calculation failed: {}", e))?
+            }
+        };
+
+        // Calculate price impact for better slippage estimation
+        let price_impact = match pool_type {
+            MeteoraPoolType::DynamicAmm => {
+                calculate_price_impact(
+                    input_amount,
+                    pool.token_a.reserve,
+                    pool.token_b.reserve,
+                ).unwrap_or_else(|_| rust_decimal::Decimal::from_str("0.01").unwrap())
+            }
+            MeteoraPoolType::Dlmm => {
+                // For DLMM, use a simplified price impact estimate based on bin concentration
+                rust_decimal::Decimal::from_str("0.005").unwrap() // 0.5% for concentrated DLMM
             }
         };
 
@@ -467,7 +486,7 @@ impl DexClient for MeteoraClient {
             output_amount,
             dex: self.name.clone(),
             route: vec![pool.address],
-            slippage_estimate: Some(0.1), // 0.1% estimated slippage
+            slippage_estimate: Some(price_impact.to_f64().unwrap_or(0.01)), // Use calculated price impact
         })
     }
 

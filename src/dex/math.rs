@@ -95,6 +95,11 @@ pub mod meteora {
         base_fee_bps: u32,
         dynamic_fee_bps: u32,
     ) -> Result<u64> {
+        // Handle zero input case
+        if input_amount == 0 {
+            return Ok(0);
+        }
+        
         let total_fee_bps = base_fee_bps + dynamic_fee_bps;
         
         // Use enhanced constant product with dynamic fee

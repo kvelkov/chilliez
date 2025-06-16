@@ -8,6 +8,7 @@ pub mod meteora;
 pub mod lifinity;
 pub mod phoenix;
 pub mod jupiter; // Jupiter aggregator for additional liquidity
+pub mod jupiter_api; // Jupiter API data structures
 
 // Re-export client structs for easier access
 pub use orca::OrcaClient; // OrcaPoolParser only used in pool_management.rs

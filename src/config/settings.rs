@@ -48,7 +48,28 @@ pub struct Config {
     pub congestion_update_interval_secs: Option<u64>,
     pub cycle_interval_seconds: Option<u64>,
     
-    // Webhook Configuration
+    // Jupiter fallback configuration
+    pub jupiter_fallback_enabled: bool,
+    pub jupiter_api_timeout_ms: u64,
+    pub jupiter_max_retries: u32,
+    pub jupiter_fallback_min_profit_pct: f64,
+    pub jupiter_slippage_tolerance_bps: u16,
+    
+    // Jupiter cache configuration
+    pub jupiter_cache_enabled: bool,
+    pub jupiter_cache_ttl_seconds: u64,
+    pub jupiter_cache_max_entries: usize,
+    pub jupiter_cache_amount_bucket_size: u64,
+    pub jupiter_cache_volatility_threshold_pct: f64,
+    
+    // Jupiter route optimization configuration
+    pub jupiter_route_optimization_enabled: bool,
+    pub jupiter_max_parallel_routes: usize,
+    pub jupiter_max_alternative_routes: u8,
+    pub jupiter_route_evaluation_timeout_ms: u64,
+    pub jupiter_min_route_improvement_pct: f64,
+    
+    // Webhook configuration
     pub webhook_port: Option<u16>,
     pub webhook_url: Option<String>,
     pub enable_webhooks: bool,
@@ -130,7 +151,28 @@ impl Config {
             congestion_update_interval_secs: env::var("CONGESTION_UPDATE_INTERVAL_SECS").ok().and_then(|s| s.parse().ok()),
             cycle_interval_seconds: env::var("CYCLE_INTERVAL_SECONDS").ok().and_then(|s| s.parse().ok()),
             
-            // Webhook Configuration
+            // Jupiter fallback configuration
+            jupiter_fallback_enabled: env::var("JUPITER_FALLBACK_ENABLED").unwrap_or_else(|_| "false".to_string()).parse().unwrap_or(false),
+            jupiter_api_timeout_ms: env::var("JUPITER_API_TIMEOUT_MS").unwrap_or_else(|_| "5000".to_string()).parse().unwrap_or(5000),
+            jupiter_max_retries: env::var("JUPITER_MAX_RETRIES").unwrap_or_else(|_| "3".to_string()).parse().unwrap_or(3),
+            jupiter_fallback_min_profit_pct: env::var("JUPITER_FALLBACK_MIN_PROFIT_PCT").unwrap_or_else(|_| "0.001".to_string()).parse().unwrap_or(0.001),
+            jupiter_slippage_tolerance_bps: env::var("JUPITER_SLIPPAGE_TOLERANCE_BPS").unwrap_or_else(|_| "50".to_string()).parse().unwrap_or(50),
+            
+            // Jupiter cache configuration
+            jupiter_cache_enabled: env::var("JUPITER_CACHE_ENABLED").unwrap_or_else(|_| "true".to_string()).parse().unwrap_or(true),
+            jupiter_cache_ttl_seconds: env::var("JUPITER_CACHE_TTL_SECONDS").unwrap_or_else(|_| "5".to_string()).parse().unwrap_or(5),
+            jupiter_cache_max_entries: env::var("JUPITER_CACHE_MAX_ENTRIES").unwrap_or_else(|_| "1000".to_string()).parse().unwrap_or(1000),
+            jupiter_cache_amount_bucket_size: env::var("JUPITER_CACHE_AMOUNT_BUCKET_SIZE").unwrap_or_else(|_| "1000000".to_string()).parse().unwrap_or(1_000_000),
+            jupiter_cache_volatility_threshold_pct: env::var("JUPITER_CACHE_VOLATILITY_THRESHOLD_PCT").unwrap_or_else(|_| "2.0".to_string()).parse().unwrap_or(2.0),
+            
+            // Jupiter route optimization configuration
+            jupiter_route_optimization_enabled: env::var("JUPITER_ROUTE_OPTIMIZATION_ENABLED").unwrap_or_else(|_| "true".to_string()).parse().unwrap_or(true),
+            jupiter_max_parallel_routes: env::var("JUPITER_MAX_PARALLEL_ROUTES").unwrap_or_else(|_| "5".to_string()).parse().unwrap_or(5),
+            jupiter_max_alternative_routes: env::var("JUPITER_MAX_ALTERNATIVE_ROUTES").unwrap_or_else(|_| "10".to_string()).parse().unwrap_or(10),
+            jupiter_route_evaluation_timeout_ms: env::var("JUPITER_ROUTE_EVALUATION_TIMEOUT_MS").unwrap_or_else(|_| "2000".to_string()).parse().unwrap_or(2000),
+            jupiter_min_route_improvement_pct: env::var("JUPITER_MIN_ROUTE_IMPROVEMENT_PCT").unwrap_or_else(|_| "0.1".to_string()).parse().unwrap_or(0.1),
+            
+            // Webhook configuration
             webhook_port: env::var("WEBHOOK_PORT").ok().and_then(|s| s.parse().ok()),
             webhook_url: env::var("WEBHOOK_URL").ok(),
             enable_webhooks: env::var("ENABLE_WEBHOOKS").unwrap_or_else(|_| "false".to_string()).parse().unwrap_or(false),
@@ -188,6 +230,27 @@ impl Config {
             webhook_port: Some(8080),
             webhook_url: Some("http://localhost:8080/webhook".to_string()),
             enable_webhooks: false,
+
+            // Jupiter fallback configuration (test defaults)
+            jupiter_fallback_enabled: false,
+            jupiter_api_timeout_ms: 5000,
+            jupiter_max_retries: 3,
+            jupiter_fallback_min_profit_pct: 0.001,
+            jupiter_slippage_tolerance_bps: 50,
+            
+            // Jupiter cache configuration (test defaults)
+            jupiter_cache_enabled: true,
+            jupiter_cache_ttl_seconds: 5,
+            jupiter_cache_max_entries: 1000,
+            jupiter_cache_amount_bucket_size: 1_000_000,
+            jupiter_cache_volatility_threshold_pct: 2.0,
+            
+            // Jupiter route optimization configuration (test defaults)
+            jupiter_route_optimization_enabled: true,
+            jupiter_max_parallel_routes: 5,
+            jupiter_max_alternative_routes: 10,
+            jupiter_route_evaluation_timeout_ms: 2000,
+            jupiter_min_route_improvement_pct: 0.1,
         }
     }
 

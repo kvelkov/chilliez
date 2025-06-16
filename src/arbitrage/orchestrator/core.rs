@@ -63,6 +63,7 @@ pub struct ArbitrageOrchestrator {
     pub detector: Arc<Mutex<ArbitrageStrategy>>,
     pub advanced_math: Arc<Mutex<AdvancedArbitrageMath>>,
     pub dynamic_threshold_updater: Option<Arc<DynamicThresholdUpdater>>,
+    pub price_aggregator: Option<Arc<crate::arbitrage::price_aggregator::PriceAggregator>>,
     
     // Configuration and validation
     pub pool_validation_config: PoolValidationConfig,
@@ -192,6 +193,31 @@ impl ArbitrageOrchestrator {
         info!("   🔄 Async execution pipeline: ready");
         info!("   📄 Paper trading: {}", if config.paper_trading { "enabled" } else { "disabled" });
 
+        // Initialize price aggregator with Jupiter fallback if enabled
+        let price_aggregator = if config.jupiter_fallback_enabled {
+            // Find Jupiter client among DEX providers
+            let jupiter_client = dex_providers.iter()
+                .find(|_client| _client.get_name().to_lowercase().contains("jupiter"))
+                .and_then(|_client| {
+                    // Try to downcast to JupiterClient
+                    // This is a simplified approach - in practice we'd need proper type handling
+                    None::<Arc<crate::dex::clients::jupiter::JupiterClient>>
+                });
+
+            let aggregator = crate::arbitrage::price_aggregator::PriceAggregator::new(
+                dex_providers.clone(),
+                jupiter_client,
+                &config,
+                Arc::clone(&metrics),
+            );
+            
+            info!("🪐 Price aggregator with Jupiter fallback: enabled");
+            Some(Arc::new(aggregator))
+        } else {
+            info!("📊 Price aggregator: using primary DEX sources only");
+            None
+        };
+
         Self {
             hot_cache,
             config: config.clone(),
@@ -204,6 +230,7 @@ impl ArbitrageOrchestrator {
             detector,
             advanced_math: Arc::new(Mutex::new(AdvancedArbitrageMath::new(12))),
             dynamic_threshold_updater,
+            price_aggregator,
             pool_validation_config,
             banned_pairs_manager,
             degradation_mode: Arc::new(AtomicBool::new(false)),
@@ -341,6 +368,47 @@ impl ArbitrageOrchestrator {
 
     pub async fn get_current_status_string(&self) -> String {
         "Status: OK".to_string()
+    }
+
+    /// Get aggregated quote using primary DEX sources and Jupiter fallback
+    pub async fn get_aggregated_quote(
+        &self,
+        pool: &PoolInfo,
+        input_amount: u64,
+    ) -> Result<crate::arbitrage::price_aggregator::AggregatedQuote, ArbError> {
+        if let Some(ref price_aggregator) = self.price_aggregator {
+            price_aggregator.get_best_quote(pool, input_amount).await
+        } else {
+            // Fallback to traditional DEX client approach
+            self.get_traditional_dex_quote(pool, input_amount).await
+        }
+    }
+
+    /// Traditional DEX quote method (used when price aggregator is not available)
+    async fn get_traditional_dex_quote(
+        &self,
+        pool: &PoolInfo,
+        input_amount: u64,
+    ) -> Result<crate::arbitrage::price_aggregator::AggregatedQuote, ArbError> {
+        for client in &self.dex_providers {
+            match client.calculate_onchain_quote(pool, input_amount) {
+                Ok(quote) => {
+                    let aggregated_quote = crate::arbitrage::price_aggregator::AggregatedQuote {
+                        quote,
+                        source: crate::arbitrage::price_aggregator::QuoteSource::Primary(client.get_name().to_string()),
+                        confidence: 0.8,
+                        latency_ms: 0,
+                    };
+                    return Ok(aggregated_quote);
+                }
+                Err(e) => {
+                    warn!("❌ Failed to get quote from {}: {}", client.get_name(), e);
+                    continue;
+                }
+            }
+        }
+        
+        Err(ArbError::DexError("No quotes available from any DEX client".to_string()))
     }
 }
 

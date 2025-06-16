@@ -78,6 +78,28 @@ async fn reference_all_engine_methods_and_fields() {
         webhook_port: Some(8080),
         webhook_url: Some("http://localhost:8080/webhook".to_string()),
         enable_webhooks: false,
+        
+        // Jupiter fallback configuration
+        jupiter_fallback_enabled: false,
+        jupiter_api_timeout_ms: 5000,
+        jupiter_max_retries: 3,
+        jupiter_fallback_min_profit_pct: 0.001,
+        jupiter_slippage_tolerance_bps: 50,
+        
+        // Jupiter cache configuration (test defaults)
+        jupiter_cache_enabled: true,
+        
+        // Jupiter route optimization configuration (test defaults)
+        jupiter_route_optimization_enabled: false, // Disabled for tests
+        jupiter_max_parallel_routes: 5,
+        jupiter_max_alternative_routes: 10,
+        jupiter_route_evaluation_timeout_ms: 3000,
+        jupiter_min_route_improvement_pct: 0.1,
+        jupiter_cache_ttl_seconds: 5,
+        jupiter_cache_max_entries: 1000,
+        jupiter_cache_amount_bucket_size: 1_000_000,
+        jupiter_cache_volatility_threshold_pct: 2.0,
+
     }); // Semicolon was missing here, added for correctness
     let metrics = Arc::new(Mutex::new(solana_arb_bot::local_metrics::Metrics::new()));
     let dex_api_clients: Vec<Arc<dyn DexClient>> = vec![];

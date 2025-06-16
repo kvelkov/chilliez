@@ -48,7 +48,19 @@ pub enum ArbError {
     /// Configuration errors
     #[error("Config Error: {0}")]
     ConfigError(String),
+
+    /// Jupiter API specific errors
+    #[error("Jupiter API Error: {0}")]
+    JupiterApiError(String),
     
+    /// Jupiter rate limiting error
+    #[error("Jupiter API rate limit exceeded")]
+    JupiterRateLimitError,
+    
+    /// Jupiter timeout error
+    #[error("Jupiter API timeout: {0}")]
+    JupiterTimeoutError(String),
+
     /// Cache/Redis errors
     #[error("Cache Error: {0}")]
     CacheError(String),
@@ -152,6 +164,9 @@ impl ArbError {
             ArbError::CircuitBreakerTriggered(_) => false, // Manual intervention needed
             ArbError::CircuitBreakerOpen => false, // Not recoverable by immediate retry
             ArbError::ConfigError(_) => false, // Config needs fixing
+            ArbError::JupiterApiError(_) => true, // Jupiter API errors are usually recoverable
+            ArbError::JupiterRateLimitError => true, // Rate limits are recoverable after waiting
+            ArbError::JupiterTimeoutError(_) => true, // Timeouts are recoverable
             ArbError::CacheError(_) => true, // Redis might recover
             ArbError::TimeoutError(_) => true, // Timeouts are usually recoverable
             ArbError::InvalidPoolState(_) => false, // Invalid state needs intervention
@@ -217,6 +232,9 @@ impl ArbError {
             ArbError::CircuitBreakerTriggered(_) => ErrorCategory::Safety,
             ArbError::CircuitBreakerOpen => ErrorCategory::Safety,
             ArbError::ConfigError(_) => ErrorCategory::Configuration,
+            ArbError::JupiterApiError(_) => ErrorCategory::Network,
+            ArbError::JupiterRateLimitError => ErrorCategory::Network,
+            ArbError::JupiterTimeoutError(_) => ErrorCategory::Network,
             ArbError::CacheError(_) => ErrorCategory::Infrastructure,
             ArbError::TimeoutError(_) => ErrorCategory::Network,
             ArbError::InvalidPoolState(_) => ErrorCategory::Configuration,

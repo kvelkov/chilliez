@@ -21,6 +21,10 @@ use log::{info, error};
 pub mod opportunity;
 pub mod tests;
 pub mod calculator_tests;
+pub mod jupiter_fallback_tests; // Jupiter fallback integration tests
+
+// Jupiter-specific components (Phase 3.2: Intelligent Caching)
+pub mod jupiter;          // Jupiter-specific arbitrage components (cache, integration)
 
 // Modular orchestrator (replaces the monolithic orchestrator.rs)
 pub mod orchestrator;     // Modular central controller with focused components
@@ -31,6 +35,7 @@ pub mod execution;        // All execution logic (HFT + batch)
 pub mod analysis;         // Mathematical analysis, fees, thresholds
 pub mod mev;              // MEV protection and Jito integration
 pub mod safety;           // Transaction safety, retry logic, and recovery
+pub mod price_aggregator; // Price aggregation with Jupiter fallback
 
 // New modular architecture (refactored from orchestrator.rs) - temporarily disabled
 // pub mod types;            // Common types and enums
@@ -47,6 +52,7 @@ pub mod safety;           // Transaction safety, retry logic, and recovery
 pub use self::orchestrator::ArbitrageOrchestrator;
 pub use self::strategy::ArbitrageStrategy;
 pub use self::analysis::ArbitragePath;
+pub use self::price_aggregator::{PriceAggregator, AggregatedQuote, QuoteSource, PriceAggregatorConfig};
 pub use self::execution::{
     HftExecutor, BatchExecutor, ExecutorEvent,
     BatchExecutionConfig, OpportunityBatch, SimulationResult, 

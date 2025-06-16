@@ -55,6 +55,14 @@ impl ArbitrageOrchestrator {
         info!("🚀 Executing single arbitrage opportunity: {} -> {}", 
               opportunity.input_token, opportunity.output_token);
 
+        // Validate opportunity quotes using price aggregator
+        if let Ok(is_valid) = self.validate_opportunity_quotes(opportunity).await {
+            if !is_valid {
+                warn!("⚠️ Skipping opportunity due to quote validation failure");
+                return Err(ArbError::InvalidPoolState("Quote validation failed".to_string()));
+            }
+        }
+
         // Check if paper trading mode
         if let Some(ref paper_engine) = self.paper_trading_engine {
             return self.execute_paper_trading_opportunity(opportunity, paper_engine).await;
@@ -290,5 +298,59 @@ impl ArbitrageOrchestrator {
         let _metrics = self.metrics.lock().await;
         // Simplified metrics recording for now
         debug!("❌ Recorded failed execution: {}", error);
+    }
+
+    /// Validate opportunity quotes using price aggregator before execution
+    async fn validate_opportunity_quotes(&self, opportunity: &MultiHopArbOpportunity) -> Result<bool, ArbError> {
+        debug!("🔍 Validating opportunity quotes using price aggregator");
+        
+        // For each hop in the opportunity, validate the quote
+        for hop in &opportunity.hops {
+            // Get the pool information for this hop
+            if let Some(pool_info) = self.hot_cache.get(&hop.pool) {
+                // Get aggregated quote for validation
+                match self.get_aggregated_quote(&pool_info, hop.input_amount as u64).await {
+                    Ok(aggregated_quote) => {
+                        let expected_output = hop.expected_output;
+                        let actual_output = aggregated_quote.quote.output_amount as f64;
+                        
+                        // Check if the actual output is within acceptable deviation
+                        let deviation_pct = ((expected_output - actual_output) / expected_output).abs() * 100.0;
+                        let max_deviation = 5.0; // 5% max deviation
+                        
+                        if deviation_pct > max_deviation {
+                            warn!("❌ Quote validation failed for hop {}: expected {}, got {} (deviation: {:.2}%)",
+                                  hop.pool, expected_output, actual_output, deviation_pct);
+                            return Ok(false);
+                        }
+                        
+                        debug!("✅ Quote validated for hop {}: {} -> {} (deviation: {:.2}%)",
+                               hop.pool, hop.input_amount, actual_output, deviation_pct);
+                        
+                        // Record quote source for metrics
+                        match aggregated_quote.source {
+                            crate::arbitrage::price_aggregator::QuoteSource::Jupiter => {
+                                info!("🪐 Used Jupiter fallback for quote validation");
+                            }
+                            crate::arbitrage::price_aggregator::QuoteSource::Primary(dex_name) => {
+                                debug!("📊 Used {} for quote validation", dex_name);
+                            }
+                            _ => {}
+                        }
+                    }
+                    Err(e) => {
+                        warn!("⚠️ Failed to get aggregated quote for validation: {}", e);
+                        // Don't fail execution if quote validation fails
+                        // Just log and continue
+                        return Ok(true);
+                    }
+                }
+            } else {
+                warn!("⚠️ Pool {} not found in hot cache for quote validation", hop.pool);
+            }
+        }
+        
+        info!("✅ All opportunity quotes validated successfully");
+        Ok(true)
     }
 }

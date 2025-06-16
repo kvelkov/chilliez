@@ -19,7 +19,7 @@ use spl_token::state::{Account as TokenAccount, Mint};
 use std::sync::Arc;
 use futures;
 
-// Import our local math functions for Lifinity calculations
+// Import our math functions for Lifinity calculations
 use crate::dex::math::lifinity::calculate_lifinity_output;
 
 // --- Constants ---

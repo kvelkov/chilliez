@@ -16,6 +16,9 @@ pub mod orca;
 /// Raydium V4 AMM math implementation  
 pub mod raydium;
 
+/// Phoenix order book DEX math implementation
+pub mod phoenix;
+
 /// High-precision CLMM calculations for concentrated liquidity pools
 pub mod clmm {
     use super::*;
@@ -165,6 +168,7 @@ pub mod meteora {
 /// Lifinity-specific calculations for proactive market making
 pub mod lifinity {
     use super::*;
+    use std::str::FromStr;
     
     /// Calculate Lifinity output with proactive market making adjustments
     #[allow(dead_code)] // Advanced math function for Lifinity proactive market making
@@ -175,6 +179,16 @@ pub mod lifinity {
         fee_bps: u32,
         oracle_price: Option<u64>, // External price oracle for proactive MM
     ) -> Result<u64> {
+        // Handle zero input case
+        if input_amount == 0 {
+            return Ok(0);
+        }
+        
+        // Validate reserves
+        if input_reserve == 0 || output_reserve == 0 {
+            return Err(anyhow!("Pool reserves cannot be zero"));
+        }
+        
         // Base calculation using constant product
         let base_result = super::raydium::calculate_raydium_swap_output(
             input_amount,
@@ -190,6 +204,11 @@ pub mod lifinity {
         if let Some(oracle_price) = oracle_price {
             let pool_price = (output_reserve as u128 * 1000000) / input_reserve as u128;
             let oracle_price_scaled = oracle_price as u128;
+            
+            // Avoid division by zero
+            if pool_price == 0 {
+                return Ok(base_output);
+            }
             
             // Adjust output based on oracle vs pool price deviation
             let price_ratio = oracle_price_scaled * 1000 / pool_price;
@@ -208,6 +227,54 @@ pub mod lifinity {
         }
         
         Ok(base_output)
+    }
+    
+    /// Calculate Lifinity concentration parameter effect on liquidity
+    #[allow(dead_code)] // Used in Lifinity integration tests
+    pub fn calculate_concentration_adjustment(
+        concentration: u16,
+        base_liquidity: u128,
+    ) -> Result<u128> {
+        // Lifinity concentration parameter adjusts effective liquidity
+        // Higher concentration = more focused liquidity around current price
+        let concentration_decimal = Decimal::from(concentration) / Decimal::from(10000u32);
+        let base_liquidity_decimal = Decimal::from(base_liquidity);
+        
+        // Apply concentration multiplier (1.0 + concentration_factor)
+        let adjusted_liquidity = base_liquidity_decimal * (Decimal::ONE + concentration_decimal);
+        
+        adjusted_liquidity.to_u128()
+            .ok_or_else(|| anyhow!("Concentration adjustment overflow"))
+    }
+    
+    /// Calculate inventory-based price adjustment for proactive market making
+    #[allow(dead_code)] // Used in Lifinity integration tests
+    pub fn calculate_inventory_adjustment(
+        token_a_balance: u64,
+        token_b_balance: u64,
+        target_ratio: f64, // Target ratio of token_a to token_b
+    ) -> Result<Decimal> {
+        if token_a_balance == 0 || token_b_balance == 0 {
+            return Ok(Decimal::ONE); // No adjustment if either balance is zero
+        }
+        
+        let current_ratio = token_a_balance as f64 / token_b_balance as f64;
+        let ratio_deviation = (current_ratio - target_ratio) / target_ratio;
+        
+        // Apply inventory adjustment (max 10% price adjustment)
+        let adjustment_factor = if ratio_deviation > 0.1 {
+            Decimal::from_str("0.9")? // Decrease price if too much token A
+        } else if ratio_deviation < -0.1 {
+            Decimal::from_str("1.1")? // Increase price if too little token A
+        } else {
+            // Proportional adjustment: use integer-based calculation
+            // ratio_deviation is between -0.1 and 0.1, so scale by 1000 and use integer math
+            let scaled_deviation = (ratio_deviation * 5000.0) as i64; // * 0.5 * 10000
+            let deviation_decimal = Decimal::new(scaled_deviation, 4); // 4 decimal places
+            Decimal::ONE + deviation_decimal
+        };
+        
+        Ok(adjustment_factor)
     }
 }
 

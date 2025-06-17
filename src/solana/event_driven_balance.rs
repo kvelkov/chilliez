@@ -3,9 +3,9 @@
 
 use crate::solana::balance_monitor::{BalanceMonitor, BalanceMonitorConfig, BalanceUpdate};
 use crate::webhooks::processor::PoolUpdateProcessor;
-use crate::webhooks::types::{PoolUpdateEvent, PoolUpdateType, HeliusWebhookNotification};
+use crate::webhooks::types::{HeliusWebhookNotification, PoolUpdateEvent, PoolUpdateType};
 use anyhow::{anyhow, Result};
-use log::{debug, info, warn, error};
+use log::{debug, error, info, warn};
 use solana_sdk::pubkey::Pubkey;
 use std::{
     collections::{HashMap, HashSet},
@@ -42,15 +42,15 @@ impl Default for EventDrivenBalanceConfig {
 pub struct EventDrivenBalanceMonitor {
     balance_monitor: BalanceMonitor,
     config: EventDrivenBalanceConfig,
-    
+
     // Event processing
     event_sender: mpsc::UnboundedSender<BalanceEventTrigger>,
     event_receiver: Option<mpsc::UnboundedReceiver<BalanceEventTrigger>>,
-    
+
     // Account tracking
     monitored_accounts: Arc<RwLock<HashSet<Pubkey>>>,
     account_balance_cache: Arc<RwLock<HashMap<Pubkey, u64>>>,
-    
+
     // Statistics
     event_stats: Arc<RwLock<EventStats>>,
 }
@@ -91,7 +91,7 @@ impl EventDrivenBalanceMonitor {
     /// Create a new event-driven balance monitor
     pub fn new(config: EventDrivenBalanceConfig) -> Self {
         let (event_sender, event_receiver) = mpsc::unbounded_channel();
-        
+
         Self {
             balance_monitor: BalanceMonitor::new(config.base_config.clone()),
             config: config.clone(),
@@ -106,22 +106,25 @@ impl EventDrivenBalanceMonitor {
     /// Start the event-driven balance monitor
     pub async fn start(&mut self) -> Result<()> {
         info!("🚀 Starting event-driven balance monitor");
-        
+
         // Start the underlying balance monitor
         self.balance_monitor.start().await?;
-        
+
         // Subscribe to accounts via WebSocket for fallback
         self.subscribe_to_monitored_accounts().await?;
-        
+
         // Start event processing task
         self.spawn_event_processor().await?;
-        
+
         info!("✅ Event-driven balance monitor started successfully");
         Ok(())
     }
 
     /// Register this monitor with a webhook processor
-    pub async fn register_with_webhook_processor(&self, processor: &PoolUpdateProcessor) -> Result<()> {
+    pub async fn register_with_webhook_processor(
+        &self,
+        processor: &PoolUpdateProcessor,
+    ) -> Result<()> {
         if !self.config.enable_webhook_integration {
             info!("Webhook integration disabled in config");
             return Ok(());
@@ -129,42 +132,47 @@ impl EventDrivenBalanceMonitor {
 
         let event_sender = self.event_sender.clone();
         let monitored_accounts = Arc::clone(&self.monitored_accounts);
-        
+
         // Register callback for pool update events
-        processor.add_update_callback(move |pool_event: PoolUpdateEvent| {
-            let event_sender = event_sender.clone();
-            let monitored_accounts = Arc::clone(&monitored_accounts);
-            
-            tokio::spawn(async move {
-                // Check if this event affects our monitored accounts
-                if Self::should_process_pool_event(&pool_event, &monitored_accounts).await {
-                    // We need the original notification to extract balance changes
-                    // For now, we'll create a trigger event with the pool info
-                    let trigger = BalanceEventTrigger::DirectBalanceChange {
-                        account: pool_event.pool_address,
-                        new_balance: 0, // Will be updated by WebSocket or direct query
-                        change_amount: 0, // Will be calculated
-                        trigger_source: format!("pool_event_{:?}", pool_event.update_type),
-                    };
-                    
-                    if let Err(e) = event_sender.send(trigger) {
-                        warn!("Failed to send balance event trigger: {}", e);
+        processor
+            .add_update_callback(move |pool_event: PoolUpdateEvent| {
+                let event_sender = event_sender.clone();
+                let monitored_accounts = Arc::clone(&monitored_accounts);
+
+                tokio::spawn(async move {
+                    // Check if this event affects our monitored accounts
+                    if Self::should_process_pool_event(&pool_event, &monitored_accounts).await {
+                        // We need the original notification to extract balance changes
+                        // For now, we'll create a trigger event with the pool info
+                        let trigger = BalanceEventTrigger::DirectBalanceChange {
+                            account: pool_event.pool_address,
+                            new_balance: 0, // Will be updated by WebSocket or direct query
+                            change_amount: 0, // Will be calculated
+                            trigger_source: format!("pool_event_{:?}", pool_event.update_type),
+                        };
+
+                        if let Err(e) = event_sender.send(trigger) {
+                            warn!("Failed to send balance event trigger: {}", e);
+                        }
                     }
-                }
-            });
-        }).await;
+                });
+            })
+            .await;
 
         info!("✅ Registered with webhook processor for balance events");
         Ok(())
     }
 
     /// Register a direct webhook notification handler
-    pub async fn register_webhook_notification_handler(&self) -> mpsc::UnboundedSender<HeliusWebhookNotification> {
-        let (notification_sender, mut notification_receiver) = mpsc::unbounded_channel::<HeliusWebhookNotification>();
+    pub async fn register_webhook_notification_handler(
+        &self,
+    ) -> mpsc::UnboundedSender<HeliusWebhookNotification> {
+        let (notification_sender, mut notification_receiver) =
+            mpsc::unbounded_channel::<HeliusWebhookNotification>();
         let event_sender = self.event_sender.clone();
         let monitored_accounts = Arc::clone(&self.monitored_accounts);
         let stats = Arc::clone(&self.event_stats);
-        
+
         tokio::spawn(async move {
             while let Some(notification) = notification_receiver.recv().await {
                 // Update stats
@@ -175,7 +183,9 @@ impl EventDrivenBalanceMonitor {
                 }
 
                 // Process webhook notification for balance changes
-                if let Some(balance_triggers) = Self::extract_balance_triggers(&notification, &monitored_accounts).await {
+                if let Some(balance_triggers) =
+                    Self::extract_balance_triggers(&notification, &monitored_accounts).await
+                {
                     for trigger in balance_triggers {
                         if let Err(e) = event_sender.send(trigger) {
                             warn!("Failed to send webhook balance trigger: {}", e);
@@ -193,12 +203,12 @@ impl EventDrivenBalanceMonitor {
         let mut monitored = self.monitored_accounts.write().await;
         for account in accounts {
             monitored.insert(account);
-            
+
             // Subscribe to account via WebSocket for real-time updates
             // Note: This would require access to the BalanceMonitor's subscribe method
             // We'll handle this in the integration
         }
-        
+
         info!("Added {} accounts to monitoring", monitored.len());
         Ok(())
     }
@@ -212,19 +222,20 @@ impl EventDrivenBalanceMonitor {
                 return Some(balance);
             }
         }
-        
+
         // Fallback to balance monitor
         if let Some((balance, _)) = self.balance_monitor.get_confirmed_balance(account).await {
             return Some(balance);
         }
-        
+
         None
     }
 
     /// Force refresh balances for specific accounts
     pub async fn force_refresh_accounts(&self, accounts: Vec<Pubkey>) -> Result<()> {
         let trigger = BalanceEventTrigger::ForceRefresh { accounts };
-        self.event_sender.send(trigger)
+        self.event_sender
+            .send(trigger)
             .map_err(|e| anyhow!("Failed to send force refresh trigger: {}", e))?;
         Ok(())
     }
@@ -235,7 +246,9 @@ impl EventDrivenBalanceMonitor {
     }
 
     /// Take the balance update receiver from the underlying monitor
-    pub fn take_balance_update_receiver(&mut self) -> Option<mpsc::UnboundedReceiver<BalanceUpdate>> {
+    pub fn take_balance_update_receiver(
+        &mut self,
+    ) -> Option<mpsc::UnboundedReceiver<BalanceUpdate>> {
         self.balance_monitor.take_balance_update_receiver()
     }
 
@@ -259,16 +272,20 @@ impl EventDrivenBalanceMonitor {
 
     /// Spawn the event processor task
     async fn spawn_event_processor(&mut self) -> Result<()> {
-        let mut event_receiver = self.event_receiver.take()
+        let mut event_receiver = self
+            .event_receiver
+            .take()
             .ok_or_else(|| anyhow!("Event receiver already taken"))?;
-        
+
         let account_cache = Arc::clone(&self.account_balance_cache);
         let stats = Arc::clone(&self.event_stats);
         let config = self.config.clone();
-        
+
         tokio::spawn(async move {
             while let Some(event) = event_receiver.recv().await {
-                if let Err(e) = Self::process_balance_event(event, &account_cache, &stats, &config).await {
+                if let Err(e) =
+                    Self::process_balance_event(event, &account_cache, &stats, &config).await
+                {
                     error!("Failed to process balance event: {}", e);
                 }
             }
@@ -279,25 +296,27 @@ impl EventDrivenBalanceMonitor {
 
     /// Check if a pool event should trigger balance processing
     async fn should_process_pool_event(
-        pool_event: &PoolUpdateEvent, 
-        monitored_accounts: &Arc<RwLock<HashSet<Pubkey>>>
+        pool_event: &PoolUpdateEvent,
+        monitored_accounts: &Arc<RwLock<HashSet<Pubkey>>>,
     ) -> bool {
         match pool_event.update_type {
-            PoolUpdateType::Swap | PoolUpdateType::AddLiquidity | PoolUpdateType::RemoveLiquidity => {
+            PoolUpdateType::Swap
+            | PoolUpdateType::AddLiquidity
+            | PoolUpdateType::RemoveLiquidity => {
                 // Check if any token transfers involve monitored accounts
                 let accounts = monitored_accounts.read().await;
-                
+
                 for transfer in &pool_event.token_transfers {
                     if let (Ok(from_account), Ok(to_account)) = (
                         Pubkey::from_str(&transfer.from_user_account),
-                        Pubkey::from_str(&transfer.to_user_account)
+                        Pubkey::from_str(&transfer.to_user_account),
                     ) {
                         if accounts.contains(&from_account) || accounts.contains(&to_account) {
                             return true;
                         }
                     }
                 }
-                
+
                 false
             }
             _ => false,
@@ -307,7 +326,7 @@ impl EventDrivenBalanceMonitor {
     /// Extract balance triggers from webhook notification
     async fn extract_balance_triggers(
         notification: &HeliusWebhookNotification,
-        monitored_accounts: &Arc<RwLock<HashSet<Pubkey>>>
+        monitored_accounts: &Arc<RwLock<HashSet<Pubkey>>>,
     ) -> Option<Vec<BalanceEventTrigger>> {
         let mut triggers = Vec::new();
         let accounts = monitored_accounts.read().await;
@@ -317,7 +336,7 @@ impl EventDrivenBalanceMonitor {
             for transfer in native_transfers {
                 if let (Ok(from_account), Ok(to_account)) = (
                     Pubkey::from_str(&transfer.from_user_account),
-                    Pubkey::from_str(&transfer.to_user_account)
+                    Pubkey::from_str(&transfer.to_user_account),
                 ) {
                     if accounts.contains(&from_account) {
                         triggers.push(BalanceEventTrigger::DirectBalanceChange {
@@ -327,7 +346,7 @@ impl EventDrivenBalanceMonitor {
                             trigger_source: "native_transfer_out".to_string(),
                         });
                     }
-                    
+
                     if accounts.contains(&to_account) {
                         triggers.push(BalanceEventTrigger::DirectBalanceChange {
                             account: to_account,
@@ -371,11 +390,11 @@ impl EventDrivenBalanceMonitor {
         config: &EventDrivenBalanceConfig,
     ) -> Result<()> {
         match event {
-            BalanceEventTrigger::DirectBalanceChange { 
-                account, 
-                new_balance: _, 
-                change_amount, 
-                trigger_source 
+            BalanceEventTrigger::DirectBalanceChange {
+                account,
+                new_balance: _,
+                change_amount,
+                trigger_source,
             } => {
                 // Update stats
                 {
@@ -390,23 +409,36 @@ impl EventDrivenBalanceMonitor {
 
                 // Check if change meets threshold
                 if change_amount.abs() as u64 >= config.balance_change_threshold {
-                    debug!("🏦 Significant balance change detected for {}: {} ({})", 
-                        account, change_amount, trigger_source);
-                    
+                    debug!(
+                        "🏦 Significant balance change detected for {}: {} ({})",
+                        account, change_amount, trigger_source
+                    );
+
                     // Update cache (we'd need to query the actual balance here)
                     // For now, we'll just log the event
-                    info!("💰 Balance event: {} changed by {} lamports ({})", 
-                        account, change_amount, trigger_source);
+                    info!(
+                        "💰 Balance event: {} changed by {} lamports ({})",
+                        account, change_amount, trigger_source
+                    );
                 }
             }
-            
+
             BalanceEventTrigger::ForceRefresh { accounts } => {
-                info!("🔄 Force refreshing balances for {} accounts", accounts.len());
+                info!(
+                    "🔄 Force refreshing balances for {} accounts",
+                    accounts.len()
+                );
                 // Implementation would query actual balances and update cache
             }
-            
-            BalanceEventTrigger::WebhookEvent { notification: _, pool_event } => {
-                debug!("📨 Processing webhook pool event: {:?}", pool_event.update_type);
+
+            BalanceEventTrigger::WebhookEvent {
+                notification: _,
+                pool_event,
+            } => {
+                debug!(
+                    "📨 Processing webhook pool event: {:?}",
+                    pool_event.update_type
+                );
                 // Process pool event for balance implications
             }
         }

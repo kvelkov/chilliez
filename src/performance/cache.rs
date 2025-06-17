@@ -1,6 +1,6 @@
 // src/performance/cache.rs
 //! Advanced Caching System with TTL and Freshness Validation
-//! 
+//!
 //! This module provides high-performance caching for:
 //! - Pool states with automatic refresh
 //! - Route calculations with validation
@@ -8,13 +8,13 @@
 //! - DEX metadata and configuration
 
 use anyhow::Result;
-use serde::{Serialize, Deserialize};
+use log::{debug, info};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 use tokio::sync::RwLock;
-use tokio::time::{interval};
-use log::{debug, info};
+use tokio::time::interval;
 
 /// Cache entry with TTL and access tracking
 #[derive(Debug, Clone)]
@@ -47,8 +47,6 @@ impl<T> CacheEntry<T> {
         self.access_count += 1;
         &self.value
     }
-
-
 }
 
 /// High-performance cache manager with multiple cache types
@@ -111,19 +109,27 @@ impl CacheStats {
     fn calculate_hit_rates(&mut self) {
         self.pool_hit_rate = if self.pool_hits + self.pool_misses > 0 {
             self.pool_hits as f64 / (self.pool_hits + self.pool_misses) as f64
-        } else { 0.0 };
-        
+        } else {
+            0.0
+        };
+
         self.route_hit_rate = if self.route_hits + self.route_misses > 0 {
             self.route_hits as f64 / (self.route_hits + self.route_misses) as f64
-        } else { 0.0 };
-        
+        } else {
+            0.0
+        };
+
         self.quote_hit_rate = if self.quote_hits + self.quote_misses > 0 {
             self.quote_hits as f64 / (self.quote_hits + self.quote_misses) as f64
-        } else { 0.0 };
-        
+        } else {
+            0.0
+        };
+
         self.metadata_hit_rate = if self.metadata_hits + self.metadata_misses > 0 {
             self.metadata_hits as f64 / (self.metadata_hits + self.metadata_misses) as f64
-        } else { 0.0 };
+        } else {
+            0.0
+        };
     }
 }
 
@@ -194,7 +200,7 @@ impl CacheManager {
     /// Create a new cache manager
     pub async fn new(config: CacheConfig) -> Result<Self> {
         info!("🗄️ Initializing CacheManager with {:?}", config);
-        
+
         let manager = Self {
             pool_cache: Arc::new(RwLock::new(HashMap::new())),
             route_cache: Arc::new(RwLock::new(HashMap::new())),
@@ -206,7 +212,7 @@ impl CacheManager {
 
         // Start cleanup task
         manager.start_cleanup_task().await;
-        
+
         Ok(manager)
     }
 
@@ -222,76 +228,97 @@ impl CacheManager {
 
         tokio::spawn(async move {
             let mut interval_timer = interval(cleanup_interval);
-            
+
             loop {
                 interval_timer.tick().await;
-                
+
                 // Clean expired entries
                 let mut evicted_count = 0;
-                
+
                 // Clean pool cache
                 {
                     let mut cache = pool_cache.write().await;
                     let before_count = cache.len();
                     cache.retain(|_, entry| !entry.is_expired());
                     evicted_count += before_count - cache.len();
-                    
+
                     // Enforce size limit
                     if cache.len() > max_entries {
                         let entries_to_remove = cache.len() - max_entries;
-                        let mut entries: Vec<_> = cache.iter().map(|(k, v)| (k.clone(), v.last_accessed)).collect();
+                        let mut entries: Vec<_> = cache
+                            .iter()
+                            .map(|(k, v)| (k.clone(), v.last_accessed))
+                            .collect();
                         entries.sort_by_key(|(_, last_accessed)| *last_accessed);
-                        
-                        let keys_to_remove: Vec<_> = entries.iter().take(entries_to_remove).map(|(k, _)| k.clone()).collect();
+
+                        let keys_to_remove: Vec<_> = entries
+                            .iter()
+                            .take(entries_to_remove)
+                            .map(|(k, _)| k.clone())
+                            .collect();
                         for key in keys_to_remove {
                             cache.remove(&key);
                         }
                         evicted_count += entries_to_remove;
                     }
                 }
-                
+
                 // Clean route cache
                 {
                     let mut cache = route_cache.write().await;
                     let before_count = cache.len();
                     cache.retain(|_, entry| !entry.is_expired());
                     evicted_count += before_count - cache.len();
-                    
+
                     // Enforce size limit
                     if cache.len() > max_entries {
                         let entries_to_remove = cache.len() - max_entries;
-                        let mut entries: Vec<_> = cache.iter().map(|(k, v)| (k.clone(), v.last_accessed)).collect();
+                        let mut entries: Vec<_> = cache
+                            .iter()
+                            .map(|(k, v)| (k.clone(), v.last_accessed))
+                            .collect();
                         entries.sort_by_key(|(_, last_accessed)| *last_accessed);
-                        
-                        let keys_to_remove: Vec<_> = entries.iter().take(entries_to_remove).map(|(k, _)| k.clone()).collect();
+
+                        let keys_to_remove: Vec<_> = entries
+                            .iter()
+                            .take(entries_to_remove)
+                            .map(|(k, _)| k.clone())
+                            .collect();
                         for key in keys_to_remove {
                             cache.remove(&key);
                         }
                         evicted_count += entries_to_remove;
                     }
                 }
-                
+
                 // Clean quote cache
                 {
                     let mut cache = quote_cache.write().await;
                     let before_count = cache.len();
                     cache.retain(|_, entry| !entry.is_expired());
                     evicted_count += before_count - cache.len();
-                    
+
                     // Enforce size limit
                     if cache.len() > max_entries {
                         let entries_to_remove = cache.len() - max_entries;
-                        let mut entries: Vec<_> = cache.iter().map(|(k, v)| (k.clone(), v.last_accessed)).collect();
+                        let mut entries: Vec<_> = cache
+                            .iter()
+                            .map(|(k, v)| (k.clone(), v.last_accessed))
+                            .collect();
                         entries.sort_by_key(|(_, last_accessed)| *last_accessed);
-                        
-                        let keys_to_remove: Vec<_> = entries.iter().take(entries_to_remove).map(|(k, _)| k.clone()).collect();
+
+                        let keys_to_remove: Vec<_> = entries
+                            .iter()
+                            .take(entries_to_remove)
+                            .map(|(k, _)| k.clone())
+                            .collect();
                         for key in keys_to_remove {
                             cache.remove(&key);
                         }
                         evicted_count += entries_to_remove;
                     }
                 }
-                
+
                 // Clean metadata cache
                 {
                     let mut cache = metadata_cache.write().await;
@@ -299,14 +326,14 @@ impl CacheManager {
                     cache.retain(|_, entry| !entry.is_expired());
                     evicted_count += before_count - cache.len();
                 }
-                
+
                 // Update stats
                 {
                     let mut stats = stats.write().await;
                     stats.evictions += evicted_count as u64;
                     stats.calculate_hit_rates();
                 }
-                
+
                 if evicted_count > 0 {
                     debug!("Cache cleanup: evicted {} expired entries", evicted_count);
                 }
@@ -318,7 +345,7 @@ impl CacheManager {
     pub async fn get_pool_state(&self, pool_address: &str) -> Option<PoolState> {
         let mut cache = self.pool_cache.write().await;
         let mut stats = self.stats.write().await;
-        
+
         if let Some(entry) = cache.get_mut(pool_address) {
             if !entry.is_expired() {
                 stats.pool_hits += 1;
@@ -327,7 +354,7 @@ impl CacheManager {
                 cache.remove(pool_address);
             }
         }
-        
+
         stats.pool_misses += 1;
         None
     }
@@ -343,7 +370,7 @@ impl CacheManager {
     pub async fn get_route(&self, route_key: &str) -> Option<RouteInfo> {
         let mut cache = self.route_cache.write().await;
         let mut stats = self.stats.write().await;
-        
+
         if let Some(entry) = cache.get_mut(route_key) {
             if !entry.is_expired() {
                 stats.route_hits += 1;
@@ -352,7 +379,7 @@ impl CacheManager {
                 cache.remove(route_key);
             }
         }
-        
+
         stats.route_misses += 1;
         None
     }
@@ -368,7 +395,7 @@ impl CacheManager {
     pub async fn get_quote(&self, quote_key: &str, required_freshness: f64) -> Option<QuoteInfo> {
         let mut cache = self.quote_cache.write().await;
         let mut stats = self.stats.write().await;
-        
+
         if let Some(entry) = cache.get_mut(quote_key) {
             if !entry.is_expired() {
                 let quote = entry.access();
@@ -380,7 +407,7 @@ impl CacheManager {
                 cache.remove(quote_key);
             }
         }
-        
+
         stats.quote_misses += 1;
         None
     }
@@ -396,7 +423,7 @@ impl CacheManager {
     pub async fn get_metadata(&self, token_address: &str) -> Option<MetadataInfo> {
         let mut cache = self.metadata_cache.write().await;
         let mut stats = self.stats.write().await;
-        
+
         if let Some(entry) = cache.get_mut(token_address) {
             if !entry.is_expired() {
                 stats.metadata_hits += 1;
@@ -405,7 +432,7 @@ impl CacheManager {
                 cache.remove(token_address);
             }
         }
-        
+
         stats.metadata_misses += 1;
         None
     }
@@ -423,7 +450,13 @@ impl CacheManager {
     }
 
     /// Generate cache key for quotes
-    pub fn generate_quote_key(&self, input_token: &str, output_token: &str, amount: u64, dex: &str) -> String {
+    pub fn generate_quote_key(
+        &self,
+        input_token: &str,
+        output_token: &str,
+        amount: u64,
+        dex: &str,
+    ) -> String {
         format!("quote:{}:{}:{}:{}", input_token, output_token, amount, dex)
     }
 
@@ -431,16 +464,16 @@ impl CacheManager {
     pub async fn get_stats(&self) -> CacheStats {
         let stats = self.stats.read().await;
         let mut stats_copy = stats.clone();
-        
+
         // Update total entries count
         let pool_count = self.pool_cache.read().await.len();
         let route_count = self.route_cache.read().await.len();
         let quote_count = self.quote_cache.read().await.len();
         let metadata_count = self.metadata_cache.read().await.len();
-        
+
         stats_copy.total_entries = pool_count + route_count + quote_count + metadata_count;
         stats_copy.calculate_hit_rates();
-        
+
         stats_copy
     }
 
@@ -450,7 +483,7 @@ impl CacheManager {
         self.route_cache.write().await.clear();
         self.quote_cache.write().await.clear();
         self.metadata_cache.write().await.clear();
-        
+
         let mut stats = self.stats.write().await;
         *stats = CacheStats::default();
     }
@@ -458,16 +491,16 @@ impl CacheManager {
     /// Preload frequently used data
     pub async fn preload_frequent_pairs(&self, pairs: Vec<(String, String)>) -> Result<()> {
         info!("Preloading {} frequent trading pairs", pairs.len());
-        
+
         for (token_a, token_b) in pairs {
             // This would typically fetch and cache the most common routes/quotes
             // for these pairs to improve initial response times
             let _route_key = self.generate_route_key(&token_a, &token_b, 1_000_000);
-            
+
             // Placeholder: would implement actual preloading logic here
             debug!("Preloading route for pair: {} -> {}", token_a, token_b);
         }
-        
+
         Ok(())
     }
 }
@@ -477,7 +510,7 @@ pub fn calculate_freshness_score(quote_age: Duration, market_volatility: f64) ->
     let age_seconds = quote_age.as_secs_f64();
     let base_freshness = (1.0 - (age_seconds / 300.0)).max(0.0); // 5 min = 0 freshness
     let volatility_penalty = market_volatility * 0.1; // Higher volatility = lower freshness
-    
+
     (base_freshness - volatility_penalty).max(0.0).min(1.0)
 }
 
@@ -489,7 +522,7 @@ mod tests {
     async fn test_cache_basic_operations() {
         let config = CacheConfig::default();
         let cache = CacheManager::new(config).await.unwrap();
-        
+
         // Test pool state caching
         let pool_state = PoolState {
             pool_address: "test_pool".to_string(),
@@ -503,13 +536,15 @@ mod tests {
             last_updated: 123456789,
             dex_type: "Raydium".to_string(),
         };
-        
-        cache.set_pool_state("test_pool".to_string(), pool_state.clone()).await;
-        
+
+        cache
+            .set_pool_state("test_pool".to_string(), pool_state.clone())
+            .await;
+
         let retrieved = cache.get_pool_state("test_pool").await;
         assert!(retrieved.is_some());
         assert_eq!(retrieved.unwrap().pool_address, pool_state.pool_address);
-        
+
         // Test cache miss
         let missing = cache.get_pool_state("nonexistent").await;
         assert!(missing.is_none());
@@ -519,9 +554,9 @@ mod tests {
     async fn test_cache_expiration() {
         let mut config = CacheConfig::default();
         config.pool_ttl = Duration::from_millis(50); // Very short TTL for testing
-        
+
         let cache = CacheManager::new(config).await.unwrap();
-        
+
         let pool_state = PoolState {
             pool_address: "test_pool".to_string(),
             token_a: "SOL".to_string(),
@@ -534,15 +569,17 @@ mod tests {
             last_updated: 123456789,
             dex_type: "Raydium".to_string(),
         };
-        
-        cache.set_pool_state("test_pool".to_string(), pool_state).await;
-        
+
+        cache
+            .set_pool_state("test_pool".to_string(), pool_state)
+            .await;
+
         // Should be available immediately
         assert!(cache.get_pool_state("test_pool").await.is_some());
-        
+
         // Wait for expiration
         tokio::time::sleep(Duration::from_millis(100)).await;
-        
+
         // Should be expired
         assert!(cache.get_pool_state("test_pool").await.is_none());
     }
@@ -552,11 +589,11 @@ mod tests {
         // Fresh quote (0 seconds old)
         let fresh_score = calculate_freshness_score(Duration::from_secs(0), 0.1);
         assert!(fresh_score > 0.8);
-        
+
         // Old quote (5 minutes old)
         let old_score = calculate_freshness_score(Duration::from_secs(300), 0.1);
         assert!(old_score < 0.2);
-        
+
         // High volatility penalty
         let volatile_score = calculate_freshness_score(Duration::from_secs(30), 0.9);
         let stable_score = calculate_freshness_score(Duration::from_secs(30), 0.1);

@@ -1,5 +1,5 @@
 //! Integration tests for Jupiter fallback functionality
-//! 
+//!
 //! These tests verify that the Jupiter fallback integration works correctly
 //! with the arbitrage orchestrator and price aggregator.
 
@@ -11,7 +11,7 @@ mod jupiter_fallback_integration_tests {
             price_aggregator::{PriceAggregator, QuoteSource},
         },
         config::settings::Config,
-        dex::{DexClient, BannedPairsManager, api::Quote},
+        dex::{api::Quote, BannedPairsManager, DexClient},
         local_metrics::Metrics,
         utils::PoolInfo,
     };
@@ -88,7 +88,9 @@ mod jupiter_fallback_integration_tests {
             Ok(vec![])
         }
 
-        async fn health_check(&self) -> Result<crate::dex::api::DexHealthStatus, crate::error::ArbError> {
+        async fn health_check(
+            &self,
+        ) -> Result<crate::dex::api::DexHealthStatus, crate::error::ArbError> {
             Ok(crate::dex::api::DexHealthStatus {
                 is_healthy: true,
                 last_successful_request: Some(std::time::Instant::now()),
@@ -128,7 +130,10 @@ mod jupiter_fallback_integration_tests {
 
         // Test that aggregator fails when all sources fail
         let result = price_aggregator.get_best_quote(&pool, 1000000).await;
-        assert!(result.is_err(), "Expected aggregator to fail when all sources fail");
+        assert!(
+            result.is_err(),
+            "Expected aggregator to fail when all sources fail"
+        );
     }
 
     #[tokio::test]
@@ -156,12 +161,15 @@ mod jupiter_fallback_integration_tests {
 
         // Test that aggregator succeeds with working sources
         let result = price_aggregator.get_best_quote(&pool, 1000000).await;
-        assert!(result.is_ok(), "Expected aggregator to succeed with working sources");
+        assert!(
+            result.is_ok(),
+            "Expected aggregator to succeed with working sources"
+        );
 
         let aggregated_quote = result.unwrap();
         assert_eq!(aggregated_quote.quote.input_amount, 1000000);
         assert_eq!(aggregated_quote.quote.output_amount, 500000); // Mock 2:1 conversion
-        
+
         // Verify it used a primary source
         match aggregated_quote.source {
             QuoteSource::Primary(_) => { /* Expected */ }
@@ -179,12 +187,12 @@ mod jupiter_fallback_integration_tests {
         // Create test components
         let hot_cache = Arc::new(DashMap::new());
         let metrics = Arc::new(Mutex::new(Metrics::new()));
-        let banned_pairs_manager = Arc::new(BannedPairsManager::new("test_banned_pairs.csv".to_string()).unwrap());
+        let banned_pairs_manager =
+            Arc::new(BannedPairsManager::new("test_banned_pairs.csv".to_string()).unwrap());
 
         // Create mock DEX clients
-        let dex_clients: Vec<Arc<dyn DexClient>> = vec![
-            Arc::new(MockDexClient::new("MockDEX", false)),
-        ];
+        let dex_clients: Vec<Arc<dyn DexClient>> =
+            vec![Arc::new(MockDexClient::new("MockDEX", false))];
 
         // Create orchestrator
         let orchestrator = ArbitrageOrchestrator::new(
@@ -200,16 +208,24 @@ mod jupiter_fallback_integration_tests {
         );
 
         // Test that orchestrator has price aggregator
-        assert!(orchestrator.price_aggregator.is_some(), "Expected orchestrator to have price aggregator");
+        assert!(
+            orchestrator.price_aggregator.is_some(),
+            "Expected orchestrator to have price aggregator"
+        );
 
         // Create test pool and add to cache
         let test_pool = PoolInfo::default();
         let pool_address = test_pool.address;
-        orchestrator.hot_cache.insert(pool_address, Arc::new(test_pool.clone()));
+        orchestrator
+            .hot_cache
+            .insert(pool_address, Arc::new(test_pool.clone()));
 
         // Test get_aggregated_quote method
         let result = orchestrator.get_aggregated_quote(&test_pool, 1000000).await;
-        assert!(result.is_ok(), "Expected orchestrator to provide aggregated quote");
+        assert!(
+            result.is_ok(),
+            "Expected orchestrator to provide aggregated quote"
+        );
 
         let aggregated_quote = result.unwrap();
         assert_eq!(aggregated_quote.quote.input_amount, 1000000);
@@ -225,12 +241,12 @@ mod jupiter_fallback_integration_tests {
         // Create test components
         let hot_cache = Arc::new(DashMap::new());
         let metrics = Arc::new(Mutex::new(Metrics::new()));
-        let banned_pairs_manager = Arc::new(BannedPairsManager::new("test_banned_pairs.csv".to_string()).unwrap());
+        let banned_pairs_manager =
+            Arc::new(BannedPairsManager::new("test_banned_pairs.csv".to_string()).unwrap());
 
         // Create mock DEX clients
-        let dex_clients: Vec<Arc<dyn DexClient>> = vec![
-            Arc::new(MockDexClient::new("MockDEX", false)),
-        ];
+        let dex_clients: Vec<Arc<dyn DexClient>> =
+            vec![Arc::new(MockDexClient::new("MockDEX", false))];
 
         // Create orchestrator
         let orchestrator = ArbitrageOrchestrator::new(
@@ -246,14 +262,20 @@ mod jupiter_fallback_integration_tests {
         );
 
         // Test that orchestrator doesn't have price aggregator when disabled
-        assert!(orchestrator.price_aggregator.is_none(), "Expected orchestrator to not have price aggregator when disabled");
+        assert!(
+            orchestrator.price_aggregator.is_none(),
+            "Expected orchestrator to not have price aggregator when disabled"
+        );
 
         // Create test pool
         let test_pool = PoolInfo::default();
 
         // Test get_aggregated_quote method falls back to traditional method
         let result = orchestrator.get_aggregated_quote(&test_pool, 1000000).await;
-        assert!(result.is_ok(), "Expected orchestrator to provide traditional quote");
+        assert!(
+            result.is_ok(),
+            "Expected orchestrator to provide traditional quote"
+        );
 
         let aggregated_quote = result.unwrap();
         assert_eq!(aggregated_quote.quote.input_amount, 1000000);

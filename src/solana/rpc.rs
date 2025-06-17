@@ -10,9 +10,9 @@ use solana_client::{
     rpc_filter::RpcFilterType,
     rpc_response::RpcPrioritizationFee as PrioritizationFee,
 };
+use solana_sdk::program_pack::Pack; // Added for the Pack trait
 use solana_sdk::{commitment_config::CommitmentConfig, pubkey::Pubkey};
 use spl_token::state::Mint; // Added for unpacking mint data
-use solana_sdk::program_pack::Pack; // Added for the Pack trait
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::sleep;
@@ -89,7 +89,8 @@ impl SolanaRpcClient {
     ) -> anyhow::Result<T>
     where
         F: FnMut(Arc<NonBlockingRpcClient>) -> Fut,
-        Fut: std::future::Future<Output = Result<T, solana_client::client_error::ClientError>> + Send,
+        Fut: std::future::Future<Output = Result<T, solana_client::client_error::ClientError>>
+            + Send,
         T: Send,
     {
         let mut last_error: Option<solana_client::client_error::ClientError> = None;
@@ -97,11 +98,21 @@ impl SolanaRpcClient {
         for attempt in 0..self.max_retries {
             match rpc_call_fn(Arc::clone(&self.primary_client)).await {
                 Ok(result) => {
-                    debug!("[RPC HA - {}] Primary client succeeded on attempt {}", operation_name, attempt + 1);
+                    debug!(
+                        "[RPC HA - {}] Primary client succeeded on attempt {}",
+                        operation_name,
+                        attempt + 1
+                    );
                     return Ok(result);
                 }
                 Err(e) => {
-                    warn!("[RPC HA - {}] Primary client attempt {}/{} failed: {}", operation_name, attempt + 1, self.max_retries, e);
+                    warn!(
+                        "[RPC HA - {}] Primary client attempt {}/{} failed: {}",
+                        operation_name,
+                        attempt + 1,
+                        self.max_retries,
+                        e
+                    );
                     last_error = Some(e);
                     if attempt < self.max_retries - 1 {
                         let mut delay_ms = self.retry_delay.as_millis() as u64;
@@ -116,14 +127,27 @@ impl SolanaRpcClient {
         }
 
         for (i, fallback_client) in self.fallback_clients.iter().enumerate() {
-            debug!("[RPC HA - {}] Attempting with fallback client #{}", operation_name, i + 1);
+            debug!(
+                "[RPC HA - {}] Attempting with fallback client #{}",
+                operation_name,
+                i + 1
+            );
             match rpc_call_fn(Arc::clone(fallback_client)).await {
                 Ok(result) => {
-                    info!("[RPC HA - {}] Fallback client #{} succeeded.", operation_name, i + 1);
+                    info!(
+                        "[RPC HA - {}] Fallback client #{} succeeded.",
+                        operation_name,
+                        i + 1
+                    );
                     return Ok(result);
                 }
                 Err(e) => {
-                    warn!("[RPC HA - {}] Fallback client #{} failed: {}", operation_name, i + 1, e);
+                    warn!(
+                        "[RPC HA - {}] Fallback client #{} failed: {}",
+                        operation_name,
+                        i + 1,
+                        e
+                    );
                     last_error = Some(e);
                 }
             }
@@ -144,7 +168,7 @@ impl SolanaRpcClient {
                 client.get_token_account_balance(pubkey).await
             })
             .await?;
-        
+
         Ok(result.amount.parse::<u64>()?)
     }
 
@@ -182,12 +206,22 @@ impl SolanaRpcClient {
     }
 
     /// Get recent prioritization fees from Solana network
-    pub async fn get_recent_prioritization_fees(&self, accounts: Option<Vec<Pubkey>>) -> Result<Vec<PrioritizationFee>, ArbError> {
+    pub async fn get_recent_prioritization_fees(
+        &self,
+        accounts: Option<Vec<Pubkey>>,
+    ) -> Result<Vec<PrioritizationFee>, ArbError> {
         // Try primary client first
         let accounts_ref = accounts.as_ref().map(|v| v.as_slice()).unwrap_or(&[]);
-        let last_error = match self.primary_client.get_recent_prioritization_fees(accounts_ref).await {
+        let last_error = match self
+            .primary_client
+            .get_recent_prioritization_fees(accounts_ref)
+            .await
+        {
             Ok(fees) => {
-                debug!("✅ Got {} recent prioritization fees from primary RPC", fees.len());
+                debug!(
+                    "✅ Got {} recent prioritization fees from primary RPC",
+                    fees.len()
+                );
                 return Ok(fees);
             }
             Err(e) => {
@@ -195,22 +229,29 @@ impl SolanaRpcClient {
                 ArbError::NetworkError(e.to_string())
             }
         };
-        
+
         // Try fallback clients
         let mut final_error = last_error;
         for (i, fallback) in self.fallback_clients.iter().enumerate() {
             match fallback.get_recent_prioritization_fees(accounts_ref).await {
                 Ok(fees) => {
-                    debug!("✅ Got {} recent prioritization fees from fallback RPC {}", fees.len(), i);
+                    debug!(
+                        "✅ Got {} recent prioritization fees from fallback RPC {}",
+                        fees.len(),
+                        i
+                    );
                     return Ok(fees);
                 }
                 Err(e) => {
-                    warn!("❌ Fallback RPC {} failed to get prioritization fees: {}", i, e);
+                    warn!(
+                        "❌ Fallback RPC {} failed to get prioritization fees: {}",
+                        i, e
+                    );
                     final_error = ArbError::NetworkError(e.to_string());
                 }
             }
         }
-        
+
         Err(final_error)
     }
 
@@ -237,18 +278,20 @@ impl SolanaRpcClient {
         Mint::unpack(&account_data)
             .map(|mint_info| mint_info.decimals)
             .map_err(|e| {
-                anyhow::anyhow!("Failed to unpack mint account data for {}: {}", mint_pubkey, e)
+                anyhow::anyhow!(
+                    "Failed to unpack mint account data for {}: {}",
+                    mint_pubkey,
+                    e
+                )
             })
     }
-
-
 
     /// Comprehensive health check for the RPC client system
     pub async fn is_healthy(&self) -> bool {
         debug!("[RPC HA - is_healthy] Starting comprehensive RPC health check...");
-        
+
         let start_time = std::time::Instant::now();
-        
+
         // Test primary client health
         let primary_healthy = match self.primary_client.get_health().await {
             Ok(_) => {
@@ -256,35 +299,51 @@ impl SolanaRpcClient {
                 true
             }
             Err(e) => {
-                warn!("[RPC HA - is_healthy] Primary RPC client health check failed: {}", e);
+                warn!(
+                    "[RPC HA - is_healthy] Primary RPC client health check failed: {}",
+                    e
+                );
                 false
             }
         };
-        
+
         // Test basic functionality with a simple request
         let functionality_healthy = match self.primary_client.get_slot().await {
             Ok(slot) => {
-                debug!("[RPC HA - is_healthy] Primary RPC client functionality test passed (slot: {})", slot);
+                debug!(
+                    "[RPC HA - is_healthy] Primary RPC client functionality test passed (slot: {})",
+                    slot
+                );
                 true
             }
             Err(e) => {
-                warn!("[RPC HA - is_healthy] Primary RPC client functionality test failed: {}", e);
+                warn!(
+                    "[RPC HA - is_healthy] Primary RPC client functionality test failed: {}",
+                    e
+                );
                 false
             }
         };
-        
+
         // If primary is not healthy, test fallback clients
         let fallback_healthy = if !primary_healthy && !self.fallback_clients.is_empty() {
             let mut any_fallback_healthy = false;
             for (i, fallback_client) in self.fallback_clients.iter().enumerate() {
                 match fallback_client.get_health().await {
                     Ok(_) => {
-                        debug!("[RPC HA - is_healthy] Fallback client #{} is healthy", i + 1);
+                        debug!(
+                            "[RPC HA - is_healthy] Fallback client #{} is healthy",
+                            i + 1
+                        );
                         any_fallback_healthy = true;
                         break;
                     }
                     Err(e) => {
-                        warn!("[RPC HA - is_healthy] Fallback client #{} health check failed: {}", i + 1, e);
+                        warn!(
+                            "[RPC HA - is_healthy] Fallback client #{} health check failed: {}",
+                            i + 1,
+                            e
+                        );
                     }
                 }
             }
@@ -292,37 +351,45 @@ impl SolanaRpcClient {
         } else {
             false
         };
-        
+
         let overall_healthy = primary_healthy && functionality_healthy || fallback_healthy;
         let check_duration = start_time.elapsed();
-        
+
         if overall_healthy {
-            info!("[RPC HA - is_healthy] Overall health check passed in {:?}", check_duration);
+            info!(
+                "[RPC HA - is_healthy] Overall health check passed in {:?}",
+                check_duration
+            );
         } else {
             error!("[RPC HA - is_healthy] Overall health check failed in {:?} - primary_healthy: {}, functionality_healthy: {}, fallback_healthy: {}", 
                    check_duration, primary_healthy, functionality_healthy, fallback_healthy);
         }
-        
+
         overall_healthy
     }
 
     /// Get detailed health status for monitoring
     pub async fn get_health_status(&self) -> RpcHealthStatus {
         let start_time = std::time::Instant::now();
-        
+
         // Test primary client
-        let primary_status = self.test_client_health(&self.primary_client, "Primary").await;
-        
+        let primary_status = self
+            .test_client_health(&self.primary_client, "Primary")
+            .await;
+
         // Test fallback clients
         let mut fallback_statuses = Vec::new();
         for (i, fallback_client) in self.fallback_clients.iter().enumerate() {
-            let status = self.test_client_health(fallback_client, &format!("Fallback-{}", i + 1)).await;
+            let status = self
+                .test_client_health(fallback_client, &format!("Fallback-{}", i + 1))
+                .await;
             fallback_statuses.push(status);
         }
-        
+
         let total_check_time = start_time.elapsed();
-        let overall_healthy = primary_status.is_healthy || fallback_statuses.iter().any(|s| s.is_healthy);
-        
+        let overall_healthy =
+            primary_status.is_healthy || fallback_statuses.iter().any(|s| s.is_healthy);
+
         RpcHealthStatus {
             overall_healthy,
             primary_status,
@@ -331,26 +398,30 @@ impl SolanaRpcClient {
             check_duration_ms: total_check_time.as_millis() as u64,
         }
     }
-    
+
     /// Test health of a specific RPC client
-    async fn test_client_health(&self, client: &Arc<NonBlockingRpcClient>, name: &str) -> ClientHealthStatus {
+    async fn test_client_health(
+        &self,
+        client: &Arc<NonBlockingRpcClient>,
+        name: &str,
+    ) -> ClientHealthStatus {
         let start_time = std::time::Instant::now();
-        
+
         // Test 1: Health endpoint
         let health_ok = client.get_health().await.is_ok();
-        
+
         // Test 2: Basic functionality (get slot)
         let (slot_ok, slot_value) = match client.get_slot().await {
             Ok(slot) => (true, Some(slot)),
             Err(_) => (false, None),
         };
-        
+
         // Test 3: Response time test
         let response_time = start_time.elapsed();
         let response_time_ok = response_time.as_millis() < 5000; // 5 second threshold
-        
+
         let is_healthy = health_ok && slot_ok && response_time_ok;
-        
+
         ClientHealthStatus {
             name: name.to_string(),
             is_healthy,
@@ -362,8 +433,12 @@ impl SolanaRpcClient {
             last_successful_request: if is_healthy { Some(start_time) } else { None },
             error_count: if is_healthy { 0 } else { 1 },
             error_message: if !is_healthy {
-                Some(format!("Health: {}, Functionality: {}, Response: {}ms", 
-                           health_ok, slot_ok, response_time.as_millis()))
+                Some(format!(
+                    "Health: {}, Functionality: {}, Response: {}ms",
+                    health_ok,
+                    slot_ok,
+                    response_time.as_millis()
+                ))
             } else {
                 None
             },
@@ -393,6 +468,3 @@ impl SolanaRpcClient {
 // NOTE: For best performance, use Helius' fast RPC endpoint for transaction sending and bundle submission (Jito).
 // Set the environment variable HELIUS_RPC_URL or SOLANA_RPC_URL to your Helius endpoint.
 // ---
-
-
-

@@ -1,15 +1,15 @@
 //! Helius SDK Wrapper (STUB IMPLEMENTATION)
-//! 
+//!
 //! This is a temporary stub implementation while dependency conflicts with the Helius SDK
 //! are resolved. All methods return appropriate default values or errors indicating
 //! the feature is temporarily unavailable.
 
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use tracing::{info, warn};
 
-// Stub types for Helius SDK 
+// Stub types for Helius SDK
 #[derive(Debug, Clone)]
 pub struct Helius;
 
@@ -17,10 +17,15 @@ pub struct Helius;
 pub struct CreateWebhookRequest;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum WebhookType { Enhanced }
+pub enum WebhookType {
+    Enhanced,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum TransactionType { Transfer, Swap }
+pub enum TransactionType {
+    Transfer,
+    Swap,
+}
 
 #[derive(Debug, Clone)]
 pub struct Webhook {
@@ -56,34 +61,40 @@ pub enum Source {
 }
 
 #[derive(Debug, Clone)]
-pub enum TransactionStatus { Success, All }
+pub enum TransactionStatus {
+    Success,
+    All,
+}
 
 #[derive(Debug, Clone)]
-pub enum AccountWebhookEncoding { Base64, JsonParsed }
+pub enum AccountWebhookEncoding {
+    Base64,
+    JsonParsed,
+}
 
 /// Helius configuration for webhook endpoints and transaction monitoring
-/// 
+///
 /// ## Webhook URL Configuration
-/// 
+///
 /// **IMPORTANT**: The webhook URL must be publicly accessible for Helius to send events.
-/// 
+///
 /// ### Development Setup:
 /// ```bash
 /// export WEBHOOK_URL="http://localhost:3000/webhook"  # Local development only
 /// ```
-/// 
+///
 /// ### Production Setup:
 /// ```bash
 /// export WEBHOOK_URL="https://your-domain.com/webhook"  # Must be public HTTPS
 /// export WEBHOOK_AUTH_HEADER="Bearer your-auth-token"   # Optional security
 /// ```
-/// 
+///
 /// ### Deployment Considerations:
 /// - Use HTTPS in production for security
 /// - Ensure your server is publicly accessible (not behind firewall)
 /// - Consider using a reverse proxy (nginx, cloudflare) for SSL termination
 /// - Implement webhook signature verification for security
-/// 
+///
 /// ### Common Issues:
 /// - ❌ `localhost` URLs won't work in production (Helius can't reach them)
 /// - ❌ URLs behind corporate firewalls won't work
@@ -102,12 +113,11 @@ impl Default for HeliusConfig {
         Self {
             // NOTE: In production, this should be configured via WEBHOOK_URL environment variable
             // or through the main Config struct. Localhost is only for development!
-            webhook_url: std::env::var("WEBHOOK_URL")
-                .unwrap_or_else(|_| {
-                    log::warn!("⚠️  WEBHOOK_URL not configured! Using localhost (development only)");
-                    log::warn!("   For production, set WEBHOOK_URL=https://your-domain.com/webhook");
-                    "http://localhost:3000/webhook".to_string()
-                }),
+            webhook_url: std::env::var("WEBHOOK_URL").unwrap_or_else(|_| {
+                log::warn!("⚠️  WEBHOOK_URL not configured! Using localhost (development only)");
+                log::warn!("   For production, set WEBHOOK_URL=https://your-domain.com/webhook");
+                "http://localhost:3000/webhook".to_string()
+            }),
             transaction_types: vec![TransactionType::Swap],
             webhook_type: WebhookType::Enhanced,
             auth_header: std::env::var("WEBHOOK_AUTH_HEADER").ok(),
@@ -137,7 +147,9 @@ impl HeliusConfig {
     /// Create production configuration with validation
     pub fn production(webhook_url: String, auth_header: Option<String>) -> anyhow::Result<Self> {
         // Validate webhook URL format
-        if webhook_url.starts_with("http://localhost") || webhook_url.starts_with("http://127.0.0.1") {
+        if webhook_url.starts_with("http://localhost")
+            || webhook_url.starts_with("http://127.0.0.1")
+        {
             return Err(anyhow::anyhow!(
                 "Production webhook URL cannot use localhost. Use a publicly accessible URL (https://your-domain.com/webhook)"
             ));
@@ -169,12 +181,16 @@ impl HeliusConfig {
 
     /// Create HeliusConfig from main application config
     pub fn from_app_config(config: &crate::config::settings::Config) -> anyhow::Result<Self> {
-        let webhook_url = config.webhook_url.clone()
+        let webhook_url = config
+            .webhook_url
+            .clone()
             .ok_or_else(|| anyhow::anyhow!("Webhook URL not configured in application settings"))?;
 
         // Validate production webhook URLs
-        if !config.simulation_mode && 
-           (webhook_url.starts_with("http://localhost") || webhook_url.starts_with("http://127.0.0.1")) {
+        if !config.simulation_mode
+            && (webhook_url.starts_with("http://localhost")
+                || webhook_url.starts_with("http://127.0.0.1"))
+        {
             log::error!("❌ Production mode detected but webhook URL uses localhost!");
             log::error!("   Current webhook URL: {}", webhook_url);
             log::error!("   Please configure a public webhook URL for production");
@@ -204,14 +220,17 @@ impl HeliusConfig {
 /// Validate webhook URL for production use
 pub fn validate_webhook_url(url: &str, is_production: bool) -> anyhow::Result<()> {
     if !url.starts_with("http://") && !url.starts_with("https://") {
-        return Err(anyhow::anyhow!("Webhook URL must start with http:// or https://"));
+        return Err(anyhow::anyhow!(
+            "Webhook URL must start with http:// or https://"
+        ));
     }
 
     if is_production {
-        if url.starts_with("http://localhost") || 
-           url.starts_with("http://127.0.0.1") || 
-           url.starts_with("https://localhost") ||
-           url.starts_with("https://127.0.0.1") {
+        if url.starts_with("http://localhost")
+            || url.starts_with("http://127.0.0.1")
+            || url.starts_with("https://localhost")
+            || url.starts_with("https://127.0.0.1")
+        {
             return Err(anyhow::anyhow!(
                 "Production webhook URL cannot use localhost or 127.0.0.1. Use a publicly accessible domain."
             ));
@@ -219,13 +238,19 @@ pub fn validate_webhook_url(url: &str, is_production: bool) -> anyhow::Result<()
 
         if url.starts_with("http://") && !url.contains("localhost") {
             log::warn!("⚠️  Using HTTP (not HTTPS) for production webhook URL. This is insecure!");
-            log::warn!("   Consider using HTTPS: {}", url.replace("http://", "https://"));
+            log::warn!(
+                "   Consider using HTTPS: {}",
+                url.replace("http://", "https://")
+            );
         }
     }
 
     // Basic URL format validation
     if !url.contains('.') && !url.contains("localhost") {
-        return Err(anyhow::anyhow!("Webhook URL appears to be malformed: {}", url));
+        return Err(anyhow::anyhow!(
+            "Webhook URL appears to be malformed: {}",
+            url
+        ));
     }
 
     Ok(())
@@ -241,7 +266,7 @@ pub struct HeliusManager {
 impl HeliusManager {
     pub fn new(helius_client: Helius, config: HeliusConfig) -> Self {
         warn!("⚠️ Using stub HeliusManager - real Helius functionality disabled due to dependency conflicts");
-        
+
         Self {
             config,
             helius: helius_client,
@@ -253,22 +278,30 @@ impl HeliusManager {
     pub async fn create_dex_pool_webhook(
         &mut self,
         addresses: Vec<String>,
-        webhook_id_suffix: Option<String>
+        webhook_id_suffix: Option<String>,
     ) -> Result<String> {
         warn!("⚠️ Helius webhook creation is stubbed - dependency conflicts prevent real implementation");
-        
-        let webhook_id = format!("stub_webhook_{}", 
+
+        let webhook_id = format!(
+            "stub_webhook_{}",
             webhook_id_suffix.unwrap_or_else(|| "default".to_string())
         );
-        
-        info!("📝 Mock webhook created for {} addresses with ID: {}", addresses.len(), webhook_id);
-        
+
+        info!(
+            "📝 Mock webhook created for {} addresses with ID: {}",
+            addresses.len(),
+            webhook_id
+        );
+
         // Store mock webhook
-        self.active_webhooks.insert(webhook_id.clone(), Webhook {
-            webhook_id: webhook_id.clone(),
-            account_addresses: addresses,
-        });
-        
+        self.active_webhooks.insert(
+            webhook_id.clone(),
+            Webhook {
+                webhook_id: webhook_id.clone(),
+                account_addresses: addresses,
+            },
+        );
+
         Ok(webhook_id)
     }
 
@@ -276,10 +309,14 @@ impl HeliusManager {
     pub async fn add_addresses_to_webhook(
         &mut self,
         webhook_id: &str,
-        addresses: Vec<String>
+        addresses: Vec<String>,
     ) -> Result<()> {
         warn!("⚠️ Helius add addresses is stubbed");
-        info!("📝 Mock adding {} addresses to webhook {}", addresses.len(), webhook_id);
+        info!(
+            "📝 Mock adding {} addresses to webhook {}",
+            addresses.len(),
+            webhook_id
+        );
         Ok(())
     }
 
@@ -287,10 +324,14 @@ impl HeliusManager {
     pub async fn remove_addresses_from_webhook(
         &mut self,
         webhook_id: &str,
-        addresses: Vec<String>
+        addresses: Vec<String>,
     ) -> Result<()> {
         warn!("⚠️ Helius remove addresses is stubbed");
-        info!("📝 Mock removing {} addresses from webhook {}", addresses.len(), webhook_id);
+        info!(
+            "📝 Mock removing {} addresses from webhook {}",
+            addresses.len(),
+            webhook_id
+        );
         Ok(())
     }
 
@@ -303,7 +344,8 @@ impl HeliusManager {
     /// Get webhook by ID (STUB)
     pub async fn get_webhook_by_id(&self, webhook_id: &str) -> Result<Webhook> {
         warn!("⚠️ Helius get webhook by ID is stubbed");
-        self.active_webhooks.get(webhook_id)
+        self.active_webhooks
+            .get(webhook_id)
             .cloned()
             .ok_or_else(|| anyhow!("Webhook {} not found (stub)", webhook_id))
     }
@@ -312,7 +354,7 @@ impl HeliusManager {
     pub async fn edit_webhook(
         &mut self,
         webhook_id: &str,
-        _new_addresses: Vec<String>
+        _new_addresses: Vec<String>,
     ) -> Result<()> {
         warn!("⚠️ Helius edit webhook is stubbed");
         info!("📝 Mock editing webhook {}", webhook_id);

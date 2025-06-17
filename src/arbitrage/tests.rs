@@ -1,27 +1,27 @@
 #[cfg(test)]
 mod tests {
-    use crate::arbitrage::orchestrator::ArbitrageOrchestrator; // This will now be used
-    use crate::arbitrage::opportunity::{ArbHop, MultiHopArbOpportunity};
-    use crate::utils::{DexType, PoolInfo, PoolToken};
     use crate::arbitrage::analysis::FeeManager;
-    use crate::error::{ArbError, self};
-    use crate::dex::{DexClient, BannedPairsManager};
+    use crate::arbitrage::opportunity::{ArbHop, MultiHopArbOpportunity};
+    use crate::arbitrage::orchestrator::ArbitrageOrchestrator; // This will now be used
     use crate::dex::api::{Quote, SwapInfo};
+    use crate::dex::{BannedPairsManager, DexClient};
+    use crate::error::{self, ArbError};
+    use crate::utils::{DexType, PoolInfo, PoolToken};
     // use crate::arbitrage::detector::ArbitrageDetector; // TODO: Re-enable when banned pairs are implemented
-    use crate::solana::rpc::SolanaRpcClient;
     use crate::config::settings::Config;
-    use crate::local_metrics::Metrics;
-    use std::collections::HashMap;
-    use std::sync::Arc;
-    use tokio::sync::Mutex;
     use crate::dex::api::CommonSwapInfo; // For get_swap_instruction_enhanced
+    use crate::local_metrics::Metrics;
+    use crate::solana::rpc::SolanaRpcClient;
     use dashmap::DashMap;
-    use solana_sdk::{pubkey::Pubkey, instruction::Instruction};
-    use std::time::Duration;
-    use std::str::FromStr;
-    use std::fs;
     use log::info;
-    
+    use solana_sdk::{instruction::Instruction, pubkey::Pubkey};
+    use std::collections::HashMap;
+    use std::fs;
+    use std::str::FromStr;
+    use std::sync::Arc;
+    use std::time::Duration;
+    use tokio::sync::Mutex;
+
     // Ensure test output is visible
     use env_logger;
 
@@ -30,15 +30,17 @@ mod tests {
         // Create a temporary CSV file for testing
         let temp_csv_path = std::env::temp_dir().join("test_banned_pairs.csv");
         std::fs::write(&temp_csv_path, "token_a,token_b\n").unwrap_or_default();
-        
+
         Arc::new(
-            BannedPairsManager::new(temp_csv_path.to_string_lossy().to_string())
-                .unwrap_or_else(|_| {
+            BannedPairsManager::new(temp_csv_path.to_string_lossy().to_string()).unwrap_or_else(
+                |_| {
                     // Fallback: create with an empty temporary file
                     let fallback_path = std::env::temp_dir().join("empty_banned_pairs.csv");
                     std::fs::write(&fallback_path, "").unwrap_or_default();
-                    BannedPairsManager::new(fallback_path.to_string_lossy().to_string()).expect("Failed to create fallback BannedPairsManager")
-                })
+                    BannedPairsManager::new(fallback_path.to_string_lossy().to_string())
+                        .expect("Failed to create fallback BannedPairsManager")
+                },
+            ),
         )
     }
 
@@ -50,7 +52,7 @@ mod tests {
     fn dummy_config_for_multihop_test() -> Arc<Config> {
         let mut cfg = Config::test_default();
         cfg.min_profit_pct = 0.0000001; // set almost zero percentage for pct checks
-        cfg.sol_price_usd = Some(1.0);   // set SOL price to $1 simplifying USD conversion
+        cfg.sol_price_usd = Some(1.0); // set SOL price to $1 simplifying USD conversion
         cfg.default_priority_fee_lamports = 0; // no priority fee for this test
         cfg.degradation_profit_factor = Some(0.0000001); // very low profit threshold in USD
         Arc::new(cfg)
@@ -172,7 +174,10 @@ mod tests {
         println!("\n=== Test Pool Setup ===");
         for entry in pools.iter() {
             let (addr, pool) = (entry.key(), entry.value());
-            println!("Pool {}: {} ({}:{})", addr, pool.name, pool.token_a.symbol, pool.token_b.symbol);
+            println!(
+                "Pool {}: {} ({}:{})",
+                addr, pool.name, pool.token_a.symbol, pool.token_b.symbol
+            );
             println!(
                 "  token_a: {} {} (Dec: {}) reserve {}",
                 pool.token_a.symbol, pool.token_a.mint, pool.token_a.decimals, pool.token_a.reserve
@@ -187,7 +192,7 @@ mod tests {
 
         Arc::new(pools)
     }
-    
+
     // A simple mock for DexClient.
     struct MockDexClient {
         name: String,
@@ -195,17 +200,23 @@ mod tests {
 
     impl MockDexClient {
         pub fn new(name: &str) -> Self {
-            Self { name: name.to_string() }
+            Self {
+                name: name.to_string(),
+            }
         }
     }
 
     #[async_trait::async_trait]
     impl DexClient for MockDexClient {
-        fn get_name(&self) -> &str { 
-            &self.name 
+        fn get_name(&self) -> &str {
+            &self.name
         }
 
-        fn calculate_onchain_quote(&self, _pool: &PoolInfo, _input_amount: u64) -> anyhow::Result<Quote> {
+        fn calculate_onchain_quote(
+            &self,
+            _pool: &PoolInfo,
+            _input_amount: u64,
+        ) -> anyhow::Result<Quote> {
             Ok(Quote {
                 input_token: "SOL".to_string(),
                 output_token: "USDC".to_string(),
@@ -237,10 +248,14 @@ mod tests {
         ) -> Result<Instruction, error::ArbError> {
             // Return a mock instruction or an error for the stub
             // For simplicity, let's return an error indicating it's a stub
-            Err(ArbError::InstructionError("MockDexClient get_swap_instruction_enhanced not implemented".to_string()))
+            Err(ArbError::InstructionError(
+                "MockDexClient get_swap_instruction_enhanced not implemented".to_string(),
+            ))
         }
 
-        async fn health_check(&self) -> Result<crate::dex::api::DexHealthStatus, crate::error::ArbError> {
+        async fn health_check(
+            &self,
+        ) -> Result<crate::dex::api::DexHealthStatus, crate::error::ArbError> {
             Ok(crate::dex::api::DexHealthStatus {
                 is_healthy: true,
                 last_successful_request: Some(std::time::Instant::now()),
@@ -250,13 +265,15 @@ mod tests {
                 status_message: "Mock DEX client always healthy".to_string(),
             })
         }
-
     }
 
     #[tokio::test]
     async fn test_multihop_opportunity_detection_and_ban_logic() {
         // Initialize logger for test output.
-        let _ = env_logger::builder().is_test(true).filter_level(log::LevelFilter::Info).try_init();
+        let _ = env_logger::builder()
+            .is_test(true)
+            .filter_level(log::LevelFilter::Info)
+            .try_init();
 
         // Cleanup any previous ban log file.
         let ban_log_path = "banned_pairs_log.csv";
@@ -267,7 +284,8 @@ mod tests {
         let metrics_arc = dummy_metrics();
         let dummy_dex_clients: Vec<Arc<dyn DexClient>> = vec![Arc::new(MockDexClient::new("Mock"))];
 
-        let engine = Arc::new( // Renamed ArbitrageEngine to ArbitrageOrchestrator
+        let engine = Arc::new(
+            // Renamed ArbitrageEngine to ArbitrageOrchestrator
             ArbitrageOrchestrator::new(
                 pools_map_arc.clone(),
                 None,
@@ -275,10 +293,10 @@ mod tests {
                 config_arc.clone(),
                 metrics_arc.clone(),
                 dummy_dex_clients,
-                None, // executor
-                None, // batch_execution_engine
+                None,                         // executor
+                None,                         // batch_execution_engine
                 dummy_banned_pairs_manager(), // banned_pairs_manager
-            )
+            ),
         );
 
         engine.set_min_profit_threshold_pct(0.01).await; // Set threshold to 0.01%
@@ -288,18 +306,26 @@ mod tests {
             for entry in pools_map_arc.iter() {
                 let (_addr, pool_arc_val) = (entry.key(), entry.value());
                 let pool_val = pool_arc_val.as_ref();
-                println!("Notification: Using pool {} ({})", pool_val.name, pool_val.address);
-                println!("  token_a: {} {} reserve {}", pool_val.token_a.symbol, pool_val.token_a.mint, pool_val.token_a.reserve);
-                println!("  token_b: {} {} reserve {}", pool_val.token_b.symbol, pool_val.token_b.mint, pool_val.token_b.reserve);
+                println!(
+                    "Notification: Using pool {} ({})",
+                    pool_val.name, pool_val.address
+                );
+                println!(
+                    "  token_a: {} {} reserve {}",
+                    pool_val.token_a.symbol, pool_val.token_a.mint, pool_val.token_a.reserve
+                );
+                println!(
+                    "  token_b: {} {} reserve {}",
+                    pool_val.token_b.symbol, pool_val.token_b.mint, pool_val.token_b.reserve
+                );
                 println!("  dex_type: {:?}", pool_val.dex_type);
             }
         }
 
         // Discover direct opportunities.
         // Explicit type annotation for clarity, though it might be inferred after other fixes.
-        let opps_result: Result<Vec<MultiHopArbOpportunity>, ArbError> = engine
-            .detect_arbitrage_opportunities()
-            .await;
+        let opps_result: Result<Vec<MultiHopArbOpportunity>, ArbError> =
+            engine.detect_arbitrage_opportunities().await;
         println!("discover_direct_opportunities result: {:?}", opps_result);
 
         if let Ok(ref opps) = opps_result {
@@ -310,9 +336,16 @@ mod tests {
                 opp.log_summary();
             }
         } else {
-            println!("discover_direct_opportunities error: {:?}", opps_result.as_ref().err());
+            println!(
+                "discover_direct_opportunities error: {:?}",
+                opps_result.as_ref().err()
+            );
         }
-        assert!(opps_result.is_ok(), "Opportunity detection failed: {:?}", opps_result.err());
+        assert!(
+            opps_result.is_ok(),
+            "Opportunity detection failed: {:?}",
+            opps_result.err()
+        );
         let opps = opps_result.unwrap();
         assert!(!opps.is_empty(), "No 2-hop cyclic opportunities detected when at least one should exist based on test pool setup.");
 
@@ -338,7 +371,8 @@ mod tests {
         let config = dummy_config();
         let metrics_arc = dummy_metrics();
         let dummy_dex_clients: Vec<Arc<dyn DexClient>> = vec![Arc::new(MockDexClient::new("Mock"))];
-        let engine = ArbitrageOrchestrator::new( // Renamed ArbitrageEngine to ArbitrageOrchestrator
+        let engine = ArbitrageOrchestrator::new(
+            // Renamed ArbitrageEngine to ArbitrageOrchestrator
             pools_map.clone(),
             None,
             None,
@@ -371,7 +405,7 @@ mod tests {
                     output_token: "X".into(),
                     input_amount: 1.0,
                     expected_output: 1.0,
-                }
+                },
             ],
             pool_path: vec![existing_pool_arc.address, missing_pool_address],
             source_pool: existing_pool_arc.clone(),
@@ -382,10 +416,19 @@ mod tests {
             ..MultiHopArbOpportunity::default()
         };
 
-        let resolved_result = engine.resolve_pools_for_opportunity(&opportunity_with_missing_pool).await;
-        assert!(resolved_result.is_err(), "resolve_pools_for_opportunity should return Err if any pool in pool_path is missing");
+        let resolved_result = engine
+            .resolve_pools_for_opportunity(&opportunity_with_missing_pool)
+            .await;
+        assert!(
+            resolved_result.is_err(),
+            "resolve_pools_for_opportunity should return Err if any pool in pool_path is missing"
+        );
         if let Err(ArbError::PoolNotFound(addr_str)) = resolved_result {
-            assert_eq!(addr_str, missing_pool_address.to_string(), "Error should specify the missing pool address");
+            assert_eq!(
+                addr_str,
+                missing_pool_address.to_string(),
+                "Error should specify the missing pool address"
+            );
             println!("Correctly identified missing pool: {}", addr_str);
         } else {
             panic!("Expected PoolNotFound error, got {:?}", resolved_result);
@@ -400,9 +443,15 @@ mod tests {
         let config = Arc::new(config_mut);
         let metrics_arc = dummy_metrics();
         let dummy_dex_clients: Vec<Arc<dyn DexClient>> = vec![Arc::new(MockDexClient::new("Mock"))];
-        let dummy_sol_rpc_client = Some(Arc::new(SolanaRpcClient::new("http://dummy.rpc", vec![], 3, Duration::from_secs(1))));
+        let dummy_sol_rpc_client = Some(Arc::new(SolanaRpcClient::new(
+            "http://dummy.rpc",
+            vec![],
+            3,
+            Duration::from_secs(1),
+        )));
 
-        let engine = ArbitrageOrchestrator::new( // Renamed ArbitrageEngine to ArbitrageOrchestrator
+        let engine = ArbitrageOrchestrator::new(
+            // Renamed ArbitrageEngine to ArbitrageOrchestrator
             pools_map,
             None,
             dummy_sol_rpc_client,
@@ -410,24 +459,38 @@ mod tests {
             metrics_arc,
             dummy_dex_clients,
             None,
-            None, // batch_execution_engine
+            None,                         // batch_execution_engine
             dummy_banned_pairs_manager(), // banned_pairs_manager
         );
 
         let expected_threshold_pct = config.min_profit_pct * 100.0;
-        assert_eq!(engine.get_min_profit_threshold_pct().await, expected_threshold_pct);
+        assert_eq!(
+            engine.get_min_profit_threshold_pct().await,
+            expected_threshold_pct
+        );
 
         {
             let detector_guard = engine.detector.lock().await;
-            assert_eq!(detector_guard.get_min_profit_threshold_pct(), expected_threshold_pct);
+            assert_eq!(
+                detector_guard.get_min_profit_threshold_pct(),
+                expected_threshold_pct
+            );
         }
 
         let new_threshold_pct_val = 0.75;
-        engine.set_min_profit_threshold_pct(new_threshold_pct_val).await;
-        assert_eq!(engine.get_min_profit_threshold_pct().await, new_threshold_pct_val);
+        engine
+            .set_min_profit_threshold_pct(new_threshold_pct_val)
+            .await;
+        assert_eq!(
+            engine.get_min_profit_threshold_pct().await,
+            new_threshold_pct_val
+        );
         {
             let detector_guard_after = engine.detector.lock().await;
-            assert_eq!(detector_guard_after.get_min_profit_threshold_pct(), new_threshold_pct_val);
+            assert_eq!(
+                detector_guard_after.get_min_profit_threshold_pct(),
+                new_threshold_pct_val
+            );
         }
     }
 
@@ -441,7 +504,8 @@ mod tests {
         let mock_dex_client2 = Arc::new(MockDexClient::new("Orca"));
         let dex_clients: Vec<Arc<dyn DexClient>> = vec![mock_dex_client1, mock_dex_client2];
 
-        let engine = ArbitrageOrchestrator::new( // Renamed ArbitrageEngine to ArbitrageOrchestrator
+        let engine = ArbitrageOrchestrator::new(
+            // Renamed ArbitrageEngine to ArbitrageOrchestrator
             pools,
             None,
             None,
@@ -453,10 +517,17 @@ mod tests {
             dummy_banned_pairs_manager(),
         );
 
-        assert_eq!(engine.dex_providers.len(), 2, "Engine should have 2 DEX API clients");
+        assert_eq!(
+            engine.dex_providers.len(),
+            2,
+            "Engine should have 2 DEX API clients"
+        );
         assert_eq!(engine.dex_providers[0].get_name(), "Raydium");
         assert_eq!(engine.dex_providers[1].get_name(), "Orca");
-        info!("Engine initialized with {} DEX providers.", engine.dex_providers.len());
+        info!(
+            "Engine initialized with {} DEX providers.",
+            engine.dex_providers.len()
+        );
     }
 
     #[tokio::test]
@@ -465,7 +536,8 @@ mod tests {
         let config = dummy_config();
         let metrics_arc = dummy_metrics();
         let dummy_dex_clients: Vec<Arc<dyn DexClient>> = vec![Arc::new(MockDexClient::new("Mock"))];
-        let engine = ArbitrageOrchestrator::new( // Renamed ArbitrageEngine to ArbitrageOrchestrator
+        let engine = ArbitrageOrchestrator::new(
+            // Renamed ArbitrageEngine to ArbitrageOrchestrator
             pools_map.clone(),
             None,
             None,
@@ -476,11 +548,15 @@ mod tests {
             None,
             dummy_banned_pairs_manager(), // banned_pairs_manager
         );
-        let _ = engine.degradation_mode.load(std::sync::atomic::Ordering::Relaxed);
+        let _ = engine
+            .degradation_mode
+            .load(std::sync::atomic::Ordering::Relaxed);
         assert!(!engine.dex_providers.is_empty() || engine.dex_providers.len() == 0);
         let _ = engine.get_min_profit_threshold_pct().await;
         let _ = engine.discover_multihop_opportunities().await;
-        let _ = engine.with_pool_guard_async("test", false, |_pools| async { Ok(()) }).await;
+        let _ = engine
+            .with_pool_guard_async("test", false, |_pools| async { Ok(()) })
+            .await;
         let _ = engine.update_pools(HashMap::new()).await;
         let _ = engine.get_current_status_string().await;
         let _ = engine.start_services(None).await;
@@ -513,20 +589,28 @@ mod tests {
         let sol_price_usd = 150.0; // Dummy SOL price for the test
 
         // Call the public method on FeeManager (now async)
-        let fee_breakdown_result = fee_manager.calculate_multihop_fees(
-            &[&pool], // For a single pool, pass it as a slice
-            &input_amt,
-            sol_price_usd
-        ).await;
-        
+        let fee_breakdown_result = fee_manager
+            .calculate_multihop_fees(
+                &[&pool], // For a single pool, pass it as a slice
+                &input_amt,
+                sol_price_usd,
+            )
+            .await;
+
         // Handle the Result and assert something about fee_breakdown
         match fee_breakdown_result {
             Ok(fee_breakdown) => {
-                assert!(fee_breakdown.total_cost >= 0.0, "Total cost should be non-negative");
+                assert!(
+                    fee_breakdown.total_cost >= 0.0,
+                    "Total cost should be non-negative"
+                );
             }
             Err(e) => {
                 // In a test environment, we might expect some failures due to RPC issues
-                println!("Fee calculation failed (expected in test environment): {:?}", e);
+                println!(
+                    "Fee calculation failed (expected in test environment): {:?}",
+                    e
+                );
             }
         }
 

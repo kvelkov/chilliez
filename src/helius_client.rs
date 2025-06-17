@@ -1,21 +1,18 @@
 // src/helius_client.rs
 //! Enhanced Helius SDK Client Manager with Production Rate Limiting
-//! 
+//!
 //! Provides a centralized interface for interacting with the Helius SDK
-//! with advanced rate limiting (3000 req/h from 6.7M available) and 
+//! with advanced rate limiting (3000 req/h from 6.7M available) and
 //! production-grade error handling.
 
-use anyhow::{Result, Context};
-use log::{warn, info, error, debug};
+use anyhow::{Context, Result};
+use log::{debug, error, info, warn};
 use std::sync::Arc;
 use std::time::Instant;
 use tracing::instrument;
 
 // Import our new API management infrastructure
-use crate::api::{
-    AdvancedRateLimiter, 
-    RequestPriority,
-};
+use crate::api::{AdvancedRateLimiter, RequestPriority};
 
 // Temporary stub types to replace Helius SDK while dependency conflicts are resolved
 #[derive(Debug, Clone)]
@@ -39,10 +36,10 @@ pub struct HeliusFactory {
 impl Helius {
     pub fn new(_api_key: &str, cluster: Cluster) -> Result<Self> {
         warn!("⚠️ Using enhanced stub Helius client with production rate limiting");
-        
+
         // Initialize with production rate limiting (3000 req/h from 6.7M available)
         let rate_limiter = Arc::new(AdvancedRateLimiter::new_helius());
-        
+
         Ok(Helius {
             rate_limiter,
             cluster,
@@ -52,31 +49,42 @@ impl Helius {
     pub fn rpc(&self) -> StubRpcClient {
         StubRpcClient::new(self.rate_limiter.clone())
     }
-    
+
     /// Get rate limiter for external usage
     pub fn rate_limiter(&self) -> Arc<AdvancedRateLimiter> {
         self.rate_limiter.clone()
     }
-    
+
     /// Execute a rate-limited request
     #[instrument(skip(self, operation), fields(endpoint = %endpoint))]
-    pub async fn execute_rate_limited<T, F, Fut>(&self, endpoint: &str, priority: RequestPriority, operation: F) -> Result<T>
+    pub async fn execute_rate_limited<T, F, Fut>(
+        &self,
+        endpoint: &str,
+        priority: RequestPriority,
+        operation: F,
+    ) -> Result<T>
     where
         F: FnOnce() -> Fut,
         Fut: std::future::Future<Output = Result<T>>,
     {
         let start_time = Instant::now();
-        
+
         // Acquire rate limit permit
-        let permit = self.rate_limiter.acquire_permit(priority, endpoint).await
+        let permit = self
+            .rate_limiter
+            .acquire_permit(priority, endpoint)
+            .await
             .context("Failed to acquire rate limit permit")?;
-        
+
         // Execute the operation
         match operation().await {
             Ok(result) => {
                 permit.mark_success(priority).await;
                 let duration_ms = start_time.elapsed().as_millis() as u64;
-                debug!("✅ Helius request succeeded: {} ({}ms)", endpoint, duration_ms);
+                debug!(
+                    "✅ Helius request succeeded: {} ({}ms)",
+                    endpoint, duration_ms
+                );
                 Ok(result)
             }
             Err(e) => {
@@ -91,7 +99,7 @@ impl Helius {
             }
         }
     }
-    
+
     /// Get current rate limiting statistics
     pub async fn get_rate_stats(&self) -> crate::api::RateLimitStats {
         self.rate_limiter.get_usage_stats().await
@@ -101,10 +109,10 @@ impl Helius {
 impl HeliusFactory {
     pub fn new(api_key: &str) -> Self {
         warn!("⚠️ Using enhanced stub HeliusFactory with production rate limiting");
-        
+
         // Initialize factory with production rate limiting
         let rate_limiter = Arc::new(AdvancedRateLimiter::new_helius());
-        
+
         HeliusFactory {
             api_key: api_key.to_string(),
             rate_limiter,
@@ -117,7 +125,7 @@ impl HeliusFactory {
             cluster,
         })
     }
-    
+
     /// Get factory rate limiter
     pub fn rate_limiter(&self) -> Arc<AdvancedRateLimiter> {
         self.rate_limiter.clone()
@@ -137,41 +145,55 @@ impl StubRpcClient {
         self.execute_rpc_call("get_epoch_info", RequestPriority::Medium, || async {
             warn!("⚠️ Using stub RPC client - returning dummy epoch info");
             Ok(StubEpochInfo)
-        }).await
+        })
+        .await
     }
-    
+
     pub async fn get_slot(&self) -> Result<u64> {
         self.execute_rpc_call("get_slot", RequestPriority::High, || async {
             warn!("⚠️ Using stub RPC client - returning dummy slot");
             Ok(123456789u64)
-        }).await
+        })
+        .await
     }
-    
+
     pub async fn get_account_info(&self, _pubkey: &str) -> Result<StubAccountInfo> {
         self.execute_rpc_call("get_account_info", RequestPriority::High, || async {
             warn!("⚠️ Using stub RPC client - returning dummy account info");
             Ok(StubAccountInfo)
-        }).await
+        })
+        .await
     }
-    
+
     /// Execute an RPC call with rate limiting
-    async fn execute_rpc_call<T, F, Fut>(&self, method: &str, priority: RequestPriority, operation: F) -> Result<T>
+    async fn execute_rpc_call<T, F, Fut>(
+        &self,
+        method: &str,
+        priority: RequestPriority,
+        operation: F,
+    ) -> Result<T>
     where
         F: FnOnce() -> Fut,
         Fut: std::future::Future<Output = Result<T>>,
     {
         let start_time = Instant::now();
-        
+
         // Acquire rate limit permit
-        let permit = self.rate_limiter.acquire_permit(priority, method).await
+        let permit = self
+            .rate_limiter
+            .acquire_permit(priority, method)
+            .await
             .context("Failed to acquire rate limit permit for RPC call")?;
-        
+
         // Execute the operation
         match operation().await {
             Ok(result) => {
                 permit.mark_success(priority).await;
                 let duration_ms = start_time.elapsed().as_millis() as u64;
-                debug!("✅ Helius RPC call succeeded: {} ({}ms)", method, duration_ms);
+                debug!(
+                    "✅ Helius RPC call succeeded: {} ({}ms)",
+                    method, duration_ms
+                );
                 Ok(result)
             }
             Err(e) => {
@@ -205,22 +227,25 @@ impl HeliusConfig {
     pub fn from_env() -> Result<Self> {
         let api_key = std::env::var("HELIUS_API_KEY")
             .context("HELIUS_API_KEY environment variable is required")?;
-            
-        let cluster_str = std::env::var("HELIUS_CLUSTER")
-            .unwrap_or_else(|_| "mainnet-beta".to_string());
-            
+
+        let cluster_str =
+            std::env::var("HELIUS_CLUSTER").unwrap_or_else(|_| "mainnet-beta".to_string());
+
         let cluster = match cluster_str.as_str() {
             "mainnet-beta" | "mainnet" => Cluster::MainnetBeta,
             "devnet" => Cluster::Devnet,
             _ => {
-                warn!("Unknown cluster '{}', defaulting to mainnet-beta", cluster_str);
+                warn!(
+                    "Unknown cluster '{}', defaulting to mainnet-beta",
+                    cluster_str
+                );
                 Cluster::MainnetBeta
             }
         };
-        
+
         let webhook_url = std::env::var("HELIUS_WEBHOOK_URL").ok();
         let webhook_secret = std::env::var("HELIUS_WEBHOOK_SECRET").ok();
-        
+
         Ok(HeliusConfig {
             api_key,
             cluster,
@@ -239,54 +264,51 @@ pub struct HeliusManager {
 impl HeliusManager {
     /// Create a new Helius manager with the given configuration
     pub fn new(config: HeliusConfig) -> Result<Self> {
-        info!("Initializing Helius client for cluster: {:?}", config.cluster);
-        
+        info!(
+            "Initializing Helius client for cluster: {:?}",
+            config.cluster
+        );
+
         let client = Helius::new(&config.api_key, config.cluster.clone())
             .context("Failed to create Helius client")?;
-            
+
         debug!("Helius client created successfully");
-        
-        Ok(HeliusManager {
-            client,
-            config,
-        })
+
+        Ok(HeliusManager { client, config })
     }
-    
+
     /// Create a new Helius manager from environment variables
     pub fn from_env() -> Result<Self> {
         let config = HeliusConfig::from_env()?;
         Self::new(config)
     }
-    
+
     /// Create a Helius manager with factory support for multiple clients
     pub fn with_factory(config: HeliusConfig) -> Result<Self> {
         info!("Initializing Helius client with factory support");
-        
+
         let factory = HeliusFactory::new(&config.api_key);
         let client = factory.create(config.cluster.clone())?;
-        
+
         debug!("Helius client with factory created successfully");
-        
-        Ok(HeliusManager {
-            client,
-            config,
-        })
+
+        Ok(HeliusManager { client, config })
     }
-    
+
     /// Get a reference to the Helius client
     pub fn client(&self) -> &Helius {
         &self.client
     }
-    
+
     /// Get the configuration
     pub fn config(&self) -> &HeliusConfig {
         &self.config
     }
-    
+
     /// Test the connection to Helius services
     pub async fn test_connection(&self) -> Result<bool> {
         info!("Testing Helius connection...");
-        
+
         // Use stub implementation during dependency conflicts
         match self.client.rpc().get_epoch_info().await {
             Ok(_) => {
@@ -299,7 +321,7 @@ impl HeliusManager {
             }
         }
     }
-    
+
     /// Get client information for monitoring
     pub fn get_client_info(&self) -> ClientInfo {
         ClientInfo {
@@ -309,11 +331,13 @@ impl HeliusManager {
             has_factory: false,
         }
     }
-    
+
     /// Create additional clients if using factory
     pub fn create_additional_client(&self, _cluster: Cluster) -> Result<Helius> {
         error!("Cannot create additional client without factory");
-        Err(anyhow::anyhow!("HeliusManager was not created with factory support"))
+        Err(anyhow::anyhow!(
+            "HeliusManager was not created with factory support"
+        ))
     }
 }
 
@@ -328,7 +352,9 @@ pub struct ClientInfo {
 
 impl std::fmt::Display for ClientInfo {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "HeliusClient(key={}...cluster={}, webhook={}, factory={})",
+        write!(
+            f,
+            "HeliusClient(key={}...cluster={}, webhook={}, factory={})",
             &self.api_key_prefix[..8],
             self.cluster,
             self.webhook_url.as_deref().unwrap_or("none"),
@@ -357,18 +383,18 @@ pub fn create_shared_helius_manager_with_factory() -> Result<SharedHeliusManager
 mod tests {
     use super::*;
     use std::env;
-    
+
     #[test]
     fn test_helius_config_creation() {
         // Set up test environment
         env::set_var("HELIUS_API_KEY", "test-key");
         env::set_var("HELIUS_CLUSTER", "devnet");
-        
+
         let config = HeliusConfig::from_env().unwrap();
         assert_eq!(config.api_key, "test-key");
         assert!(matches!(config.cluster, Cluster::Devnet));
     }
-    
+
     #[tokio::test]
     async fn test_helius_client_creation() {
         let config = HeliusConfig {
@@ -377,7 +403,7 @@ mod tests {
             webhook_url: None,
             webhook_secret: None,
         };
-        
+
         // This will fail without a real API key, but tests the creation logic
         let result = HeliusManager::new(config);
         // We expect this to work even with invalid key for creation

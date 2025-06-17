@@ -1,18 +1,20 @@
 //! Jupiter Integration Manager
-//! 
+//!
 //! Manages Jupiter fallback functionality with intelligent caching and monitoring.
 //! Provides a high-level interface for Jupiter operations with the arbitrage system.
 
 use crate::{
-    arbitrage::jupiter::cache::{JupiterQuoteCache, CacheConfig, CacheKey},
-    arbitrage::jupiter::routes::{JupiterRouteOptimizer, RouteOptimizationConfig, MultiRouteResult},
+    arbitrage::jupiter::cache::{CacheConfig, CacheKey, JupiterQuoteCache},
+    arbitrage::jupiter::routes::{
+        JupiterRouteOptimizer, MultiRouteResult, RouteOptimizationConfig,
+    },
     config::settings::Config,
     dex::clients::jupiter::JupiterClient,
     dex::clients::jupiter_api::QuoteResponse,
     error::ArbError,
     local_metrics::Metrics,
 };
-use log::{debug, info, warn, error};
+use log::{debug, error, info, warn};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -117,7 +119,7 @@ impl JupiterFallbackManager {
         metrics: Arc<Mutex<Metrics>>,
     ) -> Self {
         info!("🪐 Initializing Jupiter fallback manager with caching");
-        
+
         let quote_cache = JupiterQuoteCache::new(config.cache.clone());
         let route_optimizer = if config.route_optimization.enabled {
             Some(JupiterRouteOptimizer::new(
@@ -128,7 +130,7 @@ impl JupiterFallbackManager {
         } else {
             None
         };
-        
+
         Self {
             jupiter_client,
             quote_cache,
@@ -138,7 +140,7 @@ impl JupiterFallbackManager {
             request_counter: Arc::new(Mutex::new(0)),
         }
     }
-    
+
     /// Get a quote with intelligent caching
     pub async fn get_quote_with_cache(
         &self,
@@ -148,12 +150,14 @@ impl JupiterFallbackManager {
         slippage_bps: Option<u16>,
     ) -> Result<QuoteResponse, ArbError> {
         if !self.config.fallback_enabled {
-            return Err(ArbError::DexError("Jupiter fallback is disabled".to_string()));
+            return Err(ArbError::DexError(
+                "Jupiter fallback is disabled".to_string(),
+            ));
         }
-        
+
         let start_time = std::time::Instant::now();
         let slippage = slippage_bps.unwrap_or(self.config.max_slippage_bps);
-        
+
         // Create cache key
         let cache_key = CacheKey::from_params(
             input_mint,
@@ -162,7 +166,7 @@ impl JupiterFallbackManager {
             slippage,
             self.config.cache.amount_bucket_size,
         );
-        
+
         // Increment request counter and check for stats logging
         {
             let mut counter = self.request_counter.lock().await;
@@ -171,56 +175,65 @@ impl JupiterFallbackManager {
                 self.log_performance_stats().await;
             }
         }
-        
+
         // Try cache first
         if let Some(cached_quote) = self.quote_cache.get_quote(&cache_key).await {
             let latency = start_time.elapsed().as_millis() as u64;
-            debug!("🎯 Jupiter cache hit: {}→{} ({}ms)", 
-                   input_mint.chars().take(6).collect::<String>(),
-                   output_mint.chars().take(6).collect::<String>(),
-                   latency);
-            
+            debug!(
+                "🎯 Jupiter cache hit: {}→{} ({}ms)",
+                input_mint.chars().take(6).collect::<String>(),
+                output_mint.chars().take(6).collect::<String>(),
+                latency
+            );
+
             self.record_metrics(true, latency).await;
             return Ok(cached_quote);
         }
-        
+
         // Cache miss - check for volatility before making API call
         if self.quote_cache.should_invalidate_for_volatility().await {
-            self.quote_cache.clear_volatile_cache("High market volatility detected").await;
+            self.quote_cache
+                .clear_volatile_cache("High market volatility detected")
+                .await;
         }
-        
+
         // Make Jupiter API call
-        debug!("📡 Jupiter cache miss - making API call for {}→{}", 
-               input_mint.chars().take(6).collect::<String>(),
-               output_mint.chars().take(6).collect::<String>());
-        
+        debug!(
+            "📡 Jupiter cache miss - making API call for {}→{}",
+            input_mint.chars().take(6).collect::<String>(),
+            output_mint.chars().take(6).collect::<String>()
+        );
+
         let api_start = std::time::Instant::now();
-        let quote_result = self.jupiter_client.get_quote_with_fallback(
-            input_mint,
-            output_mint,
-            amount,
-            slippage,
-        ).await;
-        
+        let quote_result = self
+            .jupiter_client
+            .get_quote_with_fallback(input_mint, output_mint, amount, slippage)
+            .await;
+
         let api_latency = api_start.elapsed().as_millis() as u64;
         let total_latency = start_time.elapsed().as_millis() as u64;
-        
+
         match quote_result {
             Ok(quote) => {
                 // Store in cache for future use
                 self.quote_cache.store_quote(cache_key, quote.clone()).await;
-                
-                debug!("✅ Jupiter API success: {}→{} (API: {}ms, Total: {}ms)", 
-                       input_mint.chars().take(6).collect::<String>(),
-                       output_mint.chars().take(6).collect::<String>(),
-                       api_latency, total_latency);
-                
+
+                debug!(
+                    "✅ Jupiter API success: {}→{} (API: {}ms, Total: {}ms)",
+                    input_mint.chars().take(6).collect::<String>(),
+                    output_mint.chars().take(6).collect::<String>(),
+                    api_latency,
+                    total_latency
+                );
+
                 // Check for performance warnings
                 if api_latency > self.config.monitoring.max_acceptable_latency_ms {
-                    warn!("⚠️ Jupiter API slow response: {}ms (threshold: {}ms)",
-                          api_latency, self.config.monitoring.max_acceptable_latency_ms);
+                    warn!(
+                        "⚠️ Jupiter API slow response: {}ms (threshold: {}ms)",
+                        api_latency, self.config.monitoring.max_acceptable_latency_ms
+                    );
                 }
-                
+
                 self.record_metrics(false, total_latency).await;
                 Ok(quote)
             }
@@ -231,7 +244,7 @@ impl JupiterFallbackManager {
             }
         }
     }
-    
+
     /// Get the best route using multi-route optimization
     pub async fn get_optimal_route(
         &self,
@@ -241,16 +254,18 @@ impl JupiterFallbackManager {
         slippage_bps: Option<u16>,
     ) -> Result<MultiRouteResult, ArbError> {
         if !self.config.fallback_enabled {
-            return Err(ArbError::JupiterApiError("Jupiter fallback disabled".to_string()));
+            return Err(ArbError::JupiterApiError(
+                "Jupiter fallback disabled".to_string(),
+            ));
         }
 
         let slippage = slippage_bps.unwrap_or(self.config.max_slippage_bps);
-        
+
         // Increment request counter for monitoring
         {
             let mut counter = self.request_counter.lock().await;
             *counter += 1;
-            
+
             // Log statistics periodically
             if *counter % self.config.monitoring.log_stats_every_n_requests == 0 {
                 self.log_performance_stats().await;
@@ -260,12 +275,16 @@ impl JupiterFallbackManager {
         // Use route optimizer if available
         if let Some(ref optimizer) = self.route_optimizer {
             debug!("🛣️  Using route optimization for quote request");
-            optimizer.find_optimal_route(input_mint, output_mint, amount, slippage).await
+            optimizer
+                .find_optimal_route(input_mint, output_mint, amount, slippage)
+                .await
         } else {
             // Fallback to single route via existing cache method
             debug!("📡 Using single route fallback (optimization disabled)");
-            let quote = self.get_quote_with_cache(input_mint, output_mint, amount, Some(slippage)).await?;
-            
+            let quote = self
+                .get_quote_with_cache(input_mint, output_mint, amount, Some(slippage))
+                .await?;
+
             // Convert single quote to MultiRouteResult format
             Ok(MultiRouteResult {
                 best_route: self.create_route_evaluation_from_quote(quote).await,
@@ -294,9 +313,14 @@ impl JupiterFallbackManager {
     }
 
     /// Create a route evaluation from a single quote (for compatibility)
-    async fn create_route_evaluation_from_quote(&self, quote: QuoteResponse) -> crate::arbitrage::jupiter::routes::RouteEvaluation {
-        use crate::arbitrage::jupiter::routes::{RouteEvaluation, RouteScoreComponents, RouteReliability};
-        
+    async fn create_route_evaluation_from_quote(
+        &self,
+        quote: QuoteResponse,
+    ) -> crate::arbitrage::jupiter::routes::RouteEvaluation {
+        use crate::arbitrage::jupiter::routes::{
+            RouteEvaluation, RouteReliability, RouteScoreComponents,
+        };
+
         RouteEvaluation {
             score: 0.8, // Default score for single route
             score_components: RouteScoreComponents {
@@ -318,30 +342,34 @@ impl JupiterFallbackManager {
             quote,
         }
     }
-    
+
     /// Check if Jupiter quote meets minimum profit requirements
     pub fn meets_profit_threshold(&self, quote: &QuoteResponse, input_amount: u64) -> bool {
         if let Ok(output_amount) = quote.out_amount.parse::<u64>() {
             let profit_ratio = output_amount as f64 / input_amount as f64;
             let profit_pct = (profit_ratio - 1.0) * 100.0;
-            
+
             if profit_pct >= self.config.min_profit_pct {
-                debug!("💰 Jupiter quote meets profit threshold: {:.2}% (min: {:.2}%)",
-                       profit_pct, self.config.min_profit_pct);
+                debug!(
+                    "💰 Jupiter quote meets profit threshold: {:.2}% (min: {:.2}%)",
+                    profit_pct, self.config.min_profit_pct
+                );
                 return true;
             } else {
-                debug!("📉 Jupiter quote below profit threshold: {:.2}% (min: {:.2}%)",
-                       profit_pct, self.config.min_profit_pct);
+                debug!(
+                    "📉 Jupiter quote below profit threshold: {:.2}% (min: {:.2}%)",
+                    profit_pct, self.config.min_profit_pct
+                );
             }
         }
         false
     }
-    
+
     /// Get comprehensive cache statistics
     pub async fn get_cache_statistics(&self) -> CacheStatistics {
         let cache_stats = self.quote_cache.get_cache_stats().await;
         let cache_metrics = self.quote_cache.get_metrics().await;
-        
+
         CacheStatistics {
             hit_rate: cache_stats.hit_rate,
             total_requests: cache_stats.total_requests,
@@ -355,13 +383,13 @@ impl JupiterFallbackManager {
             is_healthy: cache_stats.is_healthy(self.config.monitoring.min_acceptable_hit_rate),
         }
     }
-    
+
     /// Force clear cache (useful for testing or emergency situations)
     pub async fn clear_cache(&self, reason: &str) {
         self.quote_cache.clear_volatile_cache(reason).await;
         info!("🗑️  Jupiter cache manually cleared: {}", reason);
     }
-    
+
     /// Record performance metrics
     async fn record_metrics(&self, was_cache_hit: bool, latency_ms: u64) {
         if let Ok(metrics) = self.metrics.try_lock() {
@@ -374,29 +402,31 @@ impl JupiterFallbackManager {
             }
         }
     }
-    
+
     /// Log performance statistics periodically
     async fn log_performance_stats(&self) {
         let stats = self.get_cache_statistics().await;
-        
+
         if stats.is_healthy {
             info!("📊 Jupiter performance: {}", stats.summary());
         } else {
             warn!("⚠️ Jupiter performance issues: {}", stats.summary());
-            
+
             if stats.hit_rate < self.config.monitoring.min_acceptable_hit_rate {
-                warn!("🎯 Cache hit rate below threshold: {:.1}% < {:.1}%",
-                      stats.hit_rate * 100.0,
-                      self.config.monitoring.min_acceptable_hit_rate * 100.0);
+                warn!(
+                    "🎯 Cache hit rate below threshold: {:.1}% < {:.1}%",
+                    stats.hit_rate * 100.0,
+                    self.config.monitoring.min_acceptable_hit_rate * 100.0
+                );
             }
         }
     }
-    
+
     /// Get configuration for monitoring/debugging
     pub fn get_config(&self) -> &JupiterIntegrationConfig {
         &self.config
     }
-    
+
     /// Update cache configuration dynamically
     pub async fn update_cache_config(&mut self, new_config: CacheConfig) {
         self.config.cache = new_config;
@@ -434,7 +464,7 @@ impl CacheStatistics {
             self.is_healthy
         )
     }
-    
+
     /// Get cache efficiency rating
     pub fn efficiency_rating(&self) -> CacheEfficiency {
         if self.hit_rate >= 0.8 {
@@ -467,10 +497,19 @@ mod tests {
     fn test_jupiter_integration_config_from_system_config() {
         let system_config = Config::test_default();
         let jupiter_config = JupiterIntegrationConfig::from(&system_config);
-        
-        assert_eq!(jupiter_config.fallback_enabled, system_config.jupiter_fallback_enabled);
-        assert_eq!(jupiter_config.min_profit_pct, system_config.jupiter_fallback_min_profit_pct);
-        assert_eq!(jupiter_config.max_slippage_bps, system_config.jupiter_slippage_tolerance_bps);
+
+        assert_eq!(
+            jupiter_config.fallback_enabled,
+            system_config.jupiter_fallback_enabled
+        );
+        assert_eq!(
+            jupiter_config.min_profit_pct,
+            system_config.jupiter_fallback_min_profit_pct
+        );
+        assert_eq!(
+            jupiter_config.max_slippage_bps,
+            system_config.jupiter_slippage_tolerance_bps
+        );
         assert!(jupiter_config.cache.enabled);
     }
 
@@ -488,14 +527,17 @@ mod tests {
             volatility_clears: 0,
             is_healthy: true,
         };
-        
-        assert_eq!(excellent_stats.efficiency_rating(), CacheEfficiency::Excellent);
-        
+
+        assert_eq!(
+            excellent_stats.efficiency_rating(),
+            CacheEfficiency::Excellent
+        );
+
         let poor_stats = CacheStatistics {
             hit_rate: 0.3,
             ..excellent_stats
         };
-        
+
         assert_eq!(poor_stats.efficiency_rating(), CacheEfficiency::Poor);
     }
 }

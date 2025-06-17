@@ -1,20 +1,22 @@
 //! Raydium V4 AMM Integration Tests
-//! 
+//!
 //! This test suite validates the complete Raydium integration including:
 //! - Production-grade math calculations
 //! - Swap instruction building
 //! - Pool discovery and parsing
 //! - Error handling and edge cases
 
+use anyhow::Result;
 use solana_arb_bot::{
     dex::{
-        api::{DexClient, CommonSwapInfo},
-        clients::raydium::{RaydiumClient, RaydiumPoolParser, RAYDIUM_LIQUIDITY_POOL_V4_PROGRAM_ID},
+        api::{CommonSwapInfo, DexClient},
+        clients::raydium::{
+            RaydiumClient, RaydiumPoolParser, RAYDIUM_LIQUIDITY_POOL_V4_PROGRAM_ID,
+        },
         math::raydium,
     },
-    utils::{PoolInfo, PoolToken, DexType, PoolParser},
+    utils::{DexType, PoolInfo, PoolParser, PoolToken},
 };
-use anyhow::Result;
 use solana_sdk::pubkey::Pubkey;
 use std::{str::FromStr, sync::Arc};
 
@@ -31,11 +33,11 @@ async fn test_raydium_client_basic_functionality() -> Result<()> {
 async fn test_raydium_math_calculations() -> Result<()> {
     // Test normal swap calculation
     let result = raydium::calculate_raydium_swap_output(
-        1_000_000,    // 1 token input (6 decimals)
-        100_000_000,  // 100 tokens in pool
-        200_000_000,  // 200 tokens in pool
-        25,           // 0.25% fee (25 basis points)
-        10_000,       // fee denominator
+        1_000_000,   // 1 token input (6 decimals)
+        100_000_000, // 100 tokens in pool
+        200_000_000, // 200 tokens in pool
+        25,          // 0.25% fee (25 basis points)
+        10_000,      // fee denominator
     )?;
 
     assert!(result.output_amount > 0);
@@ -47,8 +49,13 @@ async fn test_raydium_math_calculations() -> Result<()> {
     let expected_fee = 1_000_000 * 25 / 10_000;
     assert!((result.fee_amount as i64 - expected_fee as i64).abs() < 10);
 
-    println!("✅ Raydium swap calculation - Input: {}, Output: {}, Fee: {}, Price Impact: {:.4}%", 
-        1_000_000, result.output_amount, result.fee_amount, result.price_impact * 100.0);
+    println!(
+        "✅ Raydium swap calculation - Input: {}, Output: {}, Fee: {}, Price Impact: {:.4}%",
+        1_000_000,
+        result.output_amount,
+        result.fee_amount,
+        result.price_impact * 100.0
+    );
 
     Ok(())
 }
@@ -57,19 +64,23 @@ async fn test_raydium_math_calculations() -> Result<()> {
 #[tokio::test]
 async fn test_raydium_reverse_calculation() -> Result<()> {
     let result = raydium::calculate_raydium_input_for_output(
-        500_000,      // Want 0.5 tokens output
-        100_000_000,  // 100 tokens in pool
-        200_000_000,  // 200 tokens in pool  
-        25,           // 0.25% fee
-        10_000,       // fee denominator
+        500_000,     // Want 0.5 tokens output
+        100_000_000, // 100 tokens in pool
+        200_000_000, // 200 tokens in pool
+        25,          // 0.25% fee
+        10_000,      // fee denominator
     )?;
 
     assert_eq!(result.output_amount, 500_000);
     assert!(result.fee_amount > 0);
     assert!(result.price_impact >= 0.0);
 
-    println!("✅ Raydium reverse calculation - Target Output: {}, Required Input: {}, Fee: {}", 
-        500_000, result.output_amount + result.fee_amount, result.fee_amount);
+    println!(
+        "✅ Raydium reverse calculation - Target Output: {}, Required Input: {}, Fee: {}",
+        500_000,
+        result.output_amount + result.fee_amount,
+        result.fee_amount
+    );
 
     Ok(())
 }
@@ -101,7 +112,10 @@ async fn test_raydium_slippage_calculations() -> Result<()> {
     let min_output = raydium::calculate_minimum_output_with_slippage(1_000_000, 500); // 5% slippage
     assert_eq!(min_output, 950_000); // Should be 95% of expected
 
-    println!("✅ Raydium slippage calculation - Expected: 1000000, Actual: 980000, Slippage: {:.4}%", slippage * 100.0);
+    println!(
+        "✅ Raydium slippage calculation - Expected: 1000000, Actual: 980000, Slippage: {:.4}%",
+        slippage * 100.0
+    );
     Ok(())
 }
 
@@ -109,7 +123,7 @@ async fn test_raydium_slippage_calculations() -> Result<()> {
 #[tokio::test]
 async fn test_raydium_client_quote_calculation() -> Result<()> {
     let client = RaydiumClient::new();
-    
+
     // Create mock pool info for testing
     let mock_pool = PoolInfo {
         address: Pubkey::from_str("11111111111111111111111111111112")?,
@@ -145,17 +159,19 @@ async fn test_raydium_client_quote_calculation() -> Result<()> {
 
     // Test quote calculation
     let quote = client.calculate_onchain_quote(&mock_pool, 1_000_000_000)?; // 1 SOL
-    
+
     assert!(quote.output_amount > 0);
     assert_eq!(quote.input_amount, 1_000_000_000);
     assert_eq!(quote.dex, "Raydium");
     assert!(quote.slippage_estimate.is_some());
     assert!(quote.slippage_estimate.unwrap() >= 0.0);
 
-    println!("✅ Raydium quote - Input: {} SOL, Output: {} USDC, Slippage: {:.4}%", 
-        quote.input_amount as f64 / 1e9, 
+    println!(
+        "✅ Raydium quote - Input: {} SOL, Output: {} USDC, Slippage: {:.4}%",
+        quote.input_amount as f64 / 1e9,
         quote.output_amount as f64 / 1e6,
-        quote.slippage_estimate.unwrap() * 100.0);
+        quote.slippage_estimate.unwrap() * 100.0
+    );
 
     Ok(())
 }
@@ -164,7 +180,7 @@ async fn test_raydium_client_quote_calculation() -> Result<()> {
 #[tokio::test]
 async fn test_raydium_swap_instruction_building() -> Result<()> {
     let client = RaydiumClient::new();
-    
+
     // Create mock pool info
     let mock_pool = PoolInfo {
         address: Pubkey::from_str("58oQChx4yWmvKdwLLZzBi4ChoCc2fqCUWBkwMihLYQo2")?, // Real Raydium SOL/USDC pool
@@ -205,22 +221,27 @@ async fn test_raydium_swap_instruction_building() -> Result<()> {
         destination_token_mint: mock_pool.token_b.mint,
         user_source_token_account: Pubkey::from_str("11111111111111111111111111111115")?,
         user_destination_token_account: Pubkey::from_str("11111111111111111111111111111116")?,
-        input_amount: 1_000_000_000, // 1 SOL
+        input_amount: 1_000_000_000,       // 1 SOL
         minimum_output_amount: 90_000_000, // 90 USDC minimum
-        slippage_bps: Some(500), // 5% slippage tolerance
+        slippage_bps: Some(500),           // 5% slippage tolerance
         priority_fee_lamports: Some(5000), // 0.000005 SOL priority fee
     };
 
     // Test instruction building
-    let instruction = client.get_swap_instruction_enhanced(&swap_info, Arc::new(mock_pool)).await?;
-    
+    let instruction = client
+        .get_swap_instruction_enhanced(&swap_info, Arc::new(mock_pool))
+        .await?;
+
     assert_eq!(instruction.program_id, RAYDIUM_LIQUIDITY_POOL_V4_PROGRAM_ID);
     assert!(instruction.accounts.len() >= 10); // Should have all required accounts
     assert!(!instruction.data.is_empty()); // Should have instruction data
     assert_eq!(instruction.data[0], 9); // Raydium swap discriminator
 
-    println!("✅ Raydium swap instruction built - {} accounts, {} bytes data", 
-        instruction.accounts.len(), instruction.data.len());
+    println!(
+        "✅ Raydium swap instruction built - {} accounts, {} bytes data",
+        instruction.accounts.len(),
+        instruction.data.len()
+    );
 
     Ok(())
 }
@@ -229,9 +250,15 @@ async fn test_raydium_swap_instruction_building() -> Result<()> {
 #[tokio::test]
 async fn test_raydium_pool_parser() -> Result<()> {
     let parser = RaydiumPoolParser;
-    assert_eq!(parser.get_program_id(), RAYDIUM_LIQUIDITY_POOL_V4_PROGRAM_ID);
-    
-    println!("✅ Raydium pool parser program ID: {}", parser.get_program_id());
+    assert_eq!(
+        parser.get_program_id(),
+        RAYDIUM_LIQUIDITY_POOL_V4_PROGRAM_ID
+    );
+
+    println!(
+        "✅ Raydium pool parser program ID: {}",
+        parser.get_program_id()
+    );
     Ok(())
 }
 

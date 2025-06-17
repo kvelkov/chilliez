@@ -52,7 +52,8 @@ pub struct EnhancedArbHop {
 
 /// Legacy ArbHop structure for backward compatibility
 #[derive(Debug, Clone)]
-pub struct LegacyArbHop { // not in use - Defined but not instantiated or used elsewhere in the provided codebase.
+pub struct LegacyArbHop {
+    // not in use - Defined but not instantiated or used elsewhere in the provided codebase.
     /// The DEX used for the swap.
     pub dex: DexType,
     /// The pool where the swap takes place.
@@ -146,8 +147,13 @@ impl MultiHopArbOpportunity {
     }
 
     /// Combined profitability check using both percentage and USD thresholds.
-    pub fn is_profitable(&self, min_profit_pct_threshold: f64, min_profit_usd_threshold: f64) -> bool {
-        self.is_profitable_by_pct(min_profit_pct_threshold) && self.is_profitable_by_usd(min_profit_usd_threshold)
+    pub fn is_profitable(
+        &self,
+        min_profit_pct_threshold: f64,
+        min_profit_usd_threshold: f64,
+    ) -> bool {
+        self.is_profitable_by_pct(min_profit_pct_threshold)
+            && self.is_profitable_by_usd(min_profit_usd_threshold)
     }
 
     /// Logs detailed information for each hop in the arbitrage route.
@@ -209,7 +215,10 @@ impl MultiHopArbOpportunity {
         if !self.hops.is_empty() {
             self.log_hop_details();
         } else {
-            log::warn!("[Opportunity {}] Summary logged, but no hop details available.", self.id);
+            log::warn!(
+                "[Opportunity {}] Summary logged, but no hop details available.",
+                self.id
+            );
         }
     }
 
@@ -235,7 +244,8 @@ impl MultiHopArbOpportunity {
 
     /// SIMULATION: Provides a placeholder simulation execution.
     /// In a full implementation, this might recalculate expected outputs given updated reserves.
-    pub fn simulate_execution(&self) -> Self { // not in use - Current implementation is a placeholder.
+    pub fn simulate_execution(&self) -> Self {
+        // not in use - Current implementation is a placeholder.
         // Placeholder: simply returns a copy.
         // In a real implementation, this would use market data (via calculator/fee_manager) to recalc outcomes.
         self.clone()
@@ -250,7 +260,8 @@ impl MultiHopArbOpportunity {
 
     /// Calculates a simple risk score and sets it on the opportunity.
     /// This placeholder risk score is inversely proportional to profit_pct.
-    pub fn calculate_risk_score(&mut self) { // not in use - Current implementation is a placeholder.
+    pub fn calculate_risk_score(&mut self) {
+        // not in use - Current implementation is a placeholder.
         if self.profit_pct > 0.0 {
             self.risk_score = Some(1.0 / self.profit_pct);
         } else {
@@ -334,7 +345,9 @@ impl AdvancedMultiHopOpportunity {
 
     /// Log comprehensive summary
     pub fn log_summary(&self) {
-        let dex_path: Vec<String> = self.dex_sequence.iter()
+        let dex_path: Vec<String> = self
+            .dex_sequence
+            .iter()
             .map(|dex| format!("{:?}", dex))
             .collect();
 
@@ -354,16 +367,23 @@ impl AdvancedMultiHopOpportunity {
 
     /// Convert to legacy MultiHopArbOpportunity for compatibility
     pub fn to_legacy(&self) -> MultiHopArbOpportunity {
-        let legacy_hops: Vec<ArbHop> = self.path.iter().enumerate().map(|(i, hop)| {
-            ArbHop {
-                dex: self.dex_sequence.get(i).cloned().unwrap_or(DexType::Unknown("Unknown".to_string())),
+        let legacy_hops: Vec<ArbHop> = self
+            .path
+            .iter()
+            .enumerate()
+            .map(|(i, hop)| ArbHop {
+                dex: self
+                    .dex_sequence
+                    .get(i)
+                    .cloned()
+                    .unwrap_or(DexType::Unknown("Unknown".to_string())),
                 pool: hop.pool_address,
                 input_token: hop.input_token.to_string(),
                 output_token: hop.output_token.to_string(),
                 input_amount: hop.input_amount,
                 expected_output: hop.expected_output,
-            }
-        }).collect();
+            })
+            .collect();
 
         let dex_path = self.dex_sequence.clone();
         let pool_path: Vec<Pubkey> = self.path.iter().map(|hop| hop.pool_address).collect();
@@ -373,10 +393,14 @@ impl AdvancedMultiHopOpportunity {
         let total_profit = expected_output - input_amount;
 
         // Use first and last pool info, or default if empty
-        let source_pool = self.path.first()
+        let source_pool = self
+            .path
+            .first()
             .map(|h| Arc::clone(&h.pool_info))
             .unwrap_or_else(|| Arc::new(PoolInfo::default()));
-        let target_pool = self.path.last()
+        let target_pool = self
+            .path
+            .last()
             .map(|h| Arc::clone(&h.pool_info))
             .unwrap_or_else(|| Arc::new(PoolInfo::default()));
 
@@ -385,14 +409,25 @@ impl AdvancedMultiHopOpportunity {
             hops: legacy_hops,
             total_profit,
             profit_pct: self.profit_pct,
-            input_token: self.path.first().map(|h| h.input_token.to_string()).unwrap_or_default(),
-            output_token: self.path.last().map(|h| h.output_token.to_string()).unwrap_or_default(),
+            input_token: self
+                .path
+                .first()
+                .map(|h| h.input_token.to_string())
+                .unwrap_or_default(),
+            output_token: self
+                .path
+                .last()
+                .map(|h| h.output_token.to_string())
+                .unwrap_or_default(),
             input_amount,
             expected_output,
             dex_path,
             pool_path,
             risk_score: Some(1.0 / self.confidence_score.max(0.1)),
-            notes: Some(format!("Advanced opportunity with {} hops", self.path.len())),
+            notes: Some(format!(
+                "Advanced opportunity with {} hops",
+                self.path.len()
+            )),
             estimated_profit_usd: Some(self.expected_profit_usd),
             input_amount_usd: None,
             output_amount_usd: None,

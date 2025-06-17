@@ -1,5 +1,5 @@
 //! Sprint 4 Testing Infrastructure
-//! 
+//!
 //! Comprehensive testing framework for the arbitrage bot including:
 //! - Mock DEX environment
 //! - Integration test suites
@@ -8,11 +8,9 @@
 
 pub mod mock_dex;
 
-
-
 pub use mock_dex::{
-    MockDex, MockDexEnvironment, MockDexConfig, MarketCondition,
-    MockOpportunityGenerator, TransactionStats, EnvironmentStats,
+    EnvironmentStats, MarketCondition, MockDex, MockDexConfig, MockDexEnvironment,
+    MockOpportunityGenerator, TransactionStats,
 };
 
 use crate::error::ArbError;
@@ -60,12 +58,16 @@ impl TestSuiteRunner {
     {
         info!("🧪 Running test: {}", test_name);
         let start_time = Instant::now();
-        
+
         match test_fn().await {
             Ok(metrics) => {
                 let duration = start_time.elapsed();
-                info!("✅ Test '{}' passed in {:.2}ms", test_name, duration.as_secs_f64() * 1000.0);
-                
+                info!(
+                    "✅ Test '{}' passed in {:.2}ms",
+                    test_name,
+                    duration.as_secs_f64() * 1000.0
+                );
+
                 self.results.push(TestResult {
                     test_name: test_name.to_string(),
                     success: true,
@@ -77,8 +79,13 @@ impl TestSuiteRunner {
             }
             Err(e) => {
                 let duration = start_time.elapsed();
-                info!("❌ Test '{}' failed in {:.2}ms: {}", test_name, duration.as_secs_f64() * 1000.0, e);
-                
+                info!(
+                    "❌ Test '{}' failed in {:.2}ms: {}",
+                    test_name,
+                    duration.as_secs_f64() * 1000.0,
+                    e
+                );
+
                 self.results.push(TestResult {
                     test_name: test_name.to_string(),
                     success: false,
@@ -96,7 +103,7 @@ impl TestSuiteRunner {
         let total_tests = self.results.len();
         let passed_tests = self.results.iter().filter(|r| r.success).count();
         let failed_tests = total_tests - passed_tests;
-        
+
         let total_duration = self.start_time.elapsed();
         let average_test_duration = if total_tests > 0 {
             self.results.iter().map(|r| r.duration).sum::<Duration>() / total_tests as u32
@@ -108,7 +115,11 @@ impl TestSuiteRunner {
             total_tests,
             passed_tests,
             failed_tests,
-            success_rate: if total_tests > 0 { passed_tests as f64 / total_tests as f64 } else { 0.0 },
+            success_rate: if total_tests > 0 {
+                passed_tests as f64 / total_tests as f64
+            } else {
+                0.0
+            },
             total_duration,
             average_test_duration,
             results: self.results.clone(),
@@ -138,14 +149,23 @@ impl TestReport {
         info!("Failed: {} (❌)", self.failed_tests);
         info!("Success Rate: {:.1}%", self.success_rate * 100.0);
         info!("Total Duration: {:.2}s", self.total_duration.as_secs_f64());
-        info!("Average Test Duration: {:.2}ms", self.average_test_duration.as_secs_f64() * 1000.0);
-        
+        info!(
+            "Average Test Duration: {:.2}ms",
+            self.average_test_duration.as_secs_f64() * 1000.0
+        );
+
         if self.failed_tests > 0 {
             info!("❌ FAILED TESTS:");
             for result in &self.results {
                 if !result.success {
-                    info!("  - {}: {}", result.test_name, 
-                          result.error_message.as_ref().unwrap_or(&"Unknown error".to_string()));
+                    info!(
+                        "  - {}: {}",
+                        result.test_name,
+                        result
+                            .error_message
+                            .as_ref()
+                            .unwrap_or(&"Unknown error".to_string())
+                    );
                 }
             }
         }

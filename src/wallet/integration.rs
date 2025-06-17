@@ -1,22 +1,18 @@
 //! Wallet-Jito Integration Module
-//! 
+//!
 //! This module provides the integrated workflow for using ephemeral wallets
 //! with Jito bundle submission for MEV-protected arbitrage operations.
 
 use crate::{
-    wallet::{WalletPool, WalletPoolConfig},
-    arbitrage::{JitoClient, JitoClientConfig, BundleBuilder},
+    arbitrage::{BundleBuilder, JitoClient, JitoClientConfig},
     error::ArbError,
+    wallet::{WalletPool, WalletPoolConfig},
 };
-use solana_sdk::{
-    transaction::Transaction,
-    pubkey::Pubkey,
-    hash::Hash,
-};
+use log::{debug, error, info, warn};
 use solana_client::nonblocking::rpc_client::RpcClient;
+use solana_sdk::{hash::Hash, pubkey::Pubkey, transaction::Transaction};
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use log::{info, warn, debug, error};
 
 type Result<T> = std::result::Result<T, ArbError>;
 
@@ -72,15 +68,19 @@ impl WalletJitoIntegration {
         collector_wallet: Pubkey,
         rpc_client: Arc<RpcClient>,
     ) -> Self {
-        info!("🚀 Initializing integrated wallet-Jito system with collector: {}", collector_wallet);
-        
-        let wallet_pool = Arc::new(RwLock::new(
-            WalletPool::new(config.wallet_config.clone(), collector_wallet)
-        ));
-        
-        let jito_client = Arc::new(RwLock::new(
-            JitoClient::new_with_defaults(RpcClient::new(rpc_client.url()))
-        ));
+        info!(
+            "🚀 Initializing integrated wallet-Jito system with collector: {}",
+            collector_wallet
+        );
+
+        let wallet_pool = Arc::new(RwLock::new(WalletPool::new(
+            config.wallet_config.clone(),
+            collector_wallet,
+        )));
+
+        let jito_client = Arc::new(RwLock::new(JitoClient::new_with_defaults(RpcClient::new(
+            rpc_client.url(),
+        ))));
 
         Self {
             wallet_pool,
@@ -98,13 +98,16 @@ impl WalletJitoIntegration {
         expected_profit_lamports: u64,
     ) -> Result<String> {
         if expected_profit_lamports < self.config.min_profit_threshold {
-            return Err(ArbError::InsufficientProfit(
-                format!("Expected profit {} below threshold {}", 
-                        expected_profit_lamports, self.config.min_profit_threshold)
-            ));
+            return Err(ArbError::InsufficientProfit(format!(
+                "Expected profit {} below threshold {}",
+                expected_profit_lamports, self.config.min_profit_threshold
+            )));
         }
 
-        info!("💰 Executing arbitrage trade with expected profit: {} lamports", expected_profit_lamports);
+        info!(
+            "💰 Executing arbitrage trade with expected profit: {} lamports",
+            expected_profit_lamports
+        );
 
         // Get a signing wallet for the trade
         let (trader_pubkey, trader_keypair) = {
@@ -116,7 +119,10 @@ impl WalletJitoIntegration {
         debug!("🔑 Using ephemeral wallet: {}", trader_pubkey);
 
         // Prepare the bundle
-        let recent_blockhash = self.rpc_client.get_latest_blockhash().await
+        let recent_blockhash = self
+            .rpc_client
+            .get_latest_blockhash()
+            .await
             .map_err(|e| ArbError::RpcError(format!("Failed to get blockhash: {}", e)))?;
 
         let mut bundle_builder = BundleBuilder::new(self.config.jito_config.max_bundle_size);
@@ -126,7 +132,10 @@ impl WalletJitoIntegration {
 
         // Check if we should add a sweep transaction
         if self.config.auto_sweep_profits && self.config.optimize_bundles {
-            if let Some(sweep_tx) = self.prepare_sweep_transaction(&trader_pubkey, recent_blockhash).await? {
+            if let Some(sweep_tx) = self
+                .prepare_sweep_transaction(&trader_pubkey, recent_blockhash)
+                .await?
+            {
                 bundle_builder = bundle_builder.add_transaction(sweep_tx)?;
                 info!("💸 Added sweep transaction to bundle");
             }
@@ -135,7 +144,9 @@ impl WalletJitoIntegration {
         // Calculate optimal tip
         let optimal_tip = {
             let jito_client = self.jito_client.read().await;
-            jito_client.calculate_optimal_tip(expected_profit_lamports).await?
+            jito_client
+                .calculate_optimal_tip(expected_profit_lamports)
+                .await?
         };
 
         // Get bundle size before submitting
@@ -144,18 +155,23 @@ impl WalletJitoIntegration {
         // Submit bundle with tip
         let bundle_id = {
             let mut jito_client = self.jito_client.write().await;
-            jito_client.submit_bundle_with_tip(
-                bundle_builder.build(),
-                optimal_tip,
-                &trader_keypair,
-                recent_blockhash,
-            ).await?
+            jito_client
+                .submit_bundle_with_tip(
+                    bundle_builder.build(),
+                    optimal_tip,
+                    &trader_keypair,
+                    recent_blockhash,
+                )
+                .await?
         };
 
         // Update statistics
         self.update_execution_stats(true, bundle_size, optimal_tip);
 
-        info!("✅ Arbitrage trade executed successfully: bundle {}", bundle_id);
+        info!(
+            "✅ Arbitrage trade executed successfully: bundle {}",
+            bundle_id
+        );
         Ok(bundle_id)
     }
 
@@ -166,7 +182,10 @@ impl WalletJitoIntegration {
         _recent_blockhash: Hash,
     ) -> Result<Option<Transaction>> {
         // Get wallet balance
-        let balance = self.rpc_client.get_balance(wallet_pubkey).await
+        let balance = self
+            .rpc_client
+            .get_balance(wallet_pubkey)
+            .await
             .map_err(|e| ArbError::RpcError(format!("Failed to get balance: {}", e)))?;
 
         // Check if sweep is needed
@@ -174,8 +193,11 @@ impl WalletJitoIntegration {
         if let Some(sweep_amount) = pool.calculate_sweep_amount(balance) {
             // Find the wallet in the pool
             // Note: In a real implementation, you'd want a better way to get the wallet reference
-            info!("💰 Preparing sweep of {} lamports from wallet {}", sweep_amount, wallet_pubkey);
-            
+            info!(
+                "💰 Preparing sweep of {} lamports from wallet {}",
+                sweep_amount, wallet_pubkey
+            );
+
             // For now, we'll return None and handle sweeping separately
             // In a full implementation, you'd create the sweep transaction here
             return Ok(None);
@@ -187,9 +209,12 @@ impl WalletJitoIntegration {
     /// Perform profit sweeping for all eligible wallets
     pub async fn sweep_profits_from_all_wallets(&mut self) -> Result<Vec<String>> {
         info!("🧹 Starting profit sweep from all eligible wallets");
-        
+
         let mut sweep_results = Vec::new();
-        let recent_blockhash = self.rpc_client.get_latest_blockhash().await
+        let recent_blockhash = self
+            .rpc_client
+            .get_latest_blockhash()
+            .await
             .map_err(|e| ArbError::RpcError(format!("Failed to get blockhash: {}", e)))?;
 
         // Get all wallet public keys
@@ -199,7 +224,10 @@ impl WalletJitoIntegration {
         };
 
         for wallet_pubkey in wallet_pubkeys {
-            match self.sweep_wallet_if_eligible(&wallet_pubkey, recent_blockhash).await {
+            match self
+                .sweep_wallet_if_eligible(&wallet_pubkey, recent_blockhash)
+                .await
+            {
                 Ok(Some(sweep_id)) => {
                     sweep_results.push(sweep_id);
                     self.stats.total_profits_swept += 1;
@@ -213,7 +241,10 @@ impl WalletJitoIntegration {
             }
         }
 
-        info!("✅ Profit sweep completed: {} wallets swept", sweep_results.len());
+        info!(
+            "✅ Profit sweep completed: {} wallets swept",
+            sweep_results.len()
+        );
         Ok(sweep_results)
     }
 
@@ -224,15 +255,26 @@ impl WalletJitoIntegration {
         _recent_blockhash: Hash,
     ) -> Result<Option<String>> {
         // Get wallet balance
-        let balance = self.rpc_client.get_balance(wallet_pubkey).await
-            .map_err(|e| ArbError::RpcError(format!("Failed to get balance for {}: {}", wallet_pubkey, e)))?;
+        let balance = self
+            .rpc_client
+            .get_balance(wallet_pubkey)
+            .await
+            .map_err(|e| {
+                ArbError::RpcError(format!(
+                    "Failed to get balance for {}: {}",
+                    wallet_pubkey, e
+                ))
+            })?;
 
         // Check if sweep is warranted
         let pool = self.wallet_pool.read().await;
         if let Some(sweep_amount) = pool.calculate_sweep_amount(balance) {
             // Note: In a real implementation, you'd need to access the wallet's keypair
             // For now, we'll just log what would happen
-            info!("💰 Would sweep {} lamports from {}", sweep_amount, wallet_pubkey);
+            info!(
+                "💰 Would sweep {} lamports from {}",
+                sweep_amount, wallet_pubkey
+            );
             return Ok(Some(format!("sweep_{}", wallet_pubkey)));
         }
 
@@ -301,8 +343,9 @@ impl WalletJitoIntegration {
         if total_bundles == 1 {
             self.stats.average_bundle_size = bundle_size as f64;
         } else {
-            self.stats.average_bundle_size = 
-                (self.stats.average_bundle_size * (total_bundles - 1) as f64 + bundle_size as f64) / total_bundles as f64;
+            self.stats.average_bundle_size =
+                (self.stats.average_bundle_size * (total_bundles - 1) as f64 + bundle_size as f64)
+                    / total_bundles as f64;
         }
     }
 

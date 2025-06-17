@@ -1,5 +1,5 @@
 //! Orca Whirlpools WebSocket feed for real-time price data
-//! 
+//!
 //! This module implements real-time price monitoring for Orca Whirlpools
 //! by subscribing to Solana RPC WebSocket account change notifications.
 
@@ -13,7 +13,7 @@ use tokio::{
     sync::mpsc,
     time::{interval, timeout},
 };
-use tokio_tungstenite::{connect_async, tungstenite::Message, WebSocketStream, MaybeTlsStream};
+use tokio_tungstenite::{connect_async, tungstenite::Message, MaybeTlsStream, WebSocketStream};
 use url::Url;
 
 use crate::{
@@ -83,8 +83,12 @@ enum OrcaMessage {
         account_data: Vec<u8>,
         slot: u64,
     },
-    Ping { timestamp: u64 },
-    Error { message: String },
+    Ping {
+        timestamp: u64,
+    },
+    Error {
+        message: String,
+    },
 }
 
 /// Orca whirlpool data structure
@@ -179,20 +183,23 @@ impl OrcaWebSocketFeed {
         match message {
             Message::Text(text) => {
                 debug!("📨 Received Orca message: {}", text);
-                
+
                 match self.parse_message(&text) {
                     Ok(updates) => {
                         for update in updates {
                             if update.is_fresh() {
                                 self.metrics.total_price_updates += 1;
-                                
+
                                 // Send update to price feed manager
                                 if let Err(e) = self.update_sender.send(update) {
                                     error!("Failed to send Orca price update: {}", e);
                                 }
                             } else {
                                 self.metrics.stale_message_count += 1;
-                                warn!("🚨 Received stale Orca price data (age: {}ms)", update.age_ms());
+                                warn!(
+                                    "🚨 Received stale Orca price data (age: {}ms)",
+                                    update.age_ms()
+                                );
                             }
                         }
                     }
@@ -234,7 +241,7 @@ impl OrcaWebSocketFeed {
     #[allow(dead_code)]
     async fn message_loop(&mut self) -> Result<()> {
         let mut ping_interval = interval(Duration::from_millis(self.config.ping_interval_ms));
-        
+
         while let Some(ref mut ws) = self.websocket {
             tokio::select! {
                 // Handle incoming messages
@@ -257,7 +264,7 @@ impl OrcaWebSocketFeed {
                         }
                     }
                 }
-                
+
                 // Send periodic pings
                 _ = ping_interval.tick() => {
                     if let Some(ref mut ws) = self.websocket {
@@ -299,8 +306,10 @@ impl OrcaWebSocketFeed {
             30000, // Max 30 seconds delay
         );
 
-        warn!("🔄 Attempting to reconnect to Orca WebSocket (attempt {}/{}) in {}ms", 
-              self.reconnect_attempts, self.config.max_reconnect_attempts, delay);
+        warn!(
+            "🔄 Attempting to reconnect to Orca WebSocket (attempt {}/{}) in {}ms",
+            self.reconnect_attempts, self.config.max_reconnect_attempts, delay
+        );
 
         tokio::time::sleep(Duration::from_millis(delay)).await;
 
@@ -320,13 +329,14 @@ impl OrcaWebSocketFeed {
     /// Convert Orca sqrt price to regular price
     #[allow(dead_code)]
     fn sqrt_price_to_price(sqrt_price: &str, decimals_a: u8, decimals_b: u8) -> Result<f64> {
-        let sqrt_price_u128: u128 = sqrt_price.parse()
+        let sqrt_price_u128: u128 = sqrt_price
+            .parse()
             .map_err(|e| anyhow!("Invalid sqrt_price format: {}", e))?;
-        
+
         // Orca uses Q64.64 format for sqrt price
         let sqrt_price_f64 = (sqrt_price_u128 as f64) / (1u128 << 64) as f64;
         let price = sqrt_price_f64 * sqrt_price_f64;
-        
+
         // Adjust for token decimals
         let decimal_adjustment = 10_f64.powi(decimals_b as i32 - decimals_a as i32);
         Ok(price * decimal_adjustment)
@@ -340,12 +350,15 @@ impl WebSocketFeed for OrcaWebSocketFeed {
     }
 
     async fn connect(&mut self) -> Result<()> {
-        info!("🔌 Connecting to Orca account monitoring WebSocket: {}", self.config.url);
+        info!(
+            "🔌 Connecting to Orca account monitoring WebSocket: {}",
+            self.config.url
+        );
         self.status = ConnectionStatus::Connecting;
         self.reconnect_attempts = 0;
 
         let url = Url::parse(&self.config.url)?;
-        
+
         match timeout(Duration::from_secs(10), connect_async(url)).await {
             Ok(Ok((ws_stream, response))) => {
                 info!("✅ Connected to Orca WebSocket: {}", response.status());
@@ -370,11 +383,11 @@ impl WebSocketFeed for OrcaWebSocketFeed {
 
     async fn disconnect(&mut self) -> Result<()> {
         info!("🔌 Disconnecting from Orca WebSocket");
-        
+
         if let Some(mut ws) = self.websocket.take() {
             let _ = ws.close(None).await;
         }
-        
+
         self.status = ConnectionStatus::Disconnected;
         info!("✅ Disconnected from Orca WebSocket");
         Ok(())
@@ -386,7 +399,7 @@ impl WebSocketFeed for OrcaWebSocketFeed {
 
     async fn subscribe_to_pools(&mut self, pool_addresses: Vec<String>) -> Result<()> {
         info!("📋 Subscribing to {} Orca pools", pool_addresses.len());
-        
+
         let subscription = OrcaSubscription {
             msg_type: "subscribe".to_string(),
             pools: Some(pool_addresses.clone()),
@@ -435,15 +448,19 @@ impl OrcaWebSocketFeed {
     }
 
     /// Convert account update to price update
-    fn handle_account_update(&self, notification: OrcaAccountNotification) -> Result<Vec<PriceUpdate>> {
+    fn handle_account_update(
+        &self,
+        notification: OrcaAccountNotification,
+    ) -> Result<Vec<PriceUpdate>> {
         let account_data = &notification.params.result.value.account.data;
         let pool_address = &notification.params.result.value.pubkey;
         let slot = notification.params.result.context.slot;
 
         // Decode base64 account data
         let decoded_data = if !account_data.is_empty() {
-            use base64::{Engine as _, engine::general_purpose};
-            general_purpose::STANDARD.decode(&account_data[0])
+            use base64::{engine::general_purpose, Engine as _};
+            general_purpose::STANDARD
+                .decode(&account_data[0])
                 .map_err(|e| anyhow!("Failed to decode account data: {}", e))?
         } else {
             return Err(anyhow!("No account data in notification"));
@@ -451,20 +468,28 @@ impl OrcaWebSocketFeed {
 
         // Parse Whirlpool account structure (simplified version)
         if decoded_data.len() < 200 {
-            return Err(anyhow!("Account data too small for Whirlpool: {} bytes", decoded_data.len()));
+            return Err(anyhow!(
+                "Account data too small for Whirlpool: {} bytes",
+                decoded_data.len()
+            ));
         }
 
         // Parse basic Whirlpool structure
         let price_update = self.parse_whirlpool_account(&decoded_data, pool_address, slot)?;
-        
+
         Ok(vec![price_update])
     }
 
     /// Parse Whirlpool account data into PriceUpdate (simplified implementation)
-    fn parse_whirlpool_account(&self, data: &[u8], pool_address: &str, slot: u64) -> Result<PriceUpdate> {
+    fn parse_whirlpool_account(
+        &self,
+        data: &[u8],
+        pool_address: &str,
+        slot: u64,
+    ) -> Result<PriceUpdate> {
         // NOTE: This is a simplified parser for demonstration
         // In production, use the official Orca Whirlpool SDK for proper parsing
-        
+
         if data.len() < 200 {
             return Err(anyhow!("Insufficient data for Whirlpool parsing"));
         }
@@ -472,10 +497,10 @@ impl OrcaWebSocketFeed {
         // For now, create a mock price update
         // In production, you would parse the actual Whirlpool account structure
         let timestamp = chrono::Utc::now().timestamp_millis() as u64;
-        
+
         // Mock data - in production, extract from account data
         let mock_price = 1.0 + (slot as f64 % 100.0) / 10000.0; // Simulated price variation
-        
+
         Ok(PriceUpdate {
             pool_address: pool_address.to_string(),
             dex_type: DexType::Orca,
@@ -518,7 +543,7 @@ mod tests {
     fn test_orca_websocket_feed_creation() {
         let (tx, _rx) = mpsc::unbounded_channel();
         let feed = OrcaWebSocketFeed::new(tx);
-        
+
         assert_eq!(feed.dex_type(), DexType::Orca);
         assert_eq!(feed.status(), ConnectionStatus::Disconnected);
         assert_eq!(feed.config.url, ORCA_RPC_WS_URL);
@@ -529,7 +554,7 @@ mod tests {
         // Test with known values
         let result = OrcaWebSocketFeed::sqrt_price_to_price("18446744073709551616", 9, 6);
         assert!(result.is_ok());
-        
+
         // Test with invalid sqrt_price
         let result = OrcaWebSocketFeed::sqrt_price_to_price("invalid", 9, 6);
         assert!(result.is_err());
@@ -542,7 +567,7 @@ mod tests {
             msg_type: "subscribe".to_string(),
             pools: Some(pools),
         };
-        
+
         let json = serde_json::to_string(&subscription).unwrap();
         assert!(json.contains("subscribe"));
         assert!(json.contains("pool1"));

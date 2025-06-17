@@ -1,13 +1,13 @@
 // src/solana/websocket.rs
 
 use crate::error::ArbError;
+use base64::{engine::general_purpose, Engine as _};
 use futures_util::{stream::StreamExt, SinkExt};
-use log::{info, error, warn, debug};
+use log::{debug, error, info, warn};
 use solana_sdk::pubkey::Pubkey;
 use std::sync::Arc;
 use tokio::{sync::broadcast, task::JoinHandle};
 use tokio_tungstenite::{connect_async, tungstenite::Message};
-use base64::{Engine as _, engine::general_purpose};
 
 #[derive(Debug, Clone)]
 pub struct RawAccountUpdate {
@@ -40,7 +40,7 @@ pub struct SolanaWebsocketManager {
 impl SolanaWebsocketManager {
     pub fn new(ws_url: String) -> (Self, broadcast::Receiver<RawAccountUpdate>) {
         let (updates_tx, updates_rx) = broadcast::channel(2048); // Increased buffer for high-frequency updates
-        
+
         let metrics = Arc::new(tokio::sync::Mutex::new(WebSocketMetrics {
             total_updates_received: 0,
             successful_parses: 0,
@@ -49,7 +49,7 @@ impl SolanaWebsocketManager {
             last_update_timestamp: 0,
             average_update_latency_ms: 0.0,
         }));
-        
+
         (
             Self {
                 ws_url,
@@ -64,8 +64,11 @@ impl SolanaWebsocketManager {
     }
 
     pub async fn start(&mut self) -> Result<(), ArbError> {
-        info!("🌐 Connecting to enhanced WebSocket server: {}", self.ws_url);
-        
+        info!(
+            "🌐 Connecting to enhanced WebSocket server: {}",
+            self.ws_url
+        );
+
         let (ws_stream, _) = connect_async(&self.ws_url)
             .await
             .map_err(|e| ArbError::WebSocketError(format!("Failed to connect: {}", e)))?;
@@ -94,18 +97,18 @@ impl SolanaWebsocketManager {
         // Enhanced task to read messages from the WebSocket and broadcast them
         let updates_tx_clone = self.updates_tx.clone();
         let metrics_clone = self.metrics.clone();
-        
+
         self._handle = Some(tokio::spawn(async move {
             info!("🔄 Enhanced WebSocket read loop started with performance monitoring.");
             let mut update_count = 0u64;
             let mut parse_success_count = 0u64;
             let mut parse_failure_count = 0u64;
-            
+
             while let Some(Ok(msg)) = read.next().await {
                 if let Message::Text(text) = msg {
                     update_count += 1;
                     let parse_start = std::time::Instant::now();
-                    
+
                     // Enhanced parsing for account notifications
                     match serde_json::from_str::<serde_json::Value>(&text) {
                         Ok(json) => {
@@ -118,20 +121,29 @@ impl SolanaWebsocketManager {
                                             let data_array = value["data"].as_array();
                                             let lamports = value["lamports"].as_u64();
                                             let slot = result["context"]["slot"].as_u64();
-                                            
-                                            if let (Some(pubkey_str), Some(data_array)) = (pubkey_str, data_array) {
+
+                                            if let (Some(pubkey_str), Some(data_array)) =
+                                                (pubkey_str, data_array)
+                                            {
                                                 if let Some(data_str) = data_array[0].as_str() {
-                                                    match (pubkey_str.parse::<Pubkey>(), general_purpose::STANDARD.decode(data_str)) {
+                                                    match (
+                                                        pubkey_str.parse::<Pubkey>(),
+                                                        general_purpose::STANDARD.decode(data_str),
+                                                    ) {
                                                         (Ok(pubkey), Ok(data)) => {
                                                             let update = RawAccountUpdate {
                                                                 pubkey,
                                                                 data,
-                                                                timestamp: chrono::Utc::now().timestamp_millis() as u64,
+                                                                timestamp: chrono::Utc::now()
+                                                                    .timestamp_millis()
+                                                                    as u64,
                                                                 slot,
                                                                 lamports,
                                                             };
-                                                            
-                                                            if let Err(e) = updates_tx_clone.send(update) {
+
+                                                            if let Err(e) =
+                                                                updates_tx_clone.send(update)
+                                                            {
                                                                 warn!("Failed to broadcast account update: {}", e);
                                                             } else {
                                                                 parse_success_count += 1;
@@ -154,7 +166,7 @@ impl SolanaWebsocketManager {
                             debug!("Failed to parse WebSocket message as JSON");
                         }
                     }
-                    
+
                     // Update metrics periodically
                     if update_count % 1000 == 0 {
                         let parse_duration = parse_start.elapsed();
@@ -162,15 +174,21 @@ impl SolanaWebsocketManager {
                         metrics.total_updates_received = update_count;
                         metrics.successful_parses = parse_success_count;
                         metrics.failed_parses = parse_failure_count;
-                        metrics.last_update_timestamp = chrono::Utc::now().timestamp_millis() as u64;
+                        metrics.last_update_timestamp =
+                            chrono::Utc::now().timestamp_millis() as u64;
                         metrics.average_update_latency_ms = parse_duration.as_millis() as f64;
-                        
-                        info!("📊 WebSocket metrics: {} updates processed ({} success, {} failed)", 
-                              update_count, parse_success_count, parse_failure_count);
+
+                        info!(
+                            "📊 WebSocket metrics: {} updates processed ({} success, {} failed)",
+                            update_count, parse_success_count, parse_failure_count
+                        );
                     }
                 }
             }
-            info!("🔚 Enhanced WebSocket read loop finished after processing {} updates.", update_count);
+            info!(
+                "🔚 Enhanced WebSocket read loop finished after processing {} updates.",
+                update_count
+            );
         }));
 
         info!("✅ Enhanced WebSocket manager started successfully with performance monitoring.");
@@ -181,18 +199,25 @@ impl SolanaWebsocketManager {
         let sender = self.ws_sender.as_ref().ok_or_else(|| {
             ArbError::WebSocketError("WebSocket sender not available.".to_string())
         })?;
-        
+
         let pool_count = pool_addresses.len();
-        info!("📡 Subscribing to {} pool addresses for real-time updates...", pool_count);
-        
+        info!(
+            "📡 Subscribing to {} pool addresses for real-time updates...",
+            pool_count
+        );
+
         let mut successful_subscriptions = 0;
         let mut failed_subscriptions = 0;
-        
+
         // Subscribe in batches to avoid overwhelming the WebSocket
         const BATCH_SIZE: usize = 100;
         for (batch_idx, batch) in pool_addresses.chunks(BATCH_SIZE).enumerate() {
-            info!("📡 Processing subscription batch {} ({} pools)", batch_idx + 1, batch.len());
-            
+            info!(
+                "📡 Processing subscription batch {} ({} pools)",
+                batch_idx + 1,
+                batch.len()
+            );
+
             for pubkey in batch {
                 let subscribe_msg = serde_json::json!({
                     "jsonrpc": "2.0",
@@ -206,7 +231,7 @@ impl SolanaWebsocketManager {
                         }
                     ]
                 });
-                
+
                 match sender.send(Message::Text(subscribe_msg.to_string())).await {
                     Ok(_) => successful_subscriptions += 1,
                     Err(e) => {
@@ -215,27 +240,31 @@ impl SolanaWebsocketManager {
                     }
                 }
             }
-            
+
             // Small delay between batches to avoid rate limiting
             if batch_idx < pool_addresses.chunks(BATCH_SIZE).len() - 1 {
                 tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
             }
         }
-        
+
         // Update subscription count
         {
             let mut count = self.subscription_count.lock().await;
             *count = successful_subscriptions;
         }
-        
-        info!("✅ Subscription complete: {} successful, {} failed out of {} total pools", 
-              successful_subscriptions, failed_subscriptions, pool_count);
-        
+
+        info!(
+            "✅ Subscription complete: {} successful, {} failed out of {} total pools",
+            successful_subscriptions, failed_subscriptions, pool_count
+        );
+
         if failed_subscriptions > 0 {
-            warn!("⚠️  {} subscriptions failed - some pools may not receive real-time updates", 
-                  failed_subscriptions);
+            warn!(
+                "⚠️  {} subscriptions failed - some pools may not receive real-time updates",
+                failed_subscriptions
+            );
         }
-        
+
         Ok(())
     }
 
@@ -249,17 +278,17 @@ impl SolanaWebsocketManager {
 
     pub async fn stop(&mut self) {
         info!("🛑 Stopping enhanced WebSocket manager...");
-        
+
         // Close the sender to signal shutdown
         if let Some(sender) = self.ws_sender.take() {
             drop(sender);
         }
-        
+
         // Wait for the handle to finish if it exists
         if let Some(handle) = self._handle.take() {
             let _ = handle.await;
         }
-        
+
         info!("✅ Enhanced WebSocket manager stopped gracefully");
     }
 }

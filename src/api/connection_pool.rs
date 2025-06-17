@@ -1,27 +1,27 @@
 // src/api/connection_pool.rs
 //! Advanced RPC Connection Pool with Automatic Failover
-//! 
+//!
 //! Provides:
 //! - Connection pooling for multiple RPC endpoints
 //! - Automatic failover between providers
 //! - Load balancing and request distribution
 //! - Health monitoring and circuit breaker patterns
 
-use anyhow::{Result, anyhow};
-use log::{warn, debug, error, info};
+use crate::api::rate_limiter::{AdvancedRateLimiter, RequestPriority};
+use anyhow::{anyhow, Result};
+use log::{debug, error, info, warn};
+use serde::{Deserialize, Serialize};
+use solana_client::nonblocking::rpc_client::RpcClient as NonBlockingRpcClient;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tokio::sync::{RwLock, Mutex};
-use serde::{Serialize, Deserialize};
-use solana_client::nonblocking::rpc_client::RpcClient as NonBlockingRpcClient;
-use crate::api::rate_limiter::{AdvancedRateLimiter, RequestPriority};
+use tokio::sync::{Mutex, RwLock};
 
 /// RPC endpoint configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RpcEndpointConfig {
     pub url: String,
     pub name: String,
-    pub priority: u32,           // Lower = higher priority
+    pub priority: u32, // Lower = higher priority
     pub max_connections: usize,
     pub timeout_ms: u64,
     pub max_retries: u32,
@@ -41,7 +41,7 @@ impl RpcEndpointConfig {
             health_check_interval_secs: 30,
         }
     }
-    
+
     /// Create secondary RPC endpoint config
     pub fn secondary_rpc(url: String, name: String) -> Self {
         Self {
@@ -54,7 +54,7 @@ impl RpcEndpointConfig {
             health_check_interval_secs: 60,
         }
     }
-    
+
     /// Create backup RPC endpoint config
     pub fn backup_rpc(url: String, name: String) -> Self {
         Self {
@@ -111,8 +111,12 @@ impl From<&EndpointMetrics> for SerializableEndpointMetrics {
             failed_requests: metrics.failed_requests,
             average_latency_ms: metrics.average_latency_ms,
             consecutive_failures: metrics.consecutive_failures,
-            last_success_ago_secs: metrics.last_success.map(|t| now.duration_since(t).as_secs()),
-            last_failure_ago_secs: metrics.last_failure.map(|t| now.duration_since(t).as_secs()),
+            last_success_ago_secs: metrics
+                .last_success
+                .map(|t| now.duration_since(t).as_secs()),
+            last_failure_ago_secs: metrics
+                .last_failure
+                .map(|t| now.duration_since(t).as_secs()),
         }
     }
 }
@@ -147,18 +151,20 @@ impl RpcEndpoint {
     pub fn new(config: RpcEndpointConfig, rate_limiter: Option<Arc<AdvancedRateLimiter>>) -> Self {
         let client = Arc::new(NonBlockingRpcClient::new_with_timeout(
             config.url.clone(),
-            Duration::from_millis(config.timeout_ms)
+            Duration::from_millis(config.timeout_ms),
         ));
-        
+
         let circuit_breaker = CircuitBreaker::new(
-            5,  // failure_threshold
+            5,                       // failure_threshold
             Duration::from_secs(30), // timeout_duration
             Duration::from_secs(60), // recovery_timeout
         );
-        
-        info!("🔗 Created RPC endpoint: {} (priority: {}, max_conn: {})", 
-              config.name, config.priority, config.max_connections);
-        
+
+        info!(
+            "🔗 Created RPC endpoint: {} (priority: {}, max_conn: {})",
+            config.name, config.priority, config.max_connections
+        );
+
         Self {
             config,
             client,
@@ -169,38 +175,42 @@ impl RpcEndpoint {
             circuit_breaker: Arc::new(RwLock::new(circuit_breaker)),
         }
     }
-    
+
     /// Check if endpoint can accept new connections
     pub async fn can_accept_connection(&self) -> bool {
         let active = *self.active_connections.read().await;
         let health = *self.health.read().await;
         let circuit_open = self.circuit_breaker.read().await.is_open();
-        
-        active < self.config.max_connections 
-            && health != EndpointHealth::Unhealthy 
-            && !circuit_open
+
+        active < self.config.max_connections && health != EndpointHealth::Unhealthy && !circuit_open
     }
-    
+
     /// Acquire a connection to this endpoint
     pub async fn acquire_connection(&self) -> Result<RpcConnection> {
         if !self.can_accept_connection().await {
-            return Err(anyhow!("Endpoint {} cannot accept new connections", self.config.name));
+            return Err(anyhow!(
+                "Endpoint {} cannot accept new connections",
+                self.config.name
+            ));
         }
-        
+
         // Check rate limits if configured
         if let Some(rate_limiter) = &self.rate_limiter {
             if !rate_limiter.can_make_request().await {
-                return Err(anyhow!("Rate limit exceeded for endpoint {}", self.config.name));
+                return Err(anyhow!(
+                    "Rate limit exceeded for endpoint {}",
+                    self.config.name
+                ));
             }
         }
-        
+
         {
             let mut active = self.active_connections.write().await;
             *active += 1;
         }
-        
+
         debug!("📞 Acquired connection to {}", self.config.name);
-        
+
         Ok(RpcConnection::new(
             self.client.clone(),
             self.config.clone(),
@@ -210,18 +220,18 @@ impl RpcEndpoint {
             self.rate_limiter.clone(),
         ))
     }
-    
+
     /// Perform health check on this endpoint
     pub async fn health_check(&self) -> EndpointHealth {
         let start = Instant::now();
-        
+
         match self.client.get_slot().await {
             Ok(_) => {
                 let latency_ms = start.elapsed().as_millis() as f64;
-                
+
                 // Update circuit breaker
                 self.circuit_breaker.write().await.record_success();
-                
+
                 // Update health based on latency
                 let health = if latency_ms < 1000.0 {
                     EndpointHealth::Healthy
@@ -230,36 +240,40 @@ impl RpcEndpoint {
                 } else {
                     EndpointHealth::Unhealthy
                 };
-                
+
                 *self.health.write().await = health;
-                
+
                 // Update metrics
                 {
                     let mut metrics = self.metrics.write().await;
                     metrics.last_success = Some(Instant::now());
                     metrics.consecutive_failures = 0;
                     metrics.successful_requests += 1;
-                    
+
                     // Update rolling average latency
                     if metrics.total_requests > 0 {
-                        metrics.average_latency_ms = 
-                            (metrics.average_latency_ms * metrics.total_requests as f64 + latency_ms) 
+                        metrics.average_latency_ms = (metrics.average_latency_ms
+                            * metrics.total_requests as f64
+                            + latency_ms)
                             / (metrics.total_requests + 1) as f64;
                     } else {
                         metrics.average_latency_ms = latency_ms;
                     }
                     metrics.total_requests += 1;
                 }
-                
-                debug!("✅ Health check passed for {} ({}ms)", self.config.name, latency_ms as u64);
+
+                debug!(
+                    "✅ Health check passed for {} ({}ms)",
+                    self.config.name, latency_ms as u64
+                );
                 health
             }
             Err(e) => {
                 // Update circuit breaker
                 self.circuit_breaker.write().await.record_failure();
-                
+
                 *self.health.write().await = EndpointHealth::Unhealthy;
-                
+
                 // Update metrics
                 {
                     let mut metrics = self.metrics.write().await;
@@ -268,20 +282,20 @@ impl RpcEndpoint {
                     metrics.failed_requests += 1;
                     metrics.total_requests += 1;
                 }
-                
+
                 error!("❌ Health check failed for {}: {}", self.config.name, e);
                 EndpointHealth::Unhealthy
             }
         }
     }
-    
+
     /// Get current endpoint status
     pub async fn get_status(&self) -> EndpointStatus {
         let health = *self.health.read().await;
         let metrics = self.metrics.read().await.clone();
         let active_connections = *self.active_connections.read().await;
         let circuit_open = self.circuit_breaker.read().await.is_open();
-        
+
         EndpointStatus {
             name: self.config.name.clone(),
             url: self.config.url.clone(),
@@ -325,19 +339,19 @@ impl RpcConnection {
             start_time: Instant::now(),
         }
     }
-    
+
     /// Get the underlying RPC client
     pub fn client(&self) -> &NonBlockingRpcClient {
         &self.client
     }
-    
+
     /// Record a successful request
     pub async fn record_success(&self) {
         let duration_ms = self.start_time.elapsed().as_millis() as u64;
-        
+
         // Update circuit breaker
         self.circuit_breaker.write().await.record_success();
-        
+
         // Update metrics
         {
             let mut metrics = self.metrics.write().await;
@@ -345,20 +359,25 @@ impl RpcConnection {
             metrics.consecutive_failures = 0;
             metrics.last_success = Some(Instant::now());
         }
-        
+
         // Update rate limiter if configured
         if let Some(rate_limiter) = &self.rate_limiter {
-            rate_limiter.record_request("rpc_call", duration_ms, RequestPriority::Medium).await;
+            rate_limiter
+                .record_request("rpc_call", duration_ms, RequestPriority::Medium)
+                .await;
         }
-        
-        debug!("✅ RPC request succeeded on {} ({}ms)", self.config.name, duration_ms);
+
+        debug!(
+            "✅ RPC request succeeded on {} ({}ms)",
+            self.config.name, duration_ms
+        );
     }
-    
+
     /// Record a failed request
     pub async fn record_failure(&self, error: &str) {
         // Update circuit breaker
         self.circuit_breaker.write().await.record_failure();
-        
+
         // Update metrics
         {
             let mut metrics = self.metrics.write().await;
@@ -366,7 +385,7 @@ impl RpcConnection {
             metrics.consecutive_failures += 1;
             metrics.last_failure = Some(Instant::now());
         }
-        
+
         warn!("❌ RPC request failed on {}: {}", self.config.name, error);
     }
 }
@@ -404,8 +423,8 @@ pub struct CircuitBreaker {
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum CircuitBreakerState {
-    Closed,   // Normal operation
-    Open,     // Failing fast
+    Closed, // Normal operation
+    Open,   // Failing fast
     #[allow(dead_code)]
     HalfOpen, // Testing recovery
 }
@@ -421,21 +440,21 @@ impl CircuitBreaker {
             state: CircuitBreakerState::Closed,
         }
     }
-    
+
     fn record_success(&mut self) {
         self.failure_count = 0;
         self.state = CircuitBreakerState::Closed;
     }
-    
+
     fn record_failure(&mut self) {
         self.failure_count += 1;
         self.last_failure_time = Some(Instant::now());
-        
+
         if self.failure_count >= self.failure_threshold {
             self.state = CircuitBreakerState::Open;
         }
     }
-    
+
     fn is_open(&self) -> bool {
         match self.state {
             CircuitBreakerState::Open => {
@@ -466,26 +485,30 @@ impl RpcConnectionPool {
             round_robin_counter: Arc::new(Mutex::new(0)),
         }
     }
-    
+
     /// Add an endpoint to the pool
     pub async fn add_endpoint(&mut self, endpoint: RpcEndpoint) {
         let endpoint = Arc::new(endpoint);
-        
+
         // Insert in priority order
-        let insert_pos = self.endpoints
+        let insert_pos = self
+            .endpoints
             .iter()
             .position(|e| e.config.priority > endpoint.config.priority)
             .unwrap_or(self.endpoints.len());
-            
+
         self.endpoints.insert(insert_pos, endpoint.clone());
-        
-        info!("🏊 Added endpoint to pool: {} (total: {})", 
-              endpoint.config.name, self.endpoints.len());
-        
+
+        info!(
+            "🏊 Added endpoint to pool: {} (total: {})",
+            endpoint.config.name,
+            self.endpoints.len()
+        );
+
         // Start health check task for this endpoint
         self.start_health_check_task(endpoint).await;
     }
-    
+
     /// Get the best available connection
     pub async fn get_connection(&self) -> Result<(RpcConnection, String)> {
         // Try primary endpoint first
@@ -495,105 +518,114 @@ impl RpcConnectionPool {
                 return Ok((conn, endpoint.config.name.clone()));
             }
         }
-        
+
         // Try other endpoints in priority order
         for (idx, endpoint) in self.endpoints.iter().enumerate() {
             if idx == primary_idx {
                 continue; // Already tried
             }
-            
+
             if let Ok(conn) = endpoint.acquire_connection().await {
                 // Update primary if this is higher priority
                 if endpoint.config.priority < self.endpoints[primary_idx].config.priority {
                     *self.current_primary.write().await = idx;
                     info!("🔄 Switched primary endpoint to: {}", endpoint.config.name);
                 }
-                
+
                 return Ok((conn, endpoint.config.name.clone()));
             }
         }
-        
+
         Err(anyhow!("No healthy RPC endpoints available"))
     }
-    
+
     /// Get connection with round-robin load balancing
     pub async fn get_connection_round_robin(&self) -> Result<(RpcConnection, String)> {
         if self.endpoints.is_empty() {
             return Err(anyhow!("No RPC endpoints configured"));
         }
-        
+
         let mut counter = self.round_robin_counter.lock().await;
         let start_idx = *counter;
-        
+
         // Try each endpoint in round-robin order
         for _ in 0..self.endpoints.len() {
             let idx = *counter % self.endpoints.len();
             *counter = (*counter + 1) % self.endpoints.len();
-            
+
             if let Some(endpoint) = self.endpoints.get(idx) {
                 if let Ok(conn) = endpoint.acquire_connection().await {
                     return Ok((conn, endpoint.config.name.clone()));
                 }
             }
         }
-        
+
         // Reset counter if we couldn't find any healthy endpoint
         *counter = start_idx;
-        
-        Err(anyhow!("No healthy RPC endpoints available for round-robin"))
+
+        Err(anyhow!(
+            "No healthy RPC endpoints available for round-robin"
+        ))
     }
-    
+
     /// Get all endpoint statuses
     pub async fn get_all_statuses(&self) -> Vec<EndpointStatus> {
         let mut statuses = Vec::new();
-        
+
         for endpoint in &self.endpoints {
             statuses.push(endpoint.get_status().await);
         }
-        
+
         statuses
     }
-    
+
     /// Start health check task for an endpoint
     async fn start_health_check_task(&self, endpoint: Arc<RpcEndpoint>) {
         let check_interval = Duration::from_secs(endpoint.config.health_check_interval_secs);
-        
+
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(check_interval);
-            
+
             loop {
                 interval.tick().await;
                 endpoint.health_check().await;
             }
         });
     }
-    
+
     /// Create standard connection pool with default endpoints
-    pub async fn create_standard_pool(primary_rpc: String, secondary_rpc: Option<String>) -> Result<Self> {
+    pub async fn create_standard_pool(
+        primary_rpc: String,
+        secondary_rpc: Option<String>,
+    ) -> Result<Self> {
         let mut pool = Self::new();
-        
+
         // Add primary Helius endpoint
         let helius_config = RpcEndpointConfig::helius_primary(primary_rpc);
         let helius_endpoint = RpcEndpoint::new(helius_config, None);
         pool.add_endpoint(helius_endpoint).await;
-        
+
         // Add secondary endpoint if provided
         if let Some(secondary_url) = secondary_rpc {
-            let secondary_config = RpcEndpointConfig::secondary_rpc(secondary_url, "Secondary-RPC".to_string());
+            let secondary_config =
+                RpcEndpointConfig::secondary_rpc(secondary_url, "Secondary-RPC".to_string());
             let secondary_endpoint = RpcEndpoint::new(secondary_config, None);
             pool.add_endpoint(secondary_endpoint).await;
         }
-        
+
         // Add public Solana RPC as backup
         let backup_config = RpcEndpointConfig::backup_rpc(
             "https://api.mainnet-beta.solana.com".to_string(),
-            "Solana-Public".to_string()
+            "Solana-Public".to_string(),
         );
         let backup_endpoint = RpcEndpoint::new(backup_config, None);
         pool.add_endpoint(backup_endpoint).await;
-        
-        info!("🏊‍♂️ Created standard RPC connection pool with {} endpoints", pool.endpoints.len());
-        
+
+        info!(
+            "🏊‍♂️ Created standard RPC connection pool with {} endpoints",
+            pool.endpoints.len()
+        );
+
         Ok(pool)
     }
 }
@@ -641,64 +673,70 @@ impl From<&EndpointStatus> for SerializableEndpointStatus {
 
 impl std::fmt::Display for EndpointStatus {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}: {:?} ({}ms avg, {}/{} conn, success: {}/{})", 
-               self.name,
-               self.health,
-               self.metrics.average_latency_ms as u64,
-               self.active_connections,
-               self.max_connections,
-               self.metrics.successful_requests,
-               self.metrics.total_requests)
+        write!(
+            f,
+            "{}: {:?} ({}ms avg, {}/{} conn, success: {}/{})",
+            self.name,
+            self.health,
+            self.metrics.average_latency_ms as u64,
+            self.active_connections,
+            self.max_connections,
+            self.metrics.successful_requests,
+            self.metrics.total_requests
+        )
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[tokio::test]
     async fn test_connection_pool_creation() {
         let mut pool = RpcConnectionPool::new();
         assert_eq!(pool.endpoints.len(), 0);
-        
+
         let config = RpcEndpointConfig::helius_primary("https://test.helius.com".to_string());
         let endpoint = RpcEndpoint::new(config, None);
-        
+
         pool.add_endpoint(endpoint).await;
         assert_eq!(pool.endpoints.len(), 1);
     }
-    
+
     #[tokio::test]
     async fn test_endpoint_priority_ordering() {
         let mut pool = RpcConnectionPool::new();
-        
+
         // Add endpoints in reverse priority order
-        let low_priority = RpcEndpointConfig::backup_rpc("https://backup.com".to_string(), "Backup".to_string());
+        let low_priority =
+            RpcEndpointConfig::backup_rpc("https://backup.com".to_string(), "Backup".to_string());
         let high_priority = RpcEndpointConfig::helius_primary("https://primary.com".to_string());
-        
-        pool.add_endpoint(RpcEndpoint::new(low_priority, None)).await;
-        pool.add_endpoint(RpcEndpoint::new(high_priority, None)).await;
-        
+
+        pool.add_endpoint(RpcEndpoint::new(low_priority, None))
+            .await;
+        pool.add_endpoint(RpcEndpoint::new(high_priority, None))
+            .await;
+
         // Primary should be first due to priority ordering
         assert_eq!(pool.endpoints[0].config.priority, 1);
         assert_eq!(pool.endpoints[1].config.priority, 3);
     }
-    
+
     #[test]
     fn test_circuit_breaker() {
         let mut cb = CircuitBreaker::new(3, Duration::from_secs(10), Duration::from_secs(30));
-        
+
         // Should start closed
         assert!(!cb.is_open());
-        
+
         // Record failures
         cb.record_failure();
         cb.record_failure();
         assert!(!cb.is_open()); // Not open yet
-        
+
         cb.record_failure(); // Should trigger open
         assert!(cb.is_open());
-        
+
         // Success should close it
         cb.record_success();
         assert!(!cb.is_open());

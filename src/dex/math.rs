@@ -22,7 +22,7 @@ pub mod phoenix;
 /// High-precision CLMM calculations for concentrated liquidity pools
 pub mod clmm {
     use super::*;
-    
+
     /// Calculate output amount for CLMM pools using tick-based liquidity
     /// This is optimized for Orca Whirlpools and similar concentrated liquidity DEXs
     #[allow(dead_code)] // Advanced math function reserved for future CLMM implementation
@@ -37,35 +37,37 @@ pub mod clmm {
         if liquidity == 0 {
             return Err(anyhow!("Liquidity cannot be zero"));
         }
-        
+
         // Convert to high precision
         let input_decimal = Decimal::from(input_amount);
         let fee_decimal = Decimal::from(fee_rate) / Decimal::from(10000u32); // Convert bps to decimal
-        
+
         // Calculate fee
         let input_after_fee = input_decimal * (Decimal::ONE - fee_decimal);
-        
+
         // Simplified CLMM calculation
         // In a real CLMM, we'd calculate the exact price curve and tick transitions
         // For now, use a hybrid approach that approximates CLMM behavior
-        
+
         // Convert sqrt price from x64 format to decimal
         let sqrt_price_decimal = Decimal::from(current_sqrt_price) / Decimal::from(1u128 << 32);
-        
+
         // Use constant product as base but with concentration factor
         let liquidity_decimal = Decimal::from(liquidity);
         let concentration_factor = Decimal::from_str("1.5")?; // Simulate concentrated liquidity effect
-        
+
         let virtual_reserve_in = liquidity_decimal / sqrt_price_decimal / concentration_factor;
         let virtual_reserve_out = liquidity_decimal * sqrt_price_decimal / concentration_factor;
-        
+
         // Constant product formula with virtual reserves
-        let output_amount = (input_after_fee * virtual_reserve_out) / (virtual_reserve_in + input_after_fee);
-        
-        output_amount.to_u64()
+        let output_amount =
+            (input_after_fee * virtual_reserve_out) / (virtual_reserve_in + input_after_fee);
+
+        output_amount
+            .to_u64()
             .ok_or_else(|| anyhow!("CLMM output calculation overflow"))
     }
-    
+
     /// Calculate CLMM swap price impact
     #[allow(dead_code)] // Advanced math function for price impact analysis
     pub fn calculate_price_impact(
@@ -76,10 +78,10 @@ pub mod clmm {
         if current_price == 0 {
             return Err(anyhow!("Current price cannot be zero"));
         }
-        
+
         let effective_price = Decimal::from(input_amount) / Decimal::from(output_amount);
         let current_price_decimal = Decimal::from(current_price);
-        
+
         let price_impact = (effective_price - current_price_decimal) / current_price_decimal;
         Ok(price_impact.abs())
     }
@@ -88,7 +90,7 @@ pub mod clmm {
 /// Meteora-specific calculations for dynamic AMM and DLMM pools
 pub mod meteora {
     use super::*;
-    
+
     /// Calculate Meteora Dynamic AMM output (variable fees)
     #[allow(dead_code)] // Advanced math function for Meteora Dynamic AMM calculations
     pub fn calculate_dynamic_amm_output(
@@ -102,9 +104,9 @@ pub mod meteora {
         if input_amount == 0 {
             return Ok(0);
         }
-        
+
         let total_fee_bps = base_fee_bps + dynamic_fee_bps;
-        
+
         // Use enhanced constant product with dynamic fee
         let result = super::raydium::calculate_raydium_swap_output(
             input_amount,
@@ -113,10 +115,10 @@ pub mod meteora {
             total_fee_bps as u64,
             10000, // Fee denominator for basis points
         )?;
-        
+
         Ok(result.output_amount)
     }
-    
+
     /// Calculate Meteora DLMM (Dynamic Liquidity Market Maker) output
     pub fn calculate_dlmm_output(
         input_amount: u64,
@@ -127,40 +129,44 @@ pub mod meteora {
     ) -> Result<u64> {
         // DLMM uses bin-based pricing similar to CLMM but with discrete price levels
         let bin_price = calculate_bin_price(active_bin_id, bin_step)?;
-        
+
         // Simplified DLMM calculation - would be more complex with multiple bins
         let input_decimal = Decimal::from(input_amount);
         let fee_decimal = Decimal::from(fee_rate) / Decimal::from(10000u32);
         let input_after_fee = input_decimal * (Decimal::ONE - fee_decimal);
-        
+
         let output = input_after_fee * Decimal::from(bin_price) / Decimal::from(1000000u64);
-        
-        output.to_u64()
+
+        output
+            .to_u64()
             .ok_or_else(|| anyhow!("DLMM output calculation overflow"))
     }
-    
+
     fn calculate_bin_price(bin_id: u32, bin_step: u16) -> Result<u64> {
         // Meteora bin price calculation: price = (1 + bin_step / 10000) ^ (bin_id - BASE_BIN_ID)
         let base_price = 1000000u64; // Base price in micro units
         let step_multiplier = Decimal::from(bin_step) / Decimal::from(10000u32);
-        
+
         // Use a simplified calculation since rust_decimal doesn't have powi
         // In production, this would use a proper power calculation
         let bin_offset = bin_id as i64 - 8388608; // BASE_BIN_ID
         let mut bin_multiplier = Decimal::ONE;
-        
+
         if bin_offset > 0 {
-            for _ in 0..bin_offset.min(10) { // Limit iterations to prevent overflow
+            for _ in 0..bin_offset.min(10) {
+                // Limit iterations to prevent overflow
                 bin_multiplier = bin_multiplier * (Decimal::ONE + step_multiplier);
             }
         } else if bin_offset < 0 {
-            for _ in 0..(-bin_offset).min(10) { // Limit iterations to prevent overflow
+            for _ in 0..(-bin_offset).min(10) {
+                // Limit iterations to prevent overflow
                 bin_multiplier = bin_multiplier / (Decimal::ONE + step_multiplier);
             }
         }
-        
+
         let price = Decimal::from(base_price) * bin_multiplier;
-        price.to_u64()
+        price
+            .to_u64()
             .ok_or_else(|| anyhow!("Bin price calculation overflow"))
     }
 }
@@ -169,7 +175,7 @@ pub mod meteora {
 pub mod lifinity {
     use super::*;
     use std::str::FromStr;
-    
+
     /// Calculate Lifinity output with proactive market making adjustments
     #[allow(dead_code)] // Advanced math function for Lifinity proactive market making
     pub fn calculate_lifinity_output(
@@ -183,12 +189,12 @@ pub mod lifinity {
         if input_amount == 0 {
             return Ok(0);
         }
-        
+
         // Validate reserves
         if input_reserve == 0 || output_reserve == 0 {
             return Err(anyhow!("Pool reserves cannot be zero"));
         }
-        
+
         // Base calculation using constant product
         let base_result = super::raydium::calculate_raydium_swap_output(
             input_amount,
@@ -197,38 +203,42 @@ pub mod lifinity {
             fee_bps as u64,
             10000,
         )?;
-        
+
         let base_output = base_result.output_amount;
-        
+
         // Apply Lifinity's proactive market making adjustment if oracle price available
         if let Some(oracle_price) = oracle_price {
             let pool_price = (output_reserve as u128 * 1000000) / input_reserve as u128;
             let oracle_price_scaled = oracle_price as u128;
-            
+
             // Avoid division by zero
             if pool_price == 0 {
                 return Ok(base_output);
             }
-            
+
             // Adjust output based on oracle vs pool price deviation
             let price_ratio = oracle_price_scaled * 1000 / pool_price;
-            
-            if price_ratio > 1050 { // Oracle price > 5% higher than pool
+
+            if price_ratio > 1050 {
+                // Oracle price > 5% higher than pool
                 // Reduce output to move pool price toward oracle
                 let adjustment = Decimal::from(base_output) * Decimal::from_str("0.95")?;
-                return adjustment.to_u64()
+                return adjustment
+                    .to_u64()
                     .ok_or_else(|| anyhow!("Lifinity adjustment calculation overflow"));
-            } else if price_ratio < 950 { // Oracle price > 5% lower than pool
+            } else if price_ratio < 950 {
+                // Oracle price > 5% lower than pool
                 // Increase output to move pool price toward oracle
                 let adjustment = Decimal::from(base_output) * Decimal::from_str("1.05")?;
-                return adjustment.to_u64()
+                return adjustment
+                    .to_u64()
                     .ok_or_else(|| anyhow!("Lifinity adjustment calculation overflow"));
             }
         }
-        
+
         Ok(base_output)
     }
-    
+
     /// Calculate Lifinity concentration parameter effect on liquidity
     #[allow(dead_code)] // Used in Lifinity integration tests
     pub fn calculate_concentration_adjustment(
@@ -239,14 +249,15 @@ pub mod lifinity {
         // Higher concentration = more focused liquidity around current price
         let concentration_decimal = Decimal::from(concentration) / Decimal::from(10000u32);
         let base_liquidity_decimal = Decimal::from(base_liquidity);
-        
+
         // Apply concentration multiplier (1.0 + concentration_factor)
         let adjusted_liquidity = base_liquidity_decimal * (Decimal::ONE + concentration_decimal);
-        
-        adjusted_liquidity.to_u128()
+
+        adjusted_liquidity
+            .to_u128()
             .ok_or_else(|| anyhow!("Concentration adjustment overflow"))
     }
-    
+
     /// Calculate inventory-based price adjustment for proactive market making
     #[allow(dead_code)] // Used in Lifinity integration tests
     pub fn calculate_inventory_adjustment(
@@ -257,10 +268,10 @@ pub mod lifinity {
         if token_a_balance == 0 || token_b_balance == 0 {
             return Ok(Decimal::ONE); // No adjustment if either balance is zero
         }
-        
+
         let current_ratio = token_a_balance as f64 / token_b_balance as f64;
         let ratio_deviation = (current_ratio - target_ratio) / target_ratio;
-        
+
         // Apply inventory adjustment (max 10% price adjustment)
         let adjustment_factor = if ratio_deviation > 0.1 {
             Decimal::from_str("0.9")? // Decrease price if too much token A
@@ -273,7 +284,7 @@ pub mod lifinity {
             let deviation_decimal = Decimal::new(scaled_deviation, 4); // 4 decimal places
             Decimal::ONE + deviation_decimal
         };
-        
+
         Ok(adjustment_factor)
     }
 }
@@ -281,24 +292,21 @@ pub mod lifinity {
 /// Common utilities for all DEX math calculations
 pub mod utils {
     use super::*;
-    
+
     /// Calculate slippage percentage given input and output amounts
     #[allow(dead_code)] // Utility function for slippage analysis
-    pub fn calculate_slippage(
-        expected_output: u64,
-        actual_output: u64,
-    ) -> Result<Decimal> {
+    pub fn calculate_slippage(expected_output: u64, actual_output: u64) -> Result<Decimal> {
         if expected_output == 0 {
             return Err(anyhow!("Expected output cannot be zero"));
         }
-        
+
         let expected = Decimal::from(expected_output);
         let actual = Decimal::from(actual_output);
-        
+
         let slippage = (expected - actual) / expected;
         Ok(slippage.max(Decimal::ZERO)) // Slippage cannot be negative
     }
-    
+
     /// Calculate minimum output amount given slippage tolerance
     #[allow(dead_code)] // Utility function for slippage protection calculations
     pub fn calculate_minimum_output(
@@ -307,12 +315,13 @@ pub mod utils {
     ) -> Result<u64> {
         let expected = Decimal::from(expected_output);
         let slippage = Decimal::from(slippage_tolerance_bps) / Decimal::from(10000u32);
-        
+
         let minimum = expected * (Decimal::ONE - slippage);
-        minimum.to_u64()
+        minimum
+            .to_u64()
             .ok_or_else(|| anyhow!("Minimum output calculation overflow"))
     }
-    
+
     /// Validate that calculated outputs are reasonable
     #[allow(dead_code)] // Utility function for output validation
     pub fn validate_output(
@@ -323,20 +332,25 @@ pub mod utils {
         if output_amount == 0 {
             return Err(anyhow!("Output amount cannot be zero"));
         }
-        
+
         // Sanity check: output shouldn't be more than 10x input (prevents calculation errors)
         if output_amount > input_amount * 10 {
-            return Err(anyhow!("Output amount suspiciously high: {} for input {}", output_amount, input_amount));
+            return Err(anyhow!(
+                "Output amount suspiciously high: {} for input {}",
+                output_amount,
+                input_amount
+            ));
         }
-        
+
         // Check if slippage is within reasonable bounds (configurable but defaulting to 50% max)
-        let max_slippage_ratio = Decimal::from(max_slippage_bps.max(5000)) / Decimal::from(10000u32);
+        let max_slippage_ratio =
+            Decimal::from(max_slippage_bps.max(5000)) / Decimal::from(10000u32);
         let output_ratio = Decimal::from(output_amount) / Decimal::from(input_amount);
-        
+
         if output_ratio < (Decimal::ONE - max_slippage_ratio) {
             return Err(anyhow!("Output amount indicates excessive slippage"));
         }
-        
+
         Ok(())
     }
 }
@@ -344,7 +358,7 @@ pub mod utils {
 /// General utility functions that can be used across DEXes
 pub mod general {
     use super::*;
-    
+
     /// Simple constant product AMM calculation (x * y = k)
     /// This is the most basic AMM formula used as a fallback
     #[allow(dead_code)] // General utility function for simple AMM calculations
@@ -357,15 +371,15 @@ pub mod general {
         if input_reserve == 0 || output_reserve == 0 {
             return 0;
         }
-        
+
         // Apply fee
         let fee_decimal = Decimal::from(fee_rate_bps) / Decimal::from(10000u32);
         let input_after_fee = Decimal::from(input_amount) * (Decimal::ONE - fee_decimal);
-        
+
         // Constant product formula: output = (input_after_fee * output_reserve) / (input_reserve + input_after_fee)
         let numerator = input_after_fee * Decimal::from(output_reserve);
         let denominator = Decimal::from(input_reserve) + input_after_fee;
-        
+
         let output = numerator / denominator;
         output.to_u64().unwrap_or(0)
     }
@@ -390,15 +404,25 @@ mod tests {
             output_reserve,
             fee_numerator,
             fee_denominator,
-        ).unwrap();
+        )
+        .unwrap();
 
         assert!(result.output_amount > 0, "Output should be greater than 0");
-        assert!(result.output_amount < input_amount * 2, "Output should be reasonable given reserves");
+        assert!(
+            result.output_amount < input_amount * 2,
+            "Output should be reasonable given reserves"
+        );
         assert!(result.fee_amount > 0, "Fee should be collected");
-        assert!(result.price_impact >= 0.0, "Price impact should be non-negative");
-        
+        assert!(
+            result.price_impact >= 0.0,
+            "Price impact should be non-negative"
+        );
+
         // Output should be less than input due to fees
-        assert!(result.output_amount < input_amount * 2, "Output should account for fees");
+        assert!(
+            result.output_amount < input_amount * 2,
+            "Output should account for fees"
+        );
     }
 
     #[test]
@@ -418,7 +442,8 @@ mod tests {
             tick_lower,
             tick_upper,
             fee_rate,
-        ).unwrap();
+        )
+        .unwrap();
 
         assert!(output > 0, "CLMM output should be greater than 0");
     }
@@ -435,15 +460,22 @@ mod tests {
             input_amount,
             sqrt_price,
             liquidity,
-            0,       // current tick
-            64,      // tick spacing 
+            0,  // current tick
+            64, // tick spacing
             fee_rate,
-            true,    // A to B
-        ).unwrap();
+            true, // A to B
+        )
+        .unwrap();
 
-        assert!(result.output_amount > 0, "Whirlpool output should be greater than 0");
+        assert!(
+            result.output_amount > 0,
+            "Whirlpool output should be greater than 0"
+        );
         assert!(result.fee_amount > 0, "Fee amount should be greater than 0");
-        assert!(result.price_impact >= 0.0, "Price impact should be non-negative");
+        assert!(
+            result.price_impact >= 0.0,
+            "Price impact should be non-negative"
+        );
     }
 
     #[test]
@@ -461,7 +493,8 @@ mod tests {
             output_reserve,
             base_fee_bps,
             dynamic_fee_bps,
-        ).unwrap();
+        )
+        .unwrap();
 
         assert!(output > 0, "Dynamic AMM output should be greater than 0");
     }
@@ -481,7 +514,8 @@ mod tests {
             bin_step,
             liquidity_in_bin,
             fee_rate,
-        ).unwrap();
+        )
+        .unwrap();
 
         assert!(output > 0, "DLMM output should be greater than 0");
     }
@@ -501,7 +535,8 @@ mod tests {
             output_reserve,
             fee_bps,
             oracle_price,
-        ).unwrap();
+        )
+        .unwrap();
 
         assert!(output > 0, "Lifinity output should be greater than 0");
     }
@@ -521,9 +556,13 @@ mod tests {
             output_reserve,
             fee_bps,
             oracle_price,
-        ).unwrap();
+        )
+        .unwrap();
 
-        assert!(output > 0, "Lifinity output without oracle should be greater than 0");
+        assert!(
+            output > 0,
+            "Lifinity output without oracle should be greater than 0"
+        );
     }
 
     #[test]
@@ -542,20 +581,26 @@ mod tests {
         );
 
         assert!(output > 0, "Simple AMM output should be greater than 0");
-        
+
         // With 1:2 ratio and 1M input, we expect close to 2M output minus fees
         let expected_max = 2000000u64; // Theoretical max without fees
-        assert!(output < expected_max, "Output should be less than theoretical max due to fees");
-        
+        assert!(
+            output < expected_max,
+            "Output should be less than theoretical max due to fees"
+        );
+
         // Should be reasonable - somewhere around 1.9M+ after fees and slippage
-        assert!(output > 1800000, "Output should be reasonable given the reserves");
+        assert!(
+            output > 1800000,
+            "Output should be reasonable given the reserves"
+        );
     }
 
     #[test]
     fn test_zero_reserves_handling() {
         // Test that functions handle zero reserves gracefully
         let input_amount = 1000000;
-        
+
         // Test simple AMM with zero reserves
         let output = general::calculate_simple_amm_output(
             input_amount,
@@ -580,7 +625,7 @@ mod tests {
         let input_amount = 1000000;
         let input_reserve = 1000000000;
         let output_reserve = 1000000000;
-        
+
         // Test with 50% fee (extreme case)
         let output = general::calculate_simple_amm_output(
             input_amount,
@@ -588,9 +633,15 @@ mod tests {
             output_reserve,
             5000, // 50% fee
         );
-        
-        assert!(output > 0, "Should still produce some output even with high fees");
-        assert!(output < input_amount / 2, "Output should be significantly reduced with 50% fee");
+
+        assert!(
+            output > 0,
+            "Should still produce some output even with high fees"
+        );
+        assert!(
+            output < input_amount / 2,
+            "Output should be significantly reduced with 50% fee"
+        );
     }
 
     #[test]
@@ -598,15 +649,17 @@ mod tests {
         // Test minimum output calculation with slippage tolerance
         let expected_output = 1000000;
         let slippage_tolerance_bps = 500; // 5%
-        
-        let minimum_output = utils::calculate_minimum_output(
-            expected_output,
-            slippage_tolerance_bps,
-        ).unwrap();
-        
-        assert!(minimum_output < expected_output, "Minimum output should be less than expected");
-        assert!(minimum_output >= expected_output * 95 / 100, "Should be around 95% of expected");
+
+        let minimum_output =
+            utils::calculate_minimum_output(expected_output, slippage_tolerance_bps).unwrap();
+
+        assert!(
+            minimum_output < expected_output,
+            "Minimum output should be less than expected"
+        );
+        assert!(
+            minimum_output >= expected_output * 95 / 100,
+            "Should be around 95% of expected"
+        );
     }
 }
-
-

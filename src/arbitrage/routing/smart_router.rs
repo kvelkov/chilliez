@@ -1,6 +1,6 @@
 // src/arbitrage/routing/smart_router.rs
 //! Smart Router - Comprehensive Multi-Hop and Intelligent Order Routing
-//! 
+//!
 //! Integrates all routing components into a unified system:
 //! - Cross-DEX multi-hop routing optimization
 //! - Path finding with multiple algorithms
@@ -10,22 +10,20 @@
 //! - Automatic failover and recovery
 //! - Performance monitoring and analytics
 
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
-use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 
-use crate::arbitrage::routing::{
-    RoutingGraph, PathFinder, RouteSplitter, RouteOptimizer,
-    MevProtectedRouter, FailoverRouter,
-    RoutePath, OptimalSplit, RouteScore,
-    MevThreatAnalysis, ProtectedRoute, FailoverPlan,
-    PathfinderConfig, MevProtectionConfig, FailoverConfig,
-    OptimizationGoal, SplitStrategy, MevRisk,
-};
 use crate::arbitrage::analysis::fee::FeeEstimator;
-use crate::performance::{PerformanceManager, PerformanceConfig, PerformanceReport};
+use crate::arbitrage::routing::{
+    FailoverConfig, FailoverPlan, FailoverRouter, MevProtectedRouter, MevProtectionConfig, MevRisk,
+    MevThreatAnalysis, OptimalSplit, OptimizationGoal, PathFinder, PathfinderConfig,
+    ProtectedRoute, RouteOptimizer, RoutePath, RouteScore, RouteSplitter, RoutingGraph,
+    SplitStrategy,
+};
+use crate::performance::{PerformanceConfig, PerformanceManager, PerformanceReport};
 
 /// Smart router configuration combining all sub-component configs
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -269,7 +267,8 @@ impl SmartRouter {
         let pathfinder = Arc::new(RwLock::new(PathFinder::new(config.pathfinder.clone())));
         let splitter = RouteSplitter::new();
         let optimizer = RouteOptimizer::new();
-        let mev_router = MevProtectedRouter::new(config.mev_protection.clone(), fee_estimator.clone());
+        let mev_router =
+            MevProtectedRouter::new(config.mev_protection.clone(), fee_estimator.clone());
         let failover_router = FailoverRouter::new(
             config.failover.clone(),
             pathfinder.clone(),
@@ -286,8 +285,9 @@ impl SmartRouter {
             metrics_enabled: true,
             ..Default::default()
         };
-        let performance_manager: Arc<PerformanceManager> = Arc::new(PerformanceManager::new(performance_config).await?);
-        
+        let performance_manager: Arc<PerformanceManager> =
+            Arc::new(PerformanceManager::new(performance_config).await?);
+
         // Start performance monitoring
         performance_manager.start_monitoring().await?;
 
@@ -334,46 +334,62 @@ impl SmartRouter {
 
         // Generate routes using pathfinder with parallel processing
         let routes = self.generate_candidate_routes_parallel(&request).await?;
-        
+
         if routes.is_empty() {
             return Err("No viable routes found".into());
         }
 
         // Optimize routes with parallel processing
         let optimized_routes = self.optimize_routes_parallel(&routes, &request).await?;
-        let best_route = optimized_routes.first()
+        let best_route = optimized_routes
+            .first()
             .ok_or("No optimized routes available")?
             .clone();
 
         // Handle route splitting for large orders
-        let split_routes = if request.enable_splitting && self.should_split_route(&best_route, &request) {
-            self.splitter.split_route(&best_route, &request.amount, self.config.default_split_strategy.clone()).await?
-        } else {
-            None
-        };
+        let split_routes =
+            if request.enable_splitting && self.should_split_route(&best_route, &request) {
+                self.splitter
+                    .split_route(
+                        &best_route,
+                        &request.amount,
+                        self.config.default_split_strategy.clone(),
+                    )
+                    .await?
+            } else {
+                None
+            };
 
         // Analyze MEV threats
         let mev_analysis = self.mev_router.analyze_mev_threat(&best_route).await?;
-        
+
         // Create MEV-protected route
-        let protected_route = self.mev_router.protect_route(&best_route, &mev_analysis).await?;
+        let protected_route = self
+            .mev_router
+            .protect_route(&best_route, &mev_analysis)
+            .await?;
 
         // Generate failover plan
-        let failover_plan = self.failover_router.create_failover_plan(
-            best_route.clone(),
-            &request.input_token,
-            &request.output_token,
-            request.amount,
-        ).await?;
+        let failover_plan = self
+            .failover_router
+            .create_failover_plan(
+                best_route.clone(),
+                &request.input_token,
+                &request.output_token,
+                request.amount,
+            )
+            .await?;
 
         // Calculate route score
-        let route_score = self.optimizer.evaluate_route(
-            &best_route,
-            &self.config.optimization_goals,
-        ).await?;
+        let route_score = self
+            .optimizer
+            .evaluate_route(&best_route, &self.config.optimization_goals)
+            .await?;
 
         // Calculate quality metrics
-        let quality_metrics = self.calculate_quality_metrics(&best_route, &mev_analysis, request.amount).await?;
+        let quality_metrics = self
+            .calculate_quality_metrics(&best_route, &mev_analysis, request.amount)
+            .await?;
 
         // Generate execution recommendation
         let execution_recommendation = self.generate_execution_recommendation(
@@ -407,8 +423,14 @@ impl SmartRouter {
 
         // Update performance metrics
         let mut metrics = self.performance_metrics.write().await;
-        metrics.avg_computation_time = (metrics.avg_computation_time * 0.9) + (computation_time.as_millis() as f64 * 0.1);
-        if matches!(execution_recommendation.action, RecommendedAction::ExecuteImmediately | RecommendedAction::ExecuteWithDelay | RecommendedAction::SplitAndExecute) {
+        metrics.avg_computation_time =
+            (metrics.avg_computation_time * 0.9) + (computation_time.as_millis() as f64 * 0.1);
+        if matches!(
+            execution_recommendation.action,
+            RecommendedAction::ExecuteImmediately
+                | RecommendedAction::ExecuteWithDelay
+                | RecommendedAction::SplitAndExecute
+        ) {
             metrics.successful_routes += 1;
             metrics.total_volume_routed += request.amount;
         } else {
@@ -429,7 +451,9 @@ impl SmartRouter {
         }
 
         // Execute with failover protection
-        self.failover_router.execute_with_failover(&result.failover_plan).await
+        self.failover_router
+            .execute_with_failover(&result.failover_plan)
+            .await
     }
 
     /// Update routing graph with new pool data
@@ -450,7 +474,9 @@ impl SmartRouter {
     }
 
     /// Get health status of all DEXs
-    pub async fn get_dex_health_status(&self) -> HashMap<String, crate::arbitrage::routing::DexHealthStatus> {
+    pub async fn get_dex_health_status(
+        &self,
+    ) -> HashMap<String, crate::arbitrage::routing::DexHealthStatus> {
         self.failover_router.get_health_summary().await
     }
 
@@ -465,7 +491,11 @@ impl SmartRouter {
     }
 
     /// Enable/disable specific performance optimizations
-    pub async fn configure_performance(&self, enable_parallel: bool, enable_caching: bool) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn configure_performance(
+        &self,
+        enable_parallel: bool,
+        enable_caching: bool,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         if enable_parallel {
             log::info!("✅ Parallel processing enabled for route optimization");
         }
@@ -483,19 +513,29 @@ impl SmartRouter {
         request: &RouteRequest,
     ) -> Result<Vec<RoutePath>, Box<dyn std::error::Error>> {
         let executor = self.performance_manager.parallel_executor();
-        
+
         // Check cache first
         let _cache_manager = self.performance_manager.cache_manager();
-        let _cache_key = format!("routes_{}_{}_{}_{}", 
-            request.input_token, request.output_token, request.amount, request.speed_priority.clone() as u8);
-        
+        let _cache_key = format!(
+            "routes_{}_{}_{}_{}",
+            request.input_token,
+            request.output_token,
+            request.amount,
+            request.speed_priority.clone() as u8
+        );
+
         // TODO: Convert RouteInfo to Vec<RoutePath> or update cache design
         // if let Some(cached_routes) = cache_manager.get_route(&cache_key).await {
         //     return Ok(cached_routes);
         // }
 
         // Create parallel tasks for different DEX pathfinding strategies
-        let tasks: Vec<Box<dyn FnOnce() -> tokio::task::JoinHandle<Result<Vec<RoutePath>, anyhow::Error>> + Send>> = vec![
+        let tasks: Vec<
+            Box<
+                dyn FnOnce() -> tokio::task::JoinHandle<Result<Vec<RoutePath>, anyhow::Error>>
+                    + Send,
+            >,
+        > = vec![
             // Task 1: Shortest path for speed
             {
                 let graph = self.routing_graph.clone();
@@ -503,17 +543,17 @@ impl SmartRouter {
                 let input_token = request.input_token.clone();
                 let output_token = request.output_token.clone();
                 let amount = request.amount;
-                Box::new(move || tokio::spawn(async move {
-                    let graph = graph.read().await;
-                    let mut pathfinder = pathfinder.write().await;
-                    let result = pathfinder.find_shortest_path(
-                        &*graph,
-                        &input_token,
-                        &output_token,
-                        amount as f64,
-                    ).await.map_err(|e| anyhow::anyhow!("Shortest path error: {}", e))?;
-                    Ok(result.map(|r| vec![r]).unwrap_or_default())
-                }))
+                Box::new(move || {
+                    tokio::spawn(async move {
+                        let graph = graph.read().await;
+                        let mut pathfinder = pathfinder.write().await;
+                        let result = pathfinder
+                            .find_shortest_path(&*graph, &input_token, &output_token, amount as f64)
+                            .await
+                            .map_err(|e| anyhow::anyhow!("Shortest path error: {}", e))?;
+                        Ok(result.map(|r| vec![r]).unwrap_or_default())
+                    })
+                })
             },
             // Task 2: K-shortest paths for diversity
             {
@@ -522,17 +562,22 @@ impl SmartRouter {
                 let input_token = request.input_token.clone();
                 let output_token = request.output_token.clone();
                 let amount = request.amount;
-                Box::new(move || tokio::spawn(async move {
-                    let graph = graph.read().await;
-                    let mut pathfinder = pathfinder.write().await;
-                    pathfinder.find_k_shortest_paths(
-                        &*graph,
-                        &input_token,
-                        &output_token,
-                        amount as f64,
-                        3,
-                    ).await.map_err(|e| anyhow::anyhow!("K-shortest paths error: {}", e))
-                }))
+                Box::new(move || {
+                    tokio::spawn(async move {
+                        let graph = graph.read().await;
+                        let mut pathfinder = pathfinder.write().await;
+                        pathfinder
+                            .find_k_shortest_paths(
+                                &*graph,
+                                &input_token,
+                                &output_token,
+                                amount as f64,
+                                3,
+                            )
+                            .await
+                            .map_err(|e| anyhow::anyhow!("K-shortest paths error: {}", e))
+                    })
+                })
             },
             // Task 3: Multi-hop routes for better pricing
             {
@@ -541,23 +586,28 @@ impl SmartRouter {
                 let input_token = request.input_token.clone();
                 let output_token = request.output_token.clone();
                 let amount = request.amount;
-                Box::new(move || tokio::spawn(async move {
-                    let graph = graph.read().await;
-                    let mut pathfinder = pathfinder.write().await;
-                    pathfinder.find_k_shortest_paths(
-                        &*graph,
-                        &input_token,
-                        &output_token,
-                        amount as f64,
-                        5,
-                    ).await.map_err(|e| anyhow::anyhow!("Multi-hop paths error: {}", e))
-                }))
+                Box::new(move || {
+                    tokio::spawn(async move {
+                        let graph = graph.read().await;
+                        let mut pathfinder = pathfinder.write().await;
+                        pathfinder
+                            .find_k_shortest_paths(
+                                &*graph,
+                                &input_token,
+                                &output_token,
+                                amount as f64,
+                                5,
+                            )
+                            .await
+                            .map_err(|e| anyhow::anyhow!("Multi-hop paths error: {}", e))
+                    })
+                })
             },
         ];
 
         // Execute all pathfinding tasks in parallel
         let results = executor.execute_parallel_quotes(tasks).await;
-        
+
         // Combine all routes from successful results
         let mut all_routes = Vec::new();
         for result in results {
@@ -571,7 +621,7 @@ impl SmartRouter {
         // all_routes.dedup_by(|a, b| a.path == b.path);
         // TODO: Fix cache to store Vec<RoutePath> instead of RouteInfo
         // cache_manager.set_route(cache_key, all_routes.clone()).await;
-        
+
         Ok(all_routes)
     }
 
@@ -586,28 +636,33 @@ impl SmartRouter {
         }
 
         let executor = self.performance_manager.parallel_executor();
-        
+
         // Create parallel optimization tasks
-        let optimization_tasks: Vec<_> = routes.iter().map(|route| {
-            let route = route.clone();
-            let goals = self.config.optimization_goals.clone();
-            let optimizer = self.optimizer.clone();
-            
-            move || {
+        let optimization_tasks: Vec<_> = routes
+            .iter()
+            .map(|route| {
                 let route = route.clone();
-                let goals = goals.clone();
-                let optimizer = optimizer.clone();
-                async move {
-                    let score = optimizer.evaluate_route(&route, &goals).await
-                        .map_err(|e| anyhow::anyhow!("Route evaluation error: {}", e))?;
-                    Ok((route, score))
+                let goals = self.config.optimization_goals.clone();
+                let optimizer = self.optimizer.clone();
+
+                move || {
+                    let route = route.clone();
+                    let goals = goals.clone();
+                    let optimizer = optimizer.clone();
+                    async move {
+                        let score = optimizer
+                            .evaluate_route(&route, &goals)
+                            .await
+                            .map_err(|e| anyhow::anyhow!("Route evaluation error: {}", e))?;
+                        Ok((route, score))
+                    }
                 }
-            }
-        }).collect();
+            })
+            .collect();
 
         // Execute optimizations in parallel
         let results = executor.execute_concurrent(optimization_tasks).await;
-        
+
         // Process results and sort by score
         let mut scored_routes = Vec::new();
         for result in results {
@@ -615,10 +670,14 @@ impl SmartRouter {
                 scored_routes.push((route, score));
             }
         }
-        
+
         // Sort by score (higher is better)
-        scored_routes.sort_by(|a, b| b.1.total_score.partial_cmp(&a.1.total_score).unwrap_or(std::cmp::Ordering::Equal));
-        
+        scored_routes.sort_by(|a, b| {
+            b.1.total_score
+                .partial_cmp(&a.1.total_score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+
         Ok(scored_routes.into_iter().map(|(route, _)| route).collect())
     }
 
@@ -626,7 +685,7 @@ impl SmartRouter {
         // Split large orders or routes with high price impact
         let high_value = request.amount > 10_000_000_000; // > 10,000 USD equivalent
         let high_impact = route.price_impact.unwrap_or(0.0) > 0.02; // > 2%
-        
+
         high_value || high_impact
     }
 
@@ -639,20 +698,28 @@ impl SmartRouter {
         let expected_return = (route.expected_output as f64 / input_amount as f64 - 1.0) * 100.0;
         let total_fees = route.estimated_gas_fee.unwrap_or(0);
         let price_impact = route.price_impact.unwrap_or(0.0) * 100.0;
-        
-        let liquidity_score = route.steps.iter()
+
+        let liquidity_score = route
+            .steps
+            .iter()
             .map(|step| {
-                let liquidity = if step.pool_liquidity > 0.0 { step.pool_liquidity } else { 1_000_000.0 };
+                let liquidity = if step.pool_liquidity > 0.0 {
+                    step.pool_liquidity
+                } else {
+                    1_000_000.0
+                };
                 (liquidity / 100_000_000.0).min(1.0) // Normalize to 0-1
             })
-            .fold(0.0, |acc, x| acc + x) / route.steps.len() as f64;
+            .fold(0.0, |acc, x| acc + x)
+            / route.steps.len() as f64;
 
         let reliability_score = self.calculate_route_reliability(route).await;
         let mev_risk_score = mev_analysis.risk_score;
-        
-        let execution_time_estimate = route.execution_time_estimate
+
+        let execution_time_estimate = route
+            .execution_time_estimate
             .unwrap_or(Duration::from_millis(500 * route.steps.len() as u64));
-        
+
         let success_probability = reliability_score * (1.0 - mev_risk_score * 0.5);
 
         Ok(RouteQualityMetrics {
@@ -669,14 +736,14 @@ impl SmartRouter {
 
     async fn calculate_route_reliability(&self, route: &RoutePath) -> f64 {
         let health_status = self.failover_router.get_health_summary().await;
-        
+
         let mut total_reliability = 1.0;
         for step in &route.steps {
             if let Some(health) = health_status.get(&step.dex_type.to_string()) {
                 total_reliability *= health.success_rate;
             }
         }
-        
+
         total_reliability
     }
 
@@ -689,7 +756,7 @@ impl SmartRouter {
     ) -> Result<ExecutionRecommendation, Box<dyn std::error::Error>> {
         let mut identified_risks = Vec::new();
         let mut mitigation_measures = Vec::new();
-        
+
         // Assess MEV risk
         let mev_risk_high = matches!(mev_analysis.risk_level, MevRisk::High | MevRisk::Critical);
         if mev_risk_high {
@@ -725,28 +792,52 @@ impl SmartRouter {
         // Determine recommended action
         let (action, confidence, reasoning) = match risk_level {
             RiskLevel::VeryHigh => {
-                if quality_metrics.expected_return > 5.0 { // > 5% return
-                    (RecommendedAction::SplitAndExecute, 0.6, "High risk but high return - split order to reduce risk".to_string())
+                if quality_metrics.expected_return > 5.0 {
+                    // > 5% return
+                    (
+                        RecommendedAction::SplitAndExecute,
+                        0.6,
+                        "High risk but high return - split order to reduce risk".to_string(),
+                    )
                 } else {
-                    (RecommendedAction::Abort, 0.9, "Risk too high for expected return".to_string())
+                    (
+                        RecommendedAction::Abort,
+                        0.9,
+                        "Risk too high for expected return".to_string(),
+                    )
                 }
-            },
+            }
             RiskLevel::High => {
                 if mev_risk_high {
-                    (RecommendedAction::ExecuteWithDelay, 0.7, "Use MEV protection with timing delay".to_string())
+                    (
+                        RecommendedAction::ExecuteWithDelay,
+                        0.7,
+                        "Use MEV protection with timing delay".to_string(),
+                    )
                 } else {
-                    (RecommendedAction::SplitAndExecute, 0.8, "Split large order to reduce impact".to_string())
+                    (
+                        RecommendedAction::SplitAndExecute,
+                        0.8,
+                        "Split large order to reduce impact".to_string(),
+                    )
                 }
-            },
-            RiskLevel::Medium => {
-                (RecommendedAction::ExecuteWithDelay, 0.8, "Execute with standard MEV protection".to_string())
-            },
-            RiskLevel::Low | RiskLevel::VeryLow => {
-                (RecommendedAction::ExecuteImmediately, 0.9, "Low risk - execute immediately".to_string())
-            },
+            }
+            RiskLevel::Medium => (
+                RecommendedAction::ExecuteWithDelay,
+                0.8,
+                "Execute with standard MEV protection".to_string(),
+            ),
+            RiskLevel::Low | RiskLevel::VeryLow => (
+                RecommendedAction::ExecuteImmediately,
+                0.9,
+                "Low risk - execute immediately".to_string(),
+            ),
         };
 
-        let optimal_timing = if matches!(action, RecommendedAction::ExecuteWithDelay | RecommendedAction::SplitAndExecute) {
+        let optimal_timing = if matches!(
+            action,
+            RecommendedAction::ExecuteWithDelay | RecommendedAction::SplitAndExecute
+        ) {
             Some(SystemTime::now() + Duration::from_millis(200))
         } else {
             None
@@ -769,13 +860,16 @@ impl SmartRouter {
     fn generate_cache_key(&self, request: &RouteRequest) -> String {
         use std::collections::hash_map::DefaultHasher;
         use std::hash::{Hash, Hasher};
-        
+
         let mut hasher = DefaultHasher::new();
         request.input_token.hash(&mut hasher);
         request.output_token.hash(&mut hasher);
         request.amount.hash(&mut hasher);
-        request.max_slippage.map(|s| (s * 10000.0) as u64).hash(&mut hasher);
-        
+        request
+            .max_slippage
+            .map(|s| (s * 10000.0) as u64)
+            .hash(&mut hasher);
+
         format!("route_{:x}", hasher.finish())
     }
 
@@ -783,7 +877,9 @@ impl SmartRouter {
         let cache = self.route_cache.read().await;
         if let Some(entry) = cache.get(cache_key) {
             // Check if cache entry is still valid
-            let age = SystemTime::now().duration_since(entry.created_at).unwrap_or_default();
+            let age = SystemTime::now()
+                .duration_since(entry.created_at)
+                .unwrap_or_default();
             if age < self.config.route_cache_ttl {
                 let mut result = entry.result.clone();
                 result.from_cache = true;
@@ -795,11 +891,14 @@ impl SmartRouter {
 
     async fn cache_result(&self, cache_key: String, result: SmartRoutingResult) {
         let mut cache = self.route_cache.write().await;
-        cache.insert(cache_key, CachedRoute {
-            result,
-            created_at: SystemTime::now(),
-            access_count: 1,
-        });
+        cache.insert(
+            cache_key,
+            CachedRoute {
+                result,
+                created_at: SystemTime::now(),
+                access_count: 1,
+            },
+        );
 
         // Clean old entries if cache is too large
         if cache.len() > 1000 {
@@ -845,8 +944,10 @@ mod tests {
         let config = SmartRouterConfig::default();
         let routing_graph = RoutingGraph::new();
         let fee_estimator = FeeEstimator::new();
-        
-        SmartRouter::new(config, routing_graph, fee_estimator).await.unwrap()
+
+        SmartRouter::new(config, routing_graph, fee_estimator)
+            .await
+            .unwrap()
     }
 
     #[tokio::test]
@@ -859,14 +960,20 @@ mod tests {
     #[tokio::test]
     async fn test_route_request_creation() {
         let request = create_test_request();
-        assert_eq!(request.input_token, "So11111111111111111111111111111111111111112");
+        assert_eq!(
+            request.input_token,
+            "So11111111111111111111111111111111111111112"
+        );
         assert_eq!(request.amount, 1_000_000_000);
         assert!(request.enable_splitting);
     }
 
     #[test]
     fn test_routing_priority_ordering() {
-        assert_ne!(RoutingPriority::SpeedOptimized, RoutingPriority::CostOptimized);
+        assert_ne!(
+            RoutingPriority::SpeedOptimized,
+            RoutingPriority::CostOptimized
+        );
         assert_eq!(RoutingPriority::Balanced, RoutingPriority::Balanced);
     }
 
@@ -882,10 +989,10 @@ mod tests {
     async fn test_cache_key_generation() {
         let router = create_test_smart_router().await;
         let request = create_test_request();
-        
+
         let key1 = router.generate_cache_key(&request);
         let key2 = router.generate_cache_key(&request);
-        
+
         assert_eq!(key1, key2);
         assert!(key1.starts_with("route_"));
     }
@@ -896,13 +1003,16 @@ mod tests {
         assert!(config.enable_intelligent_routing);
         assert!(config.enable_cross_dex_routing);
         assert!(config.enable_route_caching);
-        assert_eq!(config.default_split_strategy, SplitStrategy::LiquidityWeighted);
+        assert_eq!(
+            config.default_split_strategy,
+            SplitStrategy::LiquidityWeighted
+        );
     }
 
     #[tokio::test]
     async fn test_performance_metrics_tracking() {
         let router = create_test_smart_router().await;
-        
+
         // Initial metrics
         let initial_metrics = router.get_performance_metrics().await;
         assert_eq!(initial_metrics.total_requests, 0);
@@ -923,7 +1033,7 @@ mod tests {
                 max_acceptable_loss: Some(10000),
             },
         };
-        
+
         assert_eq!(recommendation.action, RecommendedAction::ExecuteImmediately);
         assert_eq!(recommendation.confidence, 0.9);
     }

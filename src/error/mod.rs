@@ -1,50 +1,50 @@
 // Removed: use anyhow::Result as AnyhowResult; // This was unused
+use log::{debug, error, info, warn};
 use std::time::{Duration, Instant};
-use tokio::time::sleep;
-use log::{error, warn, info, debug};
-use thiserror::Error; // Import thiserror::Error
+use thiserror::Error;
+use tokio::time::sleep; // Import thiserror::Error
 
 #[derive(Debug, Clone, Error)] // Add thiserror::Error derive
 pub enum ArbError {
     /// Unsupported DEX or operation
     #[error("Unsupported DEX: {0}")]
     UnsupportedDex(String),
-    
+
     /// Network/connectivity issues
     #[error("Network Error: {0}")]
     NetworkError(String),
-    
+
     /// WebSocket connection/data issues - CRITICAL for real-time data
     #[error("WebSocket Error: {0}")]
     WebSocketError(String),
-    
+
     /// DEX-specific errors (slippage, insufficient liquidity, etc.)
     #[error("DEX Error: {0}")]
     DexError(String),
-    
+
     /// RPC/Solana network errors
     #[error("RPC Error: {0}")]
     RpcError(String),
-    
+
     /// Instruction building errors
     #[error("Instruction Error: {0}")]
     InstructionError(String),
-    
+
     /// Parsing errors for pool data
     #[error("Parse Error: {0}")]
     ParseError(String),
-    
+
     /// Insufficient balance for trade execution
     #[error("Insufficient Balance: {0}")]
     InsufficientBalance(String),
-    
+
     /// Circuit breaker has been triggered
     #[error("Circuit Breaker Triggered: {0}")]
     CircuitBreakerTriggered(String),
-    
+
     #[error("Circuit breaker is open, operation blocked")] // This attribute comes from thiserror
     CircuitBreakerOpen,
-    
+
     /// Configuration errors
     #[error("Config Error: {0}")]
     ConfigError(String),
@@ -52,11 +52,11 @@ pub enum ArbError {
     /// Jupiter API specific errors
     #[error("Jupiter API Error: {0}")]
     JupiterApiError(String),
-    
+
     /// Jupiter rate limiting error
     #[error("Jupiter API rate limit exceeded")]
     JupiterRateLimitError,
-    
+
     /// Jupiter timeout error
     #[error("Jupiter API timeout: {0}")]
     JupiterTimeoutError(String),
@@ -64,75 +64,75 @@ pub enum ArbError {
     /// Cache/Redis errors
     #[error("Cache Error: {0}")]
     CacheError(String),
-    
+
     /// Timeout errors for operations
     #[error("Timeout Error: {0}")]
     TimeoutError(String),
-    
+
     /// Pool state validation errors
     #[error("Invalid Pool State: {0}")]
     InvalidPoolState(String),
-    
+
     /// Invalid amount errors
     #[error("Invalid Amount: {0}")]
     InvalidAmount(String),
-    
+
     /// Pool not found errors
     #[error("Pool Not Found: {0}")]
     PoolNotFound(String),
-    
+
     /// Trade execution errors
     #[error("Execution Error: {0}")]
     ExecutionError(String),
-    
+
     /// Transaction/blockchain errors
     #[error("Transaction Error: {0}")]
     TransactionError(String),
-    
+
     /// Simulation failed errors
     #[error("Simulation Failed: {0}")]
     SimulationFailed(String),
-    
+
     /// Unknown/unclassified errors
     #[error("Unknown Error: {0}")]
     Unknown(String),
-    
+
     /// Insufficient profit for trade execution
     #[error("Insufficient Profit: {0}")]
     InsufficientProfit(String),
-    
+
     /// Transaction failed after retries
     #[error("Transaction Failed: {0}")]
     TransactionFailed(String),
-    
+
     /// Invalid input parameters
     #[error("Invalid Input: {0}")]
     InvalidInput(String),
-    
+
     /// Execution disabled
     #[error("Execution Disabled: {0}")]
     ExecutionDisabled(String),
-    
+
     /// Errors that should not be retried
     #[error("Non-Recoverable Error: {0}")]
     NonRecoverable(String),
-    
+
     /// Resource exhausted (rate limits, concurrency limits, etc.)
     #[error("Resource Exhausted: {0}")]
     ResourceExhausted(String),
-    
+
     /// Deadlock prevention error
     #[error("Deadlock Prevention: {0}")]
     DeadlockPrevention(String),
-    
+
     /// Safety mode is active, preventing operations
     #[error("Safety Mode Active: {0}")]
     SafetyModeActive(String),
-    
+
     /// Account not found or not monitored
     #[error("Account Not Found: {0}")]
     AccountNotFound(String),
-    
+
     /// Configuration error
     #[error("Configuration Error: {0}")]
     ConfigurationError(String),
@@ -169,7 +169,7 @@ impl ArbError {
             ArbError::DexError(msg) => {
                 // Some DEX errors are recoverable (temporary slippage, rate limits)
                 !msg.contains("insufficient_funds") && !msg.contains("invalid_signature")
-            },
+            }
             ArbError::RpcError(_) => true,
             ArbError::ParseError(_) => false, // Data format issues aren't recoverable
             ArbError::InsufficientBalance(_) => false, // Need to wait for balance
@@ -179,7 +179,7 @@ impl ArbError {
             ArbError::JupiterApiError(_) => true, // Jupiter API errors are usually recoverable
             ArbError::JupiterRateLimitError => true, // Rate limits are recoverable after waiting
             ArbError::JupiterTimeoutError(_) => true, // Timeouts are recoverable
-            ArbError::CacheError(_) => true, // Redis might recover
+            ArbError::CacheError(_) => true,  // Redis might recover
             ArbError::TimeoutError(_) => true, // Timeouts are usually recoverable
             ArbError::InvalidPoolState(_) => false, // Invalid state needs intervention
             ArbError::InvalidAmount(_) => false, // Invalid amount needs fixing
@@ -187,55 +187,61 @@ impl ArbError {
             ArbError::ExecutionError(msg) => {
                 // Some execution errors are recoverable (slippage, temporary network issues)
                 msg.contains("slippage") || msg.contains("temporary") || msg.contains("retry")
-            },
+            }
             ArbError::TransactionError(msg) => {
                 // Some transaction errors are recoverable (network issues, not signature errors)
-                !msg.contains("signature") && !msg.contains("invalid") && 
-                (msg.contains("network") || msg.contains("timeout") || msg.contains("congestion"))
-            },
+                !msg.contains("signature")
+                    && !msg.contains("invalid")
+                    && (msg.contains("network")
+                        || msg.contains("timeout")
+                        || msg.contains("congestion"))
+            }
             ArbError::SimulationFailed(_) => true, // Simulations can be retried
-            ArbError::Unknown(_) => true, // Unknown errors might be recoverable
-            ArbError::NonRecoverable(_) => false, // Explicitly non-recoverable
+            ArbError::Unknown(_) => true,          // Unknown errors might be recoverable
+            ArbError::NonRecoverable(_) => false,  // Explicitly non-recoverable
             ArbError::ExecutionDisabled(_) => false, // Execution disabled, manual intervention needed
-            ArbError::ResourceExhausted(_) => true, // Resources might become available
+            ArbError::ResourceExhausted(_) => true,  // Resources might become available
             ArbError::DeadlockPrevention(_) => true, // Deadlock prevention, can retry later
-            ArbError::SafetyModeActive(_) => false, // Safety mode needs manual intervention
-            ArbError::AccountNotFound(_) => false, // Account not found, not recoverable by retry
+            ArbError::SafetyModeActive(_) => false,  // Safety mode needs manual intervention
+            ArbError::AccountNotFound(_) => false,   // Account not found, not recoverable by retry
             ArbError::ConfigurationError(_) => false, // Configuration needs fixing
-            ArbError::InstructionError(_) => false, // Instruction errors usually need code fixes
+            ArbError::InstructionError(_) => false,  // Instruction errors usually need code fixes
             ArbError::InsufficientProfit(_) => false, // Profit threshold not met, not recoverable by retry
-            ArbError::TransactionFailed(_) => true, // Transaction failures can be retried
+            ArbError::TransactionFailed(_) => true,   // Transaction failures can be retried
             ArbError::InvalidInput(_) => false, // Invalid input needs fixing, not recoverable by retry
         }
     }
 
     /// Determines if operation should be retried immediately
     pub fn should_retry(&self) -> bool {
-        self.is_recoverable() && match self {
-            ArbError::NetworkError(_) => true,
-            ArbError::WebSocketError(_) => true,
-            ArbError::RpcError(_) => true,
-            ArbError::CacheError(_) => true,
-            ArbError::TimeoutError(_) => true,
-            ArbError::SimulationFailed(_) => true,
-            ArbError::DexError(msg) => {
-                // Retry on rate limits and temporary issues
-                msg.contains("rate_limit") || msg.contains("temporary") || msg.contains("timeout")
-            },
-            ArbError::ExecutionError(msg) => {
-                // Retry on temporary execution issues
-                msg.contains("slippage") || msg.contains("temporary")
-            },
-            ArbError::TransactionError(msg) => {
-                // Retry on network-related transaction issues
-                msg.contains("network") || msg.contains("timeout") || msg.contains("congestion")
-            },
-            ArbError::Unknown(_) => false, // Don't immediately retry unknown errors
-            ArbError::InsufficientProfit(_) => false, // Profit threshold not met, no point in immediate retry
-            ArbError::TransactionFailed(_) => true, // Transaction failures might be recoverable
-            ArbError::InvalidInput(_) => false, // Invalid input needs fixing first
-            _ => false,
-        }
+        self.is_recoverable()
+            && match self {
+                ArbError::NetworkError(_) => true,
+                ArbError::WebSocketError(_) => true,
+                ArbError::RpcError(_) => true,
+                ArbError::CacheError(_) => true,
+                ArbError::TimeoutError(_) => true,
+                ArbError::SimulationFailed(_) => true,
+                ArbError::DexError(msg) => {
+                    // Retry on rate limits and temporary issues
+                    msg.contains("rate_limit")
+                        || msg.contains("temporary")
+                        || msg.contains("timeout")
+                }
+                ArbError::ExecutionError(msg) => {
+                    // Retry on temporary execution issues
+                    msg.contains("slippage") || msg.contains("temporary")
+                }
+                ArbError::TransactionError(msg) => {
+                    // Retry on network-related transaction issues
+                    msg.contains("network") || msg.contains("timeout") || msg.contains("congestion")
+                }
+                ArbError::Unknown(_) => false, // Don't immediately retry unknown errors
+                ArbError::InsufficientProfit(_) => false, // Profit threshold not met, no point in immediate retry
+                ArbError::TransactionFailed(_) => true, // Transaction failures might be recoverable
+                ArbError::InvalidInput(_) => false,     // Invalid input needs fixing first
+                _ => false,
+            }
     }
 
     /// Categorizes error for metrics and monitoring
@@ -304,8 +310,8 @@ pub struct CircuitBreaker {
 #[derive(Debug, Clone, PartialEq)]
 #[allow(dead_code)] // Enum and its variants are not yet fully integrated
 enum CircuitBreakerState {
-    Closed,  // Normal operation
-    Open,    // Blocking all requests
+    Closed,   // Normal operation
+    Open,     // Blocking all requests
     HalfOpen, // Testing if service recovered
 }
 
@@ -335,7 +341,7 @@ impl CircuitBreaker {
                 } else {
                     false
                 }
-            },
+            }
             _ => false,
         }
     }
@@ -351,12 +357,18 @@ impl CircuitBreaker {
     pub fn record_failure(&mut self) {
         self.failure_count += 1;
         self.last_failure_time = Some(Instant::now());
-        
+
         if self.failure_count >= self.failure_threshold {
             self.state = CircuitBreakerState::Open;
-            warn!("Circuit breaker: OPENED after {} failures", self.failure_count);
+            warn!(
+                "Circuit breaker: OPENED after {} failures",
+                self.failure_count
+            );
         } else {
-            debug!("Circuit breaker: Failure recorded ({}/{})", self.failure_count, self.failure_threshold);
+            debug!(
+                "Circuit breaker: Failure recorded ({}/{})",
+                self.failure_count, self.failure_threshold
+            );
         }
     }
 
@@ -369,7 +381,7 @@ impl CircuitBreaker {
         // Check if circuit breaker is open
         if self.is_open() {
             return Err(ArbError::CircuitBreakerTriggered(
-                "Circuit breaker is open, operation blocked".to_string()
+                "Circuit breaker is open, operation blocked".to_string(),
             ));
         }
 
@@ -388,7 +400,7 @@ impl CircuitBreaker {
             Ok(result) => {
                 self.record_success();
                 Ok(result)
-            },
+            }
             Err(e) => {
                 let arb_error = e.into();
                 self.record_failure();
@@ -410,9 +422,9 @@ impl CircuitBreaker {
 #[derive(Debug, Clone)]
 #[allow(dead_code)] // Struct and its fields/methods are not yet fully integrated
 pub struct RetryPolicy {
-    pub max_attempts: u32,     // Made public
-    pub base_delay: Duration,      // Made public
-    pub max_delay: Duration,       // Made public
+    pub max_attempts: u32,    // Made public
+    pub base_delay: Duration, // Made public
+    pub max_delay: Duration,  // Made public
 }
 
 impl RetryPolicy {
@@ -431,10 +443,10 @@ impl RetryPolicy {
         if attempt == 0 {
             return Duration::from_millis(0);
         }
-        
+
         let delay_ms = self.base_delay.as_millis() * (2_u128.pow(attempt - 1));
         let delay = Duration::from_millis(delay_ms.min(self.max_delay.as_millis()) as u64);
-        
+
         debug!("Retry attempt {}: delay = {:?}", attempt, delay);
         delay
     }
@@ -448,38 +460,45 @@ impl RetryPolicy {
         E: Into<ArbError>,
     {
         let mut last_error = None;
-        
+
         for attempt in 0..self.max_attempts {
             if attempt > 0 {
                 let delay = self.delay_for_attempt(attempt);
                 sleep(delay).await;
             }
-            
+
             match operation().await {
                 Ok(result) => {
                     if attempt > 0 {
                         info!("Operation succeeded after {} retries", attempt);
                     }
                     return Ok(result);
-                },
+                }
                 Err(e) => {
                     let arb_error: ArbError = e.into();
-                    
+
                     if !arb_error.should_retry() {
-                        warn!("Non-retryable error on attempt {}: {}", attempt + 1, arb_error);
+                        warn!(
+                            "Non-retryable error on attempt {}: {}",
+                            attempt + 1,
+                            arb_error
+                        );
                         return Err(arb_error);
                     }
-                    
-                    warn!("Attempt {} failed: {} (retrying...)", attempt + 1, arb_error);
+
+                    warn!(
+                        "Attempt {} failed: {} (retrying...)",
+                        attempt + 1,
+                        arb_error
+                    );
                     last_error = Some(arb_error);
                 }
             }
         }
-        
+
         error!("All {} retry attempts failed", self.max_attempts);
-        Err(last_error.unwrap_or_else(|| {
-            ArbError::NonRecoverable("Max retries exceeded".to_string())
-        }))
+        Err(last_error
+            .unwrap_or_else(|| ArbError::NonRecoverable("Max retries exceeded".to_string())))
     }
 }
 

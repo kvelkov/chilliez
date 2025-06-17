@@ -1,15 +1,15 @@
 // src/arbitrage/routing/optimizer.rs
 //! Route Optimizer Module for Multi-Objective Route Optimization
-//! 
+//!
 //! This module implements sophisticated optimization algorithms that evaluate
 //! and improve routing paths based on multiple criteria including profit,
 //! speed, reliability, and gas efficiency.
 
 use anyhow::Result;
-use serde::{Serialize, Deserialize};
+use log::{debug, info};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
-use log::{debug, info};
 
 use super::pathfinder::RoutePath;
 use super::{RouteRequest, RoutingPriority};
@@ -197,13 +197,18 @@ impl RouteOptimizer {
             return Ok(paths);
         }
 
-        info!("Optimizing {} routes with {} goals", paths.len(), goals.len());
+        info!(
+            "Optimizing {} routes with {} goals",
+            paths.len(),
+            goals.len()
+        );
 
         // Use the first goal as primary optimization target
         let primary_goal = goals.first().unwrap_or(&OptimizationGoal::Balanced);
 
         // Score all paths using the primary goal
-        let mut scored_paths: Vec<(RoutePath, f64)> = paths.into_iter()
+        let mut scored_paths: Vec<(RoutePath, f64)> = paths
+            .into_iter()
             .map(|path| {
                 let score = self.calculate_simple_score(&path, primary_goal);
                 (path, score)
@@ -213,9 +218,7 @@ impl RouteOptimizer {
         // Sort by score (descending)
         scored_paths.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
 
-        let final_paths: Vec<RoutePath> = scored_paths.into_iter()
-            .map(|(path, _)| path)
-            .collect();
+        let final_paths: Vec<RoutePath> = scored_paths.into_iter().map(|(path, _)| path).collect();
 
         let optimization_time = start_time.elapsed();
         self.update_stats(primary_goal, optimization_time, !final_paths.is_empty());
@@ -224,8 +227,11 @@ impl RouteOptimizer {
             self.stats.successful_optimizations += 1;
         }
 
-        info!("Route optimization completed in {:?}, {} routes selected", 
-              optimization_time, final_paths.len());
+        info!(
+            "Route optimization completed in {:?}, {} routes selected",
+            optimization_time,
+            final_paths.len()
+        );
 
         Ok(final_paths)
     }
@@ -262,13 +268,12 @@ impl RouteOptimizer {
         let constraint_penalty = self.calculate_constraint_penalty(path, constraints);
 
         // Calculate weighted total score
-        let total_score = (
-            output_score * weights.output_weight +
-            speed_score * weights.speed_weight +
-            gas_score * weights.gas_weight +
-            reliability_score * weights.reliability_weight +
-            impact_score * weights.impact_weight
-        ) - constraint_penalty;
+        let total_score = (output_score * weights.output_weight
+            + speed_score * weights.speed_weight
+            + gas_score * weights.gas_weight
+            + reliability_score * weights.reliability_weight
+            + impact_score * weights.impact_weight)
+            - constraint_penalty;
 
         Ok(RouteScore {
             total_score: total_score.max(0.0),
@@ -281,7 +286,7 @@ impl RouteOptimizer {
             constraint_penalty,
             composite_score: 0.0, // Default value, will be calculated in evaluate_route
             evaluation_time: Duration::from_millis(0), // Default value
-            route_hash: 0, // Default value
+            route_hash: 0,        // Default value
         })
     }
 
@@ -292,18 +297,18 @@ impl RouteOptimizer {
         goals: &[OptimizationGoal],
     ) -> Result<RouteScore> {
         let start_time = Instant::now();
-        
+
         // Calculate individual scores
         let output_score = self.calculate_output_score(route);
         let time_score = self.calculate_time_score(route);
         let gas_score = self.calculate_gas_score(route);
         let reliability_score = self.calculate_reliability_score(route);
         let impact_score = self.calculate_impact_score(route);
-        
+
         // Calculate weighted composite score based on goals
         let mut total_weight = 0.0;
         let mut weighted_score = 0.0;
-        
+
         for goal in goals {
             let (weight, score) = match goal {
                 OptimizationGoal::MaximizeOutput => (0.4, output_score),
@@ -313,32 +318,33 @@ impl RouteOptimizer {
                 OptimizationGoal::MinimizeImpact => (0.3, impact_score),
                 OptimizationGoal::Balanced => {
                     // Balanced approach - equal weights
-                    let balanced_score = (output_score + time_score + gas_score + reliability_score + impact_score) / 5.0;
+                    let balanced_score =
+                        (output_score + time_score + gas_score + reliability_score + impact_score)
+                            / 5.0;
                     (1.0, balanced_score)
-                },
+                }
                 OptimizationGoal::Custom(weights) => {
-                    let custom_score = 
-                        output_score * weights.output_weight +
-                        time_score * weights.speed_weight +
-                        gas_score * weights.gas_weight +
-                        reliability_score * weights.reliability_weight +
-                        impact_score * weights.impact_weight;
+                    let custom_score = output_score * weights.output_weight
+                        + time_score * weights.speed_weight
+                        + gas_score * weights.gas_weight
+                        + reliability_score * weights.reliability_weight
+                        + impact_score * weights.impact_weight;
                     (1.0, custom_score)
-                },
+                }
             };
-            
+
             weighted_score += weight * score;
             total_weight += weight;
         }
-        
+
         let final_score = if total_weight > 0.0 {
             weighted_score / total_weight
         } else {
             (output_score + time_score + gas_score + reliability_score + impact_score) / 5.0
         };
-        
+
         let evaluation_time = start_time.elapsed();
-        
+
         Ok(RouteScore {
             total_score: final_score,
             output_score,
@@ -346,7 +352,7 @@ impl RouteOptimizer {
             gas_score,
             reliability_score,
             impact_score,
-            diversity_score: 0.5, // Default diversity score
+            diversity_score: 0.5,    // Default diversity score
             constraint_penalty: 0.0, // No penalty for now
             composite_score: final_score,
             evaluation_time,
@@ -358,7 +364,7 @@ impl RouteOptimizer {
     fn calculate_route_hash(&self, path: &RoutePath) -> u64 {
         use std::collections::hash_map::DefaultHasher;
         use std::hash::{Hash, Hasher};
-        
+
         let mut hasher = DefaultHasher::new();
         for step in &path.steps {
             step.dex_type.hash(&mut hasher);
@@ -424,36 +430,44 @@ impl RouteOptimizer {
             max_execution_time: request.constraints.execution_deadline,
             min_output_amount: request.min_amount_out.map(|amt| amt as f64),
             max_price_impact: request.max_slippage,
-            required_dexs: request.constraints.allowed_dexs.as_ref().map(|dexs| 
-                dexs.iter().map(|s| match s.as_str() {
-                    "Orca" => crate::utils::DexType::Orca,
-                    "Raydium" => crate::utils::DexType::Raydium,
-                    "Lifinity" => crate::utils::DexType::Lifinity,
-                    "Meteora" => crate::utils::DexType::Meteora,
-                    "Phoenix" => crate::utils::DexType::Phoenix,
-                    "Jupiter" => crate::utils::DexType::Jupiter,
-                    "Whirlpool" => crate::utils::DexType::Whirlpool,
-                    _ => crate::utils::DexType::Unknown(s.clone()),
-                }).collect()
-            ),
-            forbidden_dexs: request.constraints.forbidden_dexs.as_ref().map(|dexs| 
-                dexs.iter().map(|s| match s.as_str() {
-                    "Orca" => crate::utils::DexType::Orca,
-                    "Raydium" => crate::utils::DexType::Raydium,
-                    "Lifinity" => crate::utils::DexType::Lifinity,
-                    "Meteora" => crate::utils::DexType::Meteora,
-                    "Phoenix" => crate::utils::DexType::Phoenix,
-                    "Jupiter" => crate::utils::DexType::Jupiter,
-                    "Whirlpool" => crate::utils::DexType::Whirlpool,
-                    _ => crate::utils::DexType::Unknown(s.clone()),
-                }).collect()
-            ),
+            required_dexs: request.constraints.allowed_dexs.as_ref().map(|dexs| {
+                dexs.iter()
+                    .map(|s| match s.as_str() {
+                        "Orca" => crate::utils::DexType::Orca,
+                        "Raydium" => crate::utils::DexType::Raydium,
+                        "Lifinity" => crate::utils::DexType::Lifinity,
+                        "Meteora" => crate::utils::DexType::Meteora,
+                        "Phoenix" => crate::utils::DexType::Phoenix,
+                        "Jupiter" => crate::utils::DexType::Jupiter,
+                        "Whirlpool" => crate::utils::DexType::Whirlpool,
+                        _ => crate::utils::DexType::Unknown(s.clone()),
+                    })
+                    .collect()
+            }),
+            forbidden_dexs: request.constraints.forbidden_dexs.as_ref().map(|dexs| {
+                dexs.iter()
+                    .map(|s| match s.as_str() {
+                        "Orca" => crate::utils::DexType::Orca,
+                        "Raydium" => crate::utils::DexType::Raydium,
+                        "Lifinity" => crate::utils::DexType::Lifinity,
+                        "Meteora" => crate::utils::DexType::Meteora,
+                        "Phoenix" => crate::utils::DexType::Phoenix,
+                        "Jupiter" => crate::utils::DexType::Jupiter,
+                        "Whirlpool" => crate::utils::DexType::Whirlpool,
+                        _ => crate::utils::DexType::Unknown(s.clone()),
+                    })
+                    .collect()
+            }),
             min_liquidity_per_step: Some(1000.0),
         }
     }
 
     /// Get optimization weights based on goal
-    fn get_optimization_weights(&self, goal: &OptimizationGoal, _request: &RouteRequest) -> OptimizationWeights {
+    fn get_optimization_weights(
+        &self,
+        goal: &OptimizationGoal,
+        _request: &RouteRequest,
+    ) -> OptimizationWeights {
         match goal {
             OptimizationGoal::MaximizeOutput => OptimizationWeights {
                 output_weight: 0.6,
@@ -498,18 +512,22 @@ impl RouteOptimizer {
     /// Calculate output score (normalized expected output)
     fn calculate_output_score(&self, path: &RoutePath) -> f64 {
         // Estimate output based on route steps
-        path.steps.iter()
+        path.steps
+            .iter()
             .map(|step| step.amount_out / step.amount_in.max(1.0))
             .product::<f64>()
     }
 
     /// Calculate speed score (inverse of execution time)
     fn calculate_speed_score(&self, path: &RoutePath) -> f64 {
-        let time_seconds = path.execution_time_estimate.unwrap_or(Duration::from_millis(500)).as_secs_f64();
+        let time_seconds = path
+            .execution_time_estimate
+            .unwrap_or(Duration::from_millis(500))
+            .as_secs_f64();
         if time_seconds <= 0.0 {
             return 1.0;
         }
-        
+
         // Normalize: 1 second = 1.0, 10 seconds = 0.1
         (1.0 / time_seconds).min(1.0)
     }
@@ -519,10 +537,10 @@ impl RouteOptimizer {
         if path.estimated_gas_cost == 0 {
             return 1.0;
         }
-        
+
         // Score based on gas efficiency (output per gas unit)
         let gas_efficiency = path.expected_output / path.estimated_gas_cost as f64;
-        
+
         // Normalize assuming good efficiency is 0.001 output per gas unit
         (gas_efficiency / 0.001).min(1.0)
     }
@@ -532,18 +550,20 @@ impl RouteOptimizer {
         if path.steps.is_empty() {
             return 0.5;
         }
-        
-        let avg_impact = path.steps.iter()
-            .map(|step| step.price_impact)
-            .sum::<f64>() / path.steps.len() as f64;
-        
+
+        let avg_impact =
+            path.steps.iter().map(|step| step.price_impact).sum::<f64>() / path.steps.len() as f64;
+
         // Invert impact: 0% impact = 1.0 score, 10% impact = 0.0 score
         (1.0 - (avg_impact / 0.1)).max(0.0)
     }
 
     /// Calculate time score for a route (how fast it executes)
     fn calculate_time_score(&self, path: &RoutePath) -> f64 {
-        let estimated_time = path.execution_time_estimate.unwrap_or(Duration::from_millis(1000)).as_millis() as f64;
+        let estimated_time = path
+            .execution_time_estimate
+            .unwrap_or(Duration::from_millis(1000))
+            .as_millis() as f64;
         // Lower time = higher score
         1000.0 / (estimated_time + 1.0)
     }
@@ -556,7 +576,11 @@ impl RouteOptimizer {
     }
 
     /// Calculate constraint penalty
-    fn calculate_constraint_penalty(&self, path: &RoutePath, constraints: &OptimizationConstraints) -> f64 {
+    fn calculate_constraint_penalty(
+        &self,
+        path: &RoutePath,
+        constraints: &OptimizationConstraints,
+    ) -> f64 {
         let mut penalty = 0.0;
 
         // Hop count penalty
@@ -592,10 +616,9 @@ impl RouteOptimizer {
 
         // Price impact penalty
         if let Some(max_impact) = constraints.max_price_impact {
-            let avg_impact = path.steps.iter()
-                .map(|step| step.price_impact)
-                .sum::<f64>() / path.steps.len().max(1) as f64;
-            
+            let avg_impact = path.steps.iter().map(|step| step.price_impact).sum::<f64>()
+                / path.steps.len().max(1) as f64;
+
             if avg_impact > max_impact {
                 penalty += 0.3 * (avg_impact - max_impact) / max_impact;
             }
@@ -606,7 +629,11 @@ impl RouteOptimizer {
 
     #[allow(dead_code)]
     /// Check if path satisfies hard constraints
-    fn satisfies_constraints(&self, path: &RoutePath, constraints: &OptimizationConstraints) -> bool {
+    fn satisfies_constraints(
+        &self,
+        path: &RoutePath,
+        constraints: &OptimizationConstraints,
+    ) -> bool {
         // Check hard constraints
         if let Some(max_hops) = constraints.max_hops {
             if path.steps.len() > max_hops {
@@ -628,7 +655,10 @@ impl RouteOptimizer {
 
         // Check forbidden DEXs
         if let Some(forbidden) = &constraints.forbidden_dexs {
-            let has_forbidden = path.steps.iter().any(|step| forbidden.contains(&step.dex_type));
+            let has_forbidden = path
+                .steps
+                .iter()
+                .any(|step| forbidden.contains(&step.dex_type));
             if has_forbidden {
                 return false;
             }
@@ -636,10 +666,9 @@ impl RouteOptimizer {
 
         // Check required DEXs
         if let Some(required) = &constraints.required_dexs {
-            let path_dexs: std::collections::HashSet<_> = path.steps.iter()
-                .map(|step| &step.dex_type)
-                .collect();
-            
+            let path_dexs: std::collections::HashSet<_> =
+                path.steps.iter().map(|step| &step.dex_type).collect();
+
             let has_all_required = required.iter().all(|dex| path_dexs.contains(dex));
             if !has_all_required {
                 return false;
@@ -648,7 +677,10 @@ impl RouteOptimizer {
 
         // Check minimum liquidity per step
         if let Some(min_liquidity) = constraints.min_liquidity_per_step {
-            let has_low_liquidity = path.steps.iter().any(|step| step.pool_liquidity < min_liquidity);
+            let has_low_liquidity = path
+                .steps
+                .iter()
+                .any(|step| step.pool_liquidity < min_liquidity);
             if has_low_liquidity {
                 return false;
             }
@@ -666,30 +698,33 @@ impl RouteOptimizer {
         _constraints: &OptimizationConstraints,
     ) -> Result<Vec<(RoutePath, RouteScore)>> {
         // Sort by total score (descending)
-        scored_paths.sort_by(|a, b| b.1.total_score.partial_cmp(&a.1.total_score).unwrap_or(std::cmp::Ordering::Equal));
-        
+        scored_paths.sort_by(|a, b| {
+            b.1.total_score
+                .partial_cmp(&a.1.total_score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+
         // Take top paths with some diversity
         let mut result = Vec::new();
         let mut used_pool_combinations = std::collections::HashSet::new();
-        
+
         for (path, score) in scored_paths {
             // Create a signature for this path's pool combination
-            let mut pool_signature: Vec<_> = path.steps.iter()
-                .map(|step| step.pool_address)
-                .collect();
+            let mut pool_signature: Vec<_> =
+                path.steps.iter().map(|step| step.pool_address).collect();
             pool_signature.sort();
-            
+
             // Add path if it uses a different combination of pools or is significantly better
             if !used_pool_combinations.contains(&pool_signature) || result.len() < 3 {
                 used_pool_combinations.insert(pool_signature);
                 result.push((path, score));
-                
+
                 if result.len() >= 10 {
                     break;
                 }
             }
         }
-        
+
         Ok(result)
     }
 
@@ -703,10 +738,12 @@ impl RouteOptimizer {
         request: &RouteRequest,
     ) -> Result<Vec<(RoutePath, RouteScore)>> {
         let mut population = initial_population;
-        
+
         // Ensure we have enough individuals
         while population.len() < self.config.population_size && !population.is_empty() {
-            let to_clone = population.len().min(self.config.population_size - population.len());
+            let to_clone = population
+                .len()
+                .min(self.config.population_size - population.len());
             for i in 0..to_clone {
                 let cloned = population[i].clone();
                 population.push(cloned);
@@ -715,55 +752,73 @@ impl RouteOptimizer {
 
         let start_time = Instant::now();
         let timeout = Duration::from_millis(self.config.timeout_ms);
-        
+
         for generation in 0..self.config.max_iterations {
             if start_time.elapsed() > timeout {
                 break;
             }
 
             // Selection: keep top 50%
-            population.sort_by(|a, b| b.1.total_score.partial_cmp(&a.1.total_score).unwrap_or(std::cmp::Ordering::Equal));
+            population.sort_by(|a, b| {
+                b.1.total_score
+                    .partial_cmp(&a.1.total_score)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
             population.truncate(self.config.population_size / 2);
 
             // Crossover and mutation to create new generation
             let mut new_generation = population.clone();
-            
+
             while new_generation.len() < self.config.population_size {
                 if population.len() >= 2 {
                     let parent1_idx = fastrand::usize(..population.len());
                     let parent2_idx = fastrand::usize(..population.len());
-                    
-                    if let Ok(child) = self.crossover_paths(&population[parent1_idx].0, &population[parent2_idx].0) {
+
+                    if let Ok(child) =
+                        self.crossover_paths(&population[parent1_idx].0, &population[parent2_idx].0)
+                    {
                         let mutated = if fastrand::f64() < self.config.mutation_rate {
                             self.mutate_path(child)?
                         } else {
                             child
                         };
-                        
-                        if let Ok(score) = self.score_route(&mutated, goal, constraints, request).await {
+
+                        if let Ok(score) =
+                            self.score_route(&mutated, goal, constraints, request).await
+                        {
                             if self.satisfies_constraints(&mutated, constraints) {
                                 new_generation.push((mutated, score));
                             }
                         }
                     }
                 }
-                
+
                 // Avoid infinite loop
                 if new_generation.len() == population.len() {
                     break;
                 }
             }
-            
+
             population = new_generation;
-            
-            debug!("Generation {}: best score = {:.4}", generation, 
-                   population.iter().map(|(_, score)| score.total_score).fold(0.0, f64::max));
+
+            debug!(
+                "Generation {}: best score = {:.4}",
+                generation,
+                population
+                    .iter()
+                    .map(|(_, score)| score.total_score)
+                    .fold(0.0, f64::max)
+            );
         }
 
         // Return top results
-        population.sort_by(|a, b| b.1.total_score.partial_cmp(&a.1.total_score).unwrap_or(std::cmp::Ordering::Equal));
+        population.sort_by(|a, b| {
+            b.1.total_score
+                .partial_cmp(&a.1.total_score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         population.truncate(10);
-        
+
         Ok(population)
     }
 
@@ -772,44 +827,44 @@ impl RouteOptimizer {
     fn crossover_paths(&self, path1: &RoutePath, path2: &RoutePath) -> Result<RoutePath> {
         // Simple crossover: take steps from both paths
         // This is a simplified implementation - in practice, this would be more sophisticated
-        
+
         if path1.steps.is_empty() || path2.steps.is_empty() {
             return Ok(path1.clone());
         }
-        
+
         let crossover_point = fastrand::usize(1..path1.steps.len().max(path2.steps.len()));
-        
+
         let mut new_steps = Vec::new();
-        
+
         // Take steps from path1 up to crossover point
         for (i, step) in path1.steps.iter().enumerate() {
             if i < crossover_point {
                 new_steps.push(step.clone());
             }
         }
-        
+
         // Take remaining steps from path2
         for (i, step) in path2.steps.iter().enumerate() {
             if i >= crossover_point {
                 new_steps.push(step.clone());
             }
         }
-        
+
         // Ensure path continuity (this is simplified)
         if new_steps.len() > 1 {
             for i in 1..new_steps.len() {
-                if new_steps[i-1].to_token != new_steps[i].from_token {
+                if new_steps[i - 1].to_token != new_steps[i].from_token {
                     // Path is broken, just return path1
                     return Ok(path1.clone());
                 }
             }
         }
-        
+
         // Recalculate path metrics
         let mut new_path = path1.clone();
         new_path.steps = new_steps;
         self.recalculate_path_metrics(&mut new_path);
-        
+
         Ok(new_path)
     }
 
@@ -817,22 +872,22 @@ impl RouteOptimizer {
     /// Mutate a path by randomly modifying some aspects
     fn mutate_path(&self, mut path: RoutePath) -> Result<RoutePath> {
         // Simple mutation: slightly adjust amounts or shuffle steps
-        
+
         if fastrand::f64() < 0.5 && path.steps.len() > 1 {
             // Shuffle two adjacent steps
             let idx = fastrand::usize(..path.steps.len() - 1);
             path.steps.swap(idx, idx + 1);
-            
+
             // Fix token continuity
             if path.steps[idx].to_token != path.steps[idx + 1].from_token {
                 // Swap back if it breaks continuity
                 path.steps.swap(idx, idx + 1);
             }
         }
-        
+
         // Recalculate metrics
         self.recalculate_path_metrics(&mut path);
-        
+
         Ok(path)
     }
 
@@ -840,12 +895,23 @@ impl RouteOptimizer {
     /// Recalculate path metrics after modification
     fn recalculate_path_metrics(&self, path: &mut RoutePath) {
         // Recalculate totals
-        path.total_fees = path.steps.iter().map(|s| s.amount_in * s.fee_bps as f64 / 10000.0).sum();
-        path.estimated_gas_cost = path.steps.iter().map(|s| self.estimate_step_gas(&s.dex_type)).sum();
+        path.total_fees = path
+            .steps
+            .iter()
+            .map(|s| s.amount_in * s.fee_bps as f64 / 10000.0)
+            .sum();
+        path.estimated_gas_cost = path
+            .steps
+            .iter()
+            .map(|s| self.estimate_step_gas(&s.dex_type))
+            .sum();
         path.execution_time_estimate = Some(Duration::from_millis(
-            path.steps.iter().map(|s| self.estimate_step_time(&s.dex_type)).sum()
+            path.steps
+                .iter()
+                .map(|s| self.estimate_step_time(&s.dex_type))
+                .sum(),
         ));
-        
+
         // Recalculate scores
         path.confidence_score = self.calculate_path_confidence(&path.steps);
         path.liquidity_score = self.calculate_path_liquidity(&path.steps);
@@ -857,14 +923,24 @@ impl RouteOptimizer {
     fn calculate_simple_score(&self, path: &RoutePath, goal: &OptimizationGoal) -> f64 {
         match goal {
             OptimizationGoal::MaximizeOutput => path.expected_output,
-            OptimizationGoal::MinimizeTime => 1.0 / path.execution_time_estimate.unwrap_or(Duration::from_millis(500)).as_secs_f64().max(0.1),
+            OptimizationGoal::MinimizeTime => {
+                1.0 / path
+                    .execution_time_estimate
+                    .unwrap_or(Duration::from_millis(500))
+                    .as_secs_f64()
+                    .max(0.1)
+            }
             OptimizationGoal::MinimizeGas => 1.0 / path.estimated_gas_cost as f64,
             OptimizationGoal::MaximizeReliability => path.confidence_score,
             OptimizationGoal::MinimizeImpact => {
-                let avg_impact = path.steps.iter().map(|s| s.price_impact).sum::<f64>() / path.steps.len().max(1) as f64;
+                let avg_impact = path.steps.iter().map(|s| s.price_impact).sum::<f64>()
+                    / path.steps.len().max(1) as f64;
                 1.0 - avg_impact
-            },
-            _ => path.expected_output * path.confidence_score / (path.estimated_gas_cost as f64 / 100000.0),
+            }
+            _ => {
+                path.expected_output * path.confidence_score
+                    / (path.estimated_gas_cost as f64 / 100000.0)
+            }
         }
     }
 
@@ -902,13 +978,14 @@ impl RouteOptimizer {
         if steps.is_empty() {
             return 0.0;
         }
-        
-        let avg_liquidity = steps.iter().map(|s| s.pool_liquidity).sum::<f64>() / steps.len() as f64;
+
+        let avg_liquidity =
+            steps.iter().map(|s| s.pool_liquidity).sum::<f64>() / steps.len() as f64;
         let liquidity_score = (avg_liquidity.ln() / 30.0).min(1.0).max(0.0);
-        
+
         let avg_impact = steps.iter().map(|s| s.price_impact).sum::<f64>() / steps.len() as f64;
         let impact_score = (1.0 - avg_impact).max(0.0);
-        
+
         (liquidity_score + impact_score) / 2.0
     }
 
@@ -917,8 +994,11 @@ impl RouteOptimizer {
         if steps.is_empty() {
             return 0.0;
         }
-        
-        let min_liquidity = steps.iter().map(|s| s.pool_liquidity).fold(f64::INFINITY, f64::min);
+
+        let min_liquidity = steps
+            .iter()
+            .map(|s| s.pool_liquidity)
+            .fold(f64::INFINITY, f64::min);
         (min_liquidity.ln() / 25.0).min(1.0).max(0.0)
     }
 
@@ -927,7 +1007,7 @@ impl RouteOptimizer {
         if steps.is_empty() {
             return 0.0;
         }
-        
+
         let unique_dexs: std::collections::HashSet<_> = steps.iter().map(|s| &s.dex_type).collect();
         unique_dexs.len() as f64 / steps.len() as f64
     }
@@ -942,22 +1022,29 @@ impl RouteOptimizer {
 
         // Update goal-specific stats
         let goal_name = format!("{:?}", goal);
-        let stats = self.stats.goal_performance.entry(goal_name).or_insert(GoalStats {
-            usage_count: 0,
-            success_rate: 0.0,
-            average_improvement: 0.0,
-            average_time: Duration::from_millis(0),
-        });
+        let stats = self
+            .stats
+            .goal_performance
+            .entry(goal_name)
+            .or_insert(GoalStats {
+                usage_count: 0,
+                success_rate: 0.0,
+                average_improvement: 0.0,
+                average_time: Duration::from_millis(0),
+            });
 
         stats.usage_count += 1;
         let goal_count = stats.usage_count as f64;
-        
+
         // Update success rate
-        stats.success_rate = (stats.success_rate * (goal_count - 1.0) + if success { 1.0 } else { 0.0 }) / goal_count;
-        
+        stats.success_rate = (stats.success_rate * (goal_count - 1.0)
+            + if success { 1.0 } else { 0.0 })
+            / goal_count;
+
         // Update average time
         let old_time_ms = stats.average_time.as_millis() as f64;
-        let new_time_ms = (old_time_ms * (goal_count - 1.0) + duration.as_millis() as f64) / goal_count;
+        let new_time_ms =
+            (old_time_ms * (goal_count - 1.0) + duration.as_millis() as f64) / goal_count;
         stats.average_time = Duration::from_millis(new_time_ms as u64);
     }
 

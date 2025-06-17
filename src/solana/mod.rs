@@ -7,4 +7,4 @@ pub mod websocket;
 // Re-export key components
 pub use balance_monitor::{BalanceMonitor, BalanceMonitorConfig};
 #[allow(unused_imports)] // Used in examples and by library consumers
-pub use event_driven_balance::{EventDrivenBalanceMonitor, EventDrivenBalanceConfig};
+pub use event_driven_balance::{EventDrivenBalanceConfig, EventDrivenBalanceMonitor};

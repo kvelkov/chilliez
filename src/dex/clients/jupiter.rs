@@ -3,29 +3,29 @@
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use log::{debug, info, warn};
+use once_cell::sync::Lazy;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use solana_sdk::{instruction::Instruction, pubkey::Pubkey};
+use std::sync::atomic::AtomicUsize;
 use std::{
     collections::HashMap,
     sync::Arc,
     time::{Duration, Instant},
 };
 use tokio::sync::Mutex;
-use std::sync::atomic::AtomicUsize;
-use once_cell::sync::Lazy;
 
 use crate::{
-    dex::{DexClient, PoolDiscoverable, Quote, SwapInfo, CommonSwapInfo, DexHealthStatus},
-    utils::PoolInfo,
+    arbitrage::jupiter::{CacheConfig, CacheKey, CacheMetrics, JupiterQuoteCache},
+    dex::{CommonSwapInfo, DexClient, DexHealthStatus, PoolDiscoverable, Quote, SwapInfo},
     error::ArbError,
-    arbitrage::jupiter::{JupiterQuoteCache, CacheConfig, CacheKey, CacheMetrics},
+    utils::PoolInfo,
 };
 
 // Import new Jupiter API structures
 use super::jupiter_api::{
-    QuoteRequest, QuoteResponse, SwapRequest, SwapResponse,
-    RateLimitInfo, CircuitBreakerState, CircuitBreakerConfig
+    CircuitBreakerConfig, CircuitBreakerState, QuoteRequest, QuoteResponse, RateLimitInfo,
+    SwapRequest, SwapResponse,
 };
 
 static INFLIGHT_REQUESTS: Lazy<AtomicUsize> = Lazy::new(|| AtomicUsize::new(0));
@@ -280,9 +280,13 @@ impl JupiterClient {
 
         Self {
             client,
-            rate_limiter: Arc::new(tokio::sync::Mutex::new(RateLimiter::new(JUPITER_REQUESTS_PER_SECOND))),
+            rate_limiter: Arc::new(tokio::sync::Mutex::new(RateLimiter::new(
+                JUPITER_REQUESTS_PER_SECOND,
+            ))),
             supported_tokens: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
-            last_token_refresh: Arc::new(tokio::sync::RwLock::new(Instant::now() - Duration::from_secs(3600))),
+            last_token_refresh: Arc::new(tokio::sync::RwLock::new(
+                Instant::now() - Duration::from_secs(3600),
+            )),
             circuit_breaker: Arc::new(Mutex::new(CircuitBreaker::new())),
             // Enhanced fallback fields
             fallback_rate_limit: Arc::new(Mutex::new(RateLimitInfo::default())),
@@ -310,9 +314,13 @@ impl JupiterClient {
 
         Self {
             client,
-            rate_limiter: Arc::new(tokio::sync::Mutex::new(RateLimiter::new(JUPITER_REQUESTS_PER_SECOND))),
+            rate_limiter: Arc::new(tokio::sync::Mutex::new(RateLimiter::new(
+                JUPITER_REQUESTS_PER_SECOND,
+            ))),
             supported_tokens: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
-            last_token_refresh: Arc::new(tokio::sync::RwLock::new(Instant::now() - Duration::from_secs(3600))),
+            last_token_refresh: Arc::new(tokio::sync::RwLock::new(
+                Instant::now() - Duration::from_secs(3600),
+            )),
             circuit_breaker: Arc::new(Mutex::new(CircuitBreaker::new())),
             // Enhanced fallback fields
             fallback_rate_limit: Arc::new(Mutex::new(RateLimitInfo::default())),
@@ -347,14 +355,24 @@ impl JupiterClient {
             None
         };
 
-        info!("🪐 Jupiter client initialized with cache {}", 
-              if cache_config.enabled { "enabled" } else { "disabled" });
+        info!(
+            "🪐 Jupiter client initialized with cache {}",
+            if cache_config.enabled {
+                "enabled"
+            } else {
+                "disabled"
+            }
+        );
 
         Self {
             client,
-            rate_limiter: Arc::new(tokio::sync::Mutex::new(RateLimiter::new(JUPITER_REQUESTS_PER_SECOND))),
+            rate_limiter: Arc::new(tokio::sync::Mutex::new(RateLimiter::new(
+                JUPITER_REQUESTS_PER_SECOND,
+            ))),
             supported_tokens: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
-            last_token_refresh: Arc::new(tokio::sync::RwLock::new(Instant::now() - Duration::from_secs(3600))),
+            last_token_refresh: Arc::new(tokio::sync::RwLock::new(
+                Instant::now() - Duration::from_secs(3600),
+            )),
             circuit_breaker: Arc::new(Mutex::new(CircuitBreaker::new())),
             // Enhanced fallback fields
             fallback_rate_limit: Arc::new(Mutex::new(RateLimitInfo::default())),
@@ -374,8 +392,10 @@ impl JupiterClient {
         amount: u64,
         slippage_bps: u16,
     ) -> Result<QuoteResponse> {
-        info!("🔄 Jupiter fallback: Getting quote for {} -> {} (amount: {})", 
-              input_mint, output_mint, amount);
+        info!(
+            "🔄 Jupiter fallback: Getting quote for {} -> {} (amount: {})",
+            input_mint, output_mint, amount
+        );
 
         // Check cache first if enabled
         if let Some(ref cache) = self.quote_cache {
@@ -411,12 +431,12 @@ impl JupiterClient {
             amount,
             slippage_bps,
             only_direct_routes: Some(false), // Allow multi-hop for better prices
-            exclude_dexes: None, // Don't exclude any DEXs for fallback
-            max_accounts: Some(64), // Reasonable limit
+            exclude_dexes: None,             // Don't exclude any DEXs for fallback
+            max_accounts: Some(64),          // Reasonable limit
         };
 
         let quote = self.execute_quote_request(request).await?;
-        
+
         // Cache the response if caching is enabled
         if let Some(ref cache) = self.quote_cache {
             let cache_key = CacheKey::from_params(
@@ -429,9 +449,11 @@ impl JupiterClient {
             cache.store_quote(cache_key, quote.clone()).await;
             debug!("📦 Jupiter quote cached for future use");
         }
-        
-        debug!("✅ Jupiter fallback quote: {} {} -> {} {} (impact: {}%)", 
-               quote.in_amount, input_mint, quote.out_amount, output_mint, quote.price_impact_pct);
+
+        debug!(
+            "✅ Jupiter fallback quote: {} {} -> {} {} (impact: {}%)",
+            quote.in_amount, input_mint, quote.out_amount, output_mint, quote.price_impact_pct
+        );
 
         Ok(quote)
     }
@@ -443,7 +465,10 @@ impl JupiterClient {
         user_public_key: &str,
         priority_fee_lamports: Option<u64>,
     ) -> Result<SwapResponse> {
-        info!("🔄 Jupiter fallback: Creating swap transaction for user {}", user_public_key);
+        info!(
+            "🔄 Jupiter fallback: Creating swap transaction for user {}",
+            user_public_key
+        );
 
         // Check circuit breaker
         if !self.is_circuit_breaker_closed().await {
@@ -471,7 +496,7 @@ impl JupiterClient {
         };
 
         let swap_response = self.execute_swap_request(request).await?;
-        
+
         debug!("✅ Jupiter fallback swap transaction created");
 
         Ok(swap_response)
@@ -480,8 +505,9 @@ impl JupiterClient {
     /// Execute quote request with comprehensive error handling
     async fn execute_quote_request(&self, request: QuoteRequest) -> Result<QuoteResponse> {
         let url = format!("{}/{}", JUPITER_API_BASE, JUPITER_QUOTE_ENDPOINT);
-        
-        let response = self.client
+
+        let response = self
+            .client
             .get(&url)
             .query(&request)
             .send()
@@ -495,20 +521,23 @@ impl JupiterClient {
             self.record_api_failure();
             let status = response.status();
             let error_text = response.text().await.unwrap_or_default();
-            
+
             if status == 429 {
                 self.handle_rate_limit_exceeded().await;
                 return Err(anyhow!("Jupiter API rate limit exceeded: {}", error_text));
             }
-            
-            return Err(anyhow!("Jupiter quote failed with status {}: {}", status, error_text));
+
+            return Err(anyhow!(
+                "Jupiter quote failed with status {}: {}",
+                status,
+                error_text
+            ));
         }
 
-        let quote: QuoteResponse = response.json().await
-            .map_err(|e| {
-                self.record_api_failure();
-                anyhow!("Failed to parse Jupiter quote response: {}", e)
-            })?;
+        let quote: QuoteResponse = response.json().await.map_err(|e| {
+            self.record_api_failure();
+            anyhow!("Failed to parse Jupiter quote response: {}", e)
+        })?;
 
         self.record_api_success().await;
         Ok(quote)
@@ -517,8 +546,9 @@ impl JupiterClient {
     /// Execute swap request with comprehensive error handling
     async fn execute_swap_request(&self, request: SwapRequest) -> Result<SwapResponse> {
         let url = format!("{}/{}", JUPITER_API_BASE, JUPITER_SWAP_ENDPOINT);
-        
-        let response = self.client
+
+        let response = self
+            .client
             .post(&url)
             .json(&request)
             .send()
@@ -532,20 +562,23 @@ impl JupiterClient {
             self.record_api_failure();
             let status = response.status();
             let error_text = response.text().await.unwrap_or_default();
-            
+
             if status == 429 {
                 self.handle_rate_limit_exceeded().await;
                 return Err(anyhow!("Jupiter API rate limit exceeded: {}", error_text));
             }
-            
-            return Err(anyhow!("Jupiter swap failed with status {}: {}", status, error_text));
+
+            return Err(anyhow!(
+                "Jupiter swap failed with status {}: {}",
+                status,
+                error_text
+            ));
         }
 
-        let swap_response: SwapResponse = response.json().await
-            .map_err(|e| {
-                self.record_api_failure();
-                anyhow!("Failed to parse Jupiter swap response: {}", e)
-            })?;
+        let swap_response: SwapResponse = response.json().await.map_err(|e| {
+            self.record_api_failure();
+            anyhow!("Failed to parse Jupiter swap response: {}", e)
+        })?;
 
         self.record_api_success().await;
         Ok(swap_response)
@@ -567,13 +600,13 @@ impl JupiterClient {
     /// Check rate limiting
     async fn check_rate_limit(&self) -> bool {
         let mut rate_limit = self.fallback_rate_limit.lock().await;
-        
+
         // Reset window if needed
         if rate_limit.window_start.elapsed().as_secs() >= rate_limit.reset_time_seconds {
             rate_limit.remaining = rate_limit.limit;
             rate_limit.window_start = Instant::now();
         }
-        
+
         if rate_limit.remaining > 0 {
             rate_limit.remaining -= 1;
             true
@@ -585,14 +618,14 @@ impl JupiterClient {
     /// Handle rate limit exceeded
     async fn handle_rate_limit_exceeded(&self) {
         warn!("⚠️ Jupiter API rate limit exceeded, implementing backoff");
-        
+
         let mut rate_limit = self.fallback_rate_limit.lock().await;
         rate_limit.remaining = 0;
-        
+
         // Implement exponential backoff
         let backoff_duration = Duration::from_secs(2);
         drop(rate_limit);
-        
+
         tokio::time::sleep(backoff_duration).await;
     }
 
@@ -660,7 +693,10 @@ impl JupiterClient {
                 .map_err(|e| anyhow!("Request failed: {}", e))?;
 
             if response.status().is_success() {
-                let result = response.json::<T>().await.map_err(|e| anyhow!("Failed to parse response: {}", e))?;
+                let result = response
+                    .json::<T>()
+                    .await
+                    .map_err(|e| anyhow!("Failed to parse response: {}", e))?;
                 return Ok(result);
             } else {
                 attempt += 1;
@@ -739,13 +775,17 @@ impl DexClient for JupiterClient {
     fn calculate_onchain_quote(&self, _pool: &PoolInfo, _input_amount: u64) -> Result<Quote> {
         // Jupiter is an aggregator, not a single pool DEX
         // This method doesn't apply in the traditional sense
-        Err(anyhow!("Jupiter is an aggregator - use get_quote method instead"))
+        Err(anyhow!(
+            "Jupiter is an aggregator - use get_quote method instead"
+        ))
     }
 
     fn get_swap_instruction(&self, _swap_info: &SwapInfo) -> Result<Instruction> {
         // For now, return an error as this requires async Jupiter API calls
         // Use get_swap_instruction_enhanced for full implementation
-        Err(anyhow!("Use get_swap_instruction_enhanced for Jupiter integration"))
+        Err(anyhow!(
+            "Use get_swap_instruction_enhanced for Jupiter integration"
+        ))
     }
 
     async fn get_swap_instruction_enhanced(
@@ -754,36 +794,42 @@ impl DexClient for JupiterClient {
         _pool_info: Arc<PoolInfo>,
     ) -> Result<Instruction, ArbError> {
         // Get Jupiter quote first using fallback method
-        let quote = self.get_quote_with_fallback(
-            &swap_info.source_token_mint.to_string(),
-            &swap_info.destination_token_mint.to_string(),
-            swap_info.input_amount,
-            100, // Default 1% slippage in basis points
-        ).await
-        .map_err(|e| ArbError::NetworkError(format!("Jupiter quote failed: {}", e)))?;
+        let quote = self
+            .get_quote_with_fallback(
+                &swap_info.source_token_mint.to_string(),
+                &swap_info.destination_token_mint.to_string(),
+                swap_info.input_amount,
+                100, // Default 1% slippage in basis points
+            )
+            .await
+            .map_err(|e| ArbError::NetworkError(format!("Jupiter quote failed: {}", e)))?;
 
         // Get swap transaction from Jupiter API using new method
-        let swap_response = self.create_swap_transaction(
-            &quote,
-            &swap_info.user_wallet_pubkey.to_string(),
-            None, // Default priority fee
-        ).await
-        .map_err(|e| ArbError::InstructionError(format!("Jupiter swap failed: {}", e)))?;
+        let swap_response = self
+            .create_swap_transaction(
+                &quote,
+                &swap_info.user_wallet_pubkey.to_string(),
+                None, // Default priority fee
+            )
+            .await
+            .map_err(|e| ArbError::InstructionError(format!("Jupiter swap failed: {}", e)))?;
 
         // Decode and return the instruction
         self.decode_swap_instruction(&swap_response.swap_transaction)
-            .map_err(|e| ArbError::InstructionError(format!("Failed to decode Jupiter instruction: {}", e)))
+            .map_err(|e| {
+                ArbError::InstructionError(format!("Failed to decode Jupiter instruction: {}", e))
+            })
     }
 
     async fn discover_pools(&self) -> Result<Vec<PoolInfo>> {
         // Jupiter is an aggregator, so it doesn't have its own pools
         // Instead, we return information about supported token pairs
-        
+
         // TODO: self.refresh_token_list().await?;
-        
+
         let tokens = self.supported_tokens.read().await;
         info!("🔍 Jupiter supports {} tokens for routing", tokens.len());
-        
+
         // Return empty vector as Jupiter doesn't have discoverable pools in the traditional sense
         Ok(Vec::new())
     }
@@ -792,9 +838,12 @@ impl DexClient for JupiterClient {
         // Simple health check by getting a small quote for SOL->USDC
         const SOL_MINT: &str = "So11111111111111111111111111111111111111112";
         const USDC_MINT: &str = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
-        
+
         let start_time = Instant::now();
-        match self.get_quote_with_fallback(SOL_MINT, USDC_MINT, 1_000_000, 100).await {
+        match self
+            .get_quote_with_fallback(SOL_MINT, USDC_MINT, 1_000_000, 100)
+            .await
+        {
             Ok(_) => {
                 let response_time = start_time.elapsed().as_millis() as u64;
                 debug!("✅ Jupiter health check passed");
@@ -841,7 +890,8 @@ impl JupiterClient {
             prioritization_fee_lamports: Some(priority_fee_lamports),
         };
 
-        let response = self.client
+        let response = self
+            .client
             .post(&format!("{}/swap", JUPITER_API_BASE))
             .json(&swap_request)
             .send()
@@ -858,7 +908,7 @@ impl JupiterClient {
 
     /// Decode swap instruction from Jupiter transaction
     fn decode_swap_instruction(&self, transaction_data: &str) -> Result<Instruction> {
-        use base64::{Engine as _, engine::general_purpose};
+        use base64::{engine::general_purpose, Engine as _};
         use solana_sdk::transaction::Transaction;
 
         // Decode base64 transaction
@@ -874,7 +924,9 @@ impl JupiterClient {
         if let Some(instruction) = transaction.message.instructions.first() {
             Ok(Instruction {
                 program_id: transaction.message.account_keys[instruction.program_id_index as usize],
-                accounts: instruction.accounts.iter()
+                accounts: instruction
+                    .accounts
+                    .iter()
                     .map(|&idx| solana_sdk::instruction::AccountMeta {
                         pubkey: transaction.message.account_keys[idx as usize],
                         is_signer: transaction.message.is_signer(idx as usize),
@@ -894,19 +946,21 @@ impl PoolDiscoverable for JupiterClient {
     async fn discover_pools(&self) -> Result<Vec<PoolInfo>> {
         // Jupiter is an aggregator, so it doesn't have its own pools
         // Instead, we return information about supported token pairs
-        
+
         // TODO: self.refresh_token_list().await?;
-        
+
         let tokens = self.supported_tokens.read().await;
         info!("🔍 Jupiter supports {} tokens for routing", tokens.len());
-        
+
         // Return empty vector as Jupiter doesn't have discoverable pools in the traditional sense
         Ok(Vec::new())
     }
 
     async fn fetch_pool_data(&self, _pool_address: Pubkey) -> Result<PoolInfo> {
         // Jupiter doesn't have individual pools to fetch
-        Err(anyhow!("Jupiter is an aggregator and doesn't have individual pools"))
+        Err(anyhow!(
+            "Jupiter is an aggregator and doesn't have individual pools"
+        ))
     }
 
     fn dex_name(&self) -> &str {
@@ -933,11 +987,11 @@ mod tests {
     #[tokio::test]
     async fn test_token_support_check() {
         let _client = JupiterClient::new();
-        
+
         // Test with well-known tokens (these should be supported)
         let _sol_mint = "So11111111111111111111111111111111111111112";
         let _usdc_mint = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
-        
+
         // Note: This test requires internet connection
         // In a real test environment, you might want to mock the HTTP client
         // TODO: Implement token_supported method

@@ -1,7 +1,7 @@
 // src/cache.rs
 //! Provides a Redis-based caching layer, primarily for DEX API responses.
-use anyhow::{anyhow, Result as AnyhowResult}; // Import anyhow macro and Result
 use crate::error::ArbError;
+use anyhow::{anyhow, Result as AnyhowResult}; // Import anyhow macro and Result
 use log::{debug, error, info, warn};
 use redis::{aio::ConnectionManager, AsyncCommands};
 use serde::{de::DeserializeOwned, Serialize};
@@ -79,17 +79,24 @@ impl Cache {
                             "Failed to deserialize cached JSON for key {}: {}. Data: '{}'",
                             key, e, value_str
                         );
-                        Err(ArbError::ParseError(format!("Cache deserialization error for key {}: {}", key, e)))
+                        Err(ArbError::ParseError(format!(
+                            "Cache deserialization error for key {}: {}",
+                            key, e
+                        )))
                     }
                 }
             }
             Ok(None) => {
                 debug!("Cache MISS for key: {}", key);
                 Ok(None)
-            },
-            Err(e) => { // Redis specific error
+            }
+            Err(e) => {
+                // Redis specific error
                 error!("Redis GET error for key {}: {}", key, e);
-                Err(ArbError::CacheError(format!("Redis GET error for key {}: {}", key, e)))
+                Err(ArbError::CacheError(format!(
+                    "Redis GET error for key {}: {}",
+                    key, e
+                )))
             }
         }
     }
@@ -101,8 +108,9 @@ impl Cache {
         params: &[&str],
         value: &T,
         ttl_seconds: Option<u64>,
-    ) -> Result<(), ArbError> { // Changed to Result<(), ArbError>
-        let key = Self::generate_key(prefix, params); 
+    ) -> Result<(), ArbError> {
+        // Changed to Result<(), ArbError>
+        let key = Self::generate_key(prefix, params);
         // The '?' operator will now work because ArbError implements From<serde_json::Error>
         // and serde_json::to_string returns Result<String, serde_json::Error>
         let value_str = serde_json::to_string(value)?;
@@ -119,7 +127,10 @@ impl Cache {
             }
             Err(e) => {
                 warn!("Failed to SETEX key '{}' in Redis: {}", key, e);
-                Err(ArbError::CacheError(format!("Redis SETEX error for key {}: {}", key, e)))
+                Err(ArbError::CacheError(format!(
+                    "Redis SETEX error for key {}: {}",
+                    key, e
+                )))
             }
         }
     }
@@ -127,7 +138,8 @@ impl Cache {
     /// Delete a value from the cache by key.
     // TODO: This method is currently unused. It's available for future cache invalidation strategies.
     #[allow(dead_code)] // Add this attribute to explicitly acknowledge it's unused for now
-    pub async fn _delete(&self, key: &str) -> Result<(), ArbError> { // Changed to Result<(), ArbError>
+    pub async fn _delete(&self, key: &str) -> Result<(), ArbError> {
+        // Changed to Result<(), ArbError>
         let mut conn = self.conn_manager.clone();
         match conn.del::<_, ()>(key).await {
             Ok(_) => {
@@ -136,7 +148,10 @@ impl Cache {
             }
             Err(e) => {
                 warn!("Failed to DELETE key '{}' in Redis: {}", key, e);
-                Err(ArbError::CacheError(format!("Redis DEL error for key {}: {}", key, e)))
+                Err(ArbError::CacheError(format!(
+                    "Redis DEL error for key {}: {}",
+                    key, e
+                )))
             }
         }
     }
@@ -148,7 +163,8 @@ impl Cache {
         pool_pubkey: &str,
         pool_data: &T,
         ttl_seconds: Option<u64>,
-    ) -> Result<(), ArbError> { // Changed to Result<(), ArbError>
+    ) -> Result<(), ArbError> {
+        // Changed to Result<(), ArbError>
         // Use a consistent prefix for pool cache entries, e.g., "pool"
         self.set_ex("pool", &[pool_pubkey], pool_data, ttl_seconds)
             .await

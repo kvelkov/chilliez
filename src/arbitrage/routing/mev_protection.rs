@@ -1,6 +1,6 @@
 // src/arbitrage/routing/mev_protection.rs
 //! MEV Protection and Anti-Sandwich Attack Routing
-//! 
+//!
 //! Provides sophisticated MEV protection strategies:
 //! - Sandwich attack detection and prevention
 //! - Dynamic slippage protection
@@ -8,12 +8,12 @@
 //! - Timing randomization and execution obfuscation
 //! - Jito MEV protection integration
 
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::{Duration, Instant, SystemTime};
-use serde::{Deserialize, Serialize};
 
-use crate::arbitrage::routing::RoutePath;
 use crate::arbitrage::analysis::fee::FeeEstimator;
+use crate::arbitrage::routing::RoutePath;
 
 /// MEV risk levels for route assessment
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -204,14 +204,14 @@ impl TimingRandomizer {
     fn generate_random_delay(&mut self) -> Duration {
         use std::collections::hash_map::DefaultHasher;
         use std::hash::{Hash, Hasher};
-        
+
         let now = Instant::now();
         let mut hasher = DefaultHasher::new();
         now.elapsed().as_nanos().hash(&mut hasher);
-        
+
         let random_factor = (hasher.finish() % 1000) as f64 / 1000.0;
         let delay_ms = (random_factor * self.max_random_delay.as_millis() as f64) as u64;
-        
+
         Duration::from_millis(delay_ms)
     }
 
@@ -229,7 +229,7 @@ impl MevProtectedRouter {
     /// Create a new MEV protected router
     pub fn new(config: MevProtectionConfig, fee_estimator: FeeEstimator) -> Self {
         let timing_randomizer = TimingRandomizer::new(config.max_random_delay_ms);
-        
+
         Self {
             config,
             fee_estimator,
@@ -240,7 +240,10 @@ impl MevProtectedRouter {
     }
 
     /// Analyze MEV threat level for a given route
-    pub async fn analyze_mev_threat(&mut self, route: &RoutePath) -> Result<MevThreatAnalysis, Box<dyn std::error::Error>> {
+    pub async fn analyze_mev_threat(
+        &mut self,
+        route: &RoutePath,
+    ) -> Result<MevThreatAnalysis, Box<dyn std::error::Error>> {
         let mut risk_score = 0.0;
         let mut detected_attacks = Vec::new();
         let mut analysis_details = Vec::new();
@@ -249,26 +252,29 @@ impl MevProtectedRouter {
         risk_score += self.analyze_route_complexity(route);
         risk_score += self.analyze_liquidity_impact(route);
         risk_score += self.analyze_timing_patterns(route).await;
-        
+
         // Check for sandwich attack vulnerability
         if self.is_vulnerable_to_sandwich(route) {
             detected_attacks.push(MevAttackType::SandwichAttack);
             risk_score += 0.3;
-            analysis_details.push("Route vulnerable to sandwich attacks due to high slippage".to_string());
+            analysis_details
+                .push("Route vulnerable to sandwich attacks due to high slippage".to_string());
         }
 
         // Check for front-running vulnerability
         if self.is_vulnerable_to_frontrunning(route) {
             detected_attacks.push(MevAttackType::FrontRunning);
             risk_score += 0.2;
-            analysis_details.push("Route vulnerable to front-running due to predictable execution".to_string());
+            analysis_details
+                .push("Route vulnerable to front-running due to predictable execution".to_string());
         }
 
         // Check for cross-DEX arbitrage front-running
         if self.is_cross_dex_vulnerable(route) {
             detected_attacks.push(MevAttackType::CrossDexFrontRunning);
             risk_score += 0.25;
-            analysis_details.push("Cross-DEX route vulnerable to arbitrage front-running".to_string());
+            analysis_details
+                .push("Cross-DEX route vulnerable to arbitrage front-running".to_string());
         }
 
         // Determine risk level
@@ -293,10 +299,17 @@ impl MevProtectedRouter {
     }
 
     /// Create MEV-protected version of a route
-    pub async fn protect_route(&mut self, route: &RoutePath, threat_analysis: &MevThreatAnalysis) -> Result<ProtectedRoute, Box<dyn std::error::Error>> {
+    pub async fn protect_route(
+        &mut self,
+        route: &RoutePath,
+        threat_analysis: &MevThreatAnalysis,
+    ) -> Result<ProtectedRoute, Box<dyn std::error::Error>> {
         // Generate cache key
-        let cache_key = self.generate_route_cache_key(route, route.steps.first().map(|s| s.amount_in as u64).unwrap_or(0));
-        
+        let cache_key = self.generate_route_cache_key(
+            route,
+            route.steps.first().map(|s| s.amount_in as u64).unwrap_or(0),
+        );
+
         // Check cache first
         if let Some(cached_route) = self.protection_cache.get(&cache_key) {
             if self.is_protection_still_valid(cached_route) {
@@ -314,39 +327,50 @@ impl MevProtectedRouter {
                 if self.config.enable_timing_randomization {
                     protection_measures.push(MevProtectionStrategy::StandardProtection);
                 }
-            },
+            }
             MevRisk::Medium => {
                 // Standard protection + Jito tips
                 protection_measures.push(MevProtectionStrategy::StandardProtection);
                 if self.config.enable_jito_tips {
                     protection_measures.push(MevProtectionStrategy::JitoProtection);
                 }
-            },
+            }
             MevRisk::High => {
                 // Enhanced protection + route obfuscation
                 protection_measures.push(MevProtectionStrategy::JitoProtection);
                 if self.config.enable_route_obfuscation {
-                    protected_routes = self.generate_obfuscated_routes(route, route.steps.first().map(|s| s.amount_in as u64).unwrap_or(0))?;
+                    protected_routes = self.generate_obfuscated_routes(
+                        route,
+                        route.steps.first().map(|s| s.amount_in as u64).unwrap_or(0),
+                    )?;
                     protection_measures.push(MevProtectionStrategy::MaximalProtection);
                 }
-            },
+            }
             MevRisk::Critical => {
                 // Maximum protection + private mempool
                 protection_measures.push(MevProtectionStrategy::PrivateMempoolProtection);
                 protection_measures.push(MevProtectionStrategy::MaximalProtection);
-                protected_routes = self.generate_obfuscated_routes(route, route.steps.first().map(|s| s.amount_in as u64).unwrap_or(0))?;
-            },
+                protected_routes = self.generate_obfuscated_routes(
+                    route,
+                    route.steps.first().map(|s| s.amount_in as u64).unwrap_or(0),
+                )?;
+            }
         }
 
         // Generate execution timing
         let execution_timing = self.generate_execution_timing(&threat_analysis.risk_level);
 
         // Calculate priority fee adjustments
-        let priority_fee_adjustments = self.calculate_priority_fee_adjustments(&threat_analysis).await?;
+        let priority_fee_adjustments = self
+            .calculate_priority_fee_adjustments(&threat_analysis)
+            .await?;
 
         // Generate Jito bundle config if needed
         let jito_config = if protection_measures.contains(&MevProtectionStrategy::JitoProtection) {
-            Some(self.generate_jito_config(route, route.steps.first().map(|s| s.amount_in as u64).unwrap_or(0))?)
+            Some(self.generate_jito_config(
+                route,
+                route.steps.first().map(|s| s.amount_in as u64).unwrap_or(0),
+            )?)
         } else {
             None
         };
@@ -361,7 +385,8 @@ impl MevProtectedRouter {
         };
 
         // Cache the protected route
-        self.protection_cache.insert(cache_key, protected_route.clone());
+        self.protection_cache
+            .insert(cache_key, protected_route.clone());
 
         Ok(protected_route)
     }
@@ -382,7 +407,7 @@ impl MevProtectedRouter {
             .entry(route_key)
             .or_insert_with(Vec::new)
             .push(threat_analysis);
-        
+
         // Keep only last 100 entries per route
         if let Some(history) = self.attack_history.get_mut(&route_key_clone) {
             if history.len() > 100 {
@@ -392,7 +417,7 @@ impl MevProtectedRouter {
     }
 
     // Private helper methods
-    
+
     fn analyze_route_complexity(&self, route: &RoutePath) -> f64 {
         // More complex routes (more hops) have higher MEV risk
         let hop_count = route.steps.len() as f64;
@@ -401,10 +426,13 @@ impl MevProtectedRouter {
 
     fn analyze_liquidity_impact(&self, route: &RoutePath) -> f64 {
         // Routes with high liquidity impact are more vulnerable
-        route.steps.iter()
+        route
+            .steps
+            .iter()
             .map(|step| {
                 // Estimate impact based on amount vs pool size ratio
-                let impact_ratio = step.amount_in as f64 / step.pool_liquidity.max(1_000_000.0) as f64;
+                let impact_ratio =
+                    step.amount_in as f64 / step.pool_liquidity.max(1_000_000.0) as f64;
                 impact_ratio * 0.2
             })
             .sum::<f64>()
@@ -433,31 +461,37 @@ impl MevProtectedRouter {
 
     fn is_cross_dex_vulnerable(&self, route: &RoutePath) -> bool {
         // Check if route spans multiple DEXs
-        let dex_names: std::collections::HashSet<String> = route.steps.iter()
+        let dex_names: std::collections::HashSet<String> = route
+            .steps
+            .iter()
             .map(|step| step.dex_type.to_string())
             .collect();
         dex_names.len() > 1
     }
 
-    fn recommend_protections(&self, risk_level: &MevRisk, attacks: &[MevAttackType]) -> Vec<MevProtectionStrategy> {
+    fn recommend_protections(
+        &self,
+        risk_level: &MevRisk,
+        attacks: &[MevAttackType],
+    ) -> Vec<MevProtectionStrategy> {
         let mut protections = Vec::new();
 
         match risk_level {
             MevRisk::Low => {
                 protections.push(MevProtectionStrategy::StandardProtection);
-            },
+            }
             MevRisk::Medium => {
                 protections.push(MevProtectionStrategy::StandardProtection);
                 protections.push(MevProtectionStrategy::JitoProtection);
-            },
+            }
             MevRisk::High => {
                 protections.push(MevProtectionStrategy::JitoProtection);
                 protections.push(MevProtectionStrategy::MaximalProtection);
-            },
+            }
             MevRisk::Critical => {
                 protections.push(MevProtectionStrategy::PrivateMempoolProtection);
                 protections.push(MevProtectionStrategy::MaximalProtection);
-            },
+            }
         }
 
         // Add specific protections based on attack types
@@ -467,26 +501,30 @@ impl MevProtectedRouter {
                     if !protections.contains(&MevProtectionStrategy::JitoProtection) {
                         protections.push(MevProtectionStrategy::JitoProtection);
                     }
-                },
+                }
                 MevAttackType::FrontRunning => {
                     if !protections.contains(&MevProtectionStrategy::MaximalProtection) {
                         protections.push(MevProtectionStrategy::MaximalProtection);
                     }
-                },
-                _ => {},
+                }
+                _ => {}
             }
         }
 
         protections
     }
 
-    fn generate_obfuscated_routes(&self, route: &RoutePath, total_amount: u64) -> Result<Vec<RoutePath>, Box<dyn std::error::Error>> {
+    fn generate_obfuscated_routes(
+        &self,
+        route: &RoutePath,
+        total_amount: u64,
+    ) -> Result<Vec<RoutePath>, Box<dyn std::error::Error>> {
         let mut obfuscated_routes = Vec::new();
-        
+
         // Split route into smaller sub-routes
         let route_count = (self.config.max_obfuscation_routes).min(3);
         let amount_per_route = total_amount / route_count as u64;
-        
+
         for i in 0..route_count {
             let mut sub_route = route.clone();
             let sub_amount = if i == route_count - 1 {
@@ -495,17 +533,17 @@ impl MevProtectedRouter {
             } else {
                 amount_per_route
             };
-            
+
             // Adjust step amounts proportionally
             let ratio = sub_amount as f64 / total_amount as f64;
             for step in &mut sub_route.steps {
                 step.amount_in = step.amount_in * ratio;
                 step.amount_out = step.amount_out * ratio;
             }
-            
+
             obfuscated_routes.push(sub_route);
         }
-        
+
         Ok(obfuscated_routes)
     }
 
@@ -530,10 +568,13 @@ impl MevProtectedRouter {
         }
     }
 
-    async fn calculate_priority_fee_adjustments(&self, threat_analysis: &MevThreatAnalysis) -> Result<PriorityFeeAdjustments, Box<dyn std::error::Error>> {
+    async fn calculate_priority_fee_adjustments(
+        &self,
+        threat_analysis: &MevThreatAnalysis,
+    ) -> Result<PriorityFeeAdjustments, Box<dyn std::error::Error>> {
         // Get base network congestion multiplier
         let congestion_multiplier = 1.0; // Would get from fee estimator
-        
+
         // Calculate MEV protection multiplier based on threat level
         let mev_protection_multiplier = match threat_analysis.risk_level {
             MevRisk::Low => 1.2,
@@ -543,8 +584,9 @@ impl MevProtectedRouter {
         };
 
         let base_multiplier = self.config.min_priority_fee_multiplier;
-        let total_multiplier = (base_multiplier * mev_protection_multiplier * congestion_multiplier)
-            .min(self.config.max_priority_fee_multiplier);
+        let total_multiplier =
+            (base_multiplier * mev_protection_multiplier * congestion_multiplier)
+                .min(self.config.max_priority_fee_multiplier);
 
         Ok(PriorityFeeAdjustments {
             base_multiplier,
@@ -555,9 +597,13 @@ impl MevProtectedRouter {
         })
     }
 
-    fn generate_jito_config(&self, _route: &RoutePath, amount: u64) -> Result<JitoBundleConfig, Box<dyn std::error::Error>> {
+    fn generate_jito_config(
+        &self,
+        _route: &RoutePath,
+        amount: u64,
+    ) -> Result<JitoBundleConfig, Box<dyn std::error::Error>> {
         let tip_amount = (amount as f64 * self.config.jito_tip_percentage) as u64;
-        
+
         Ok(JitoBundleConfig {
             tip_amount,
             bundle_timeout: 30,
@@ -569,7 +615,7 @@ impl MevProtectedRouter {
     fn generate_route_cache_key(&self, route: &RoutePath, amount: u64) -> String {
         use std::collections::hash_map::DefaultHasher;
         use std::hash::{Hash, Hasher};
-        
+
         let mut hasher = DefaultHasher::new();
         if let Some(first_step) = route.steps.first() {
             first_step.from_token.hash(&mut hasher);
@@ -582,7 +628,7 @@ impl MevProtectedRouter {
             step.dex_type.to_string().hash(&mut hasher);
             step.pool_address.hash(&mut hasher);
         }
-        
+
         format!("route_{:x}", hasher.finish())
     }
 
@@ -601,23 +647,22 @@ mod tests {
     fn create_test_route() -> RoutePath {
         use solana_sdk::pubkey::Pubkey;
         use std::str::FromStr;
-        
+
         RoutePath {
-            steps: vec![
-                RouteStep {
-                    pool_address: Pubkey::from_str("11111111111111111111111111111111").unwrap(),
-                    dex_type: crate::utils::DexType::Orca,
-                    from_token: Pubkey::from_str("So11111111111111111111111111111111111111112").unwrap(),
-                    to_token: Pubkey::from_str("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v").unwrap(),
-                    amount_in: 1_000_000_000.0,
-                    amount_out: 999_000_000.0,
-                    fee_bps: 25,
-                    pool_liquidity: 10_000_000_000.0,
-                    price_impact: 0.001,
-                    execution_order: 0,
-                    slippage_tolerance: Some(0.01),
-                },
-            ],
+            steps: vec![RouteStep {
+                pool_address: Pubkey::from_str("11111111111111111111111111111111").unwrap(),
+                dex_type: crate::utils::DexType::Orca,
+                from_token: Pubkey::from_str("So11111111111111111111111111111111111111112")
+                    .unwrap(),
+                to_token: Pubkey::from_str("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v").unwrap(),
+                amount_in: 1_000_000_000.0,
+                amount_out: 999_000_000.0,
+                fee_bps: 25,
+                pool_liquidity: 10_000_000_000.0,
+                price_impact: 0.001,
+                execution_order: 0,
+                slippage_tolerance: Some(0.01),
+            }],
             total_fees: 0.0025,
             total_weight: 1.0,
             expected_output: 999_000_000.0,
@@ -656,22 +701,33 @@ mod tests {
         let route = create_test_route();
 
         let threat_analysis = router.analyze_mev_threat(&route).await.unwrap();
-        let protected_route = router.protect_route(&route, &threat_analysis).await.unwrap();
+        let protected_route = router
+            .protect_route(&route, &threat_analysis)
+            .await
+            .unwrap();
 
-        assert_eq!(protected_route.original_route.steps.first().unwrap().from_token, route.steps.first().unwrap().from_token);
+        assert_eq!(
+            protected_route
+                .original_route
+                .steps
+                .first()
+                .unwrap()
+                .from_token,
+            route.steps.first().unwrap().from_token
+        );
         assert!(!protected_route.protection_measures.is_empty());
     }
 
     #[test]
     fn test_timing_randomizer() {
         let mut randomizer = TimingRandomizer::new(500);
-        
+
         let delay1 = randomizer.should_delay_execution();
         let delay2 = randomizer.should_delay_execution();
-        
+
         assert!(delay1.is_some());
         assert!(delay2.is_some());
-        
+
         // Delays should be different (statistically likely)
         if let (Some(d1), Some(d2)) = (delay1, delay2) {
             assert!(d1.as_millis() <= 600); // Within max range + min interval
@@ -693,7 +749,7 @@ mod tests {
             MevProtectionStrategy::StandardProtection,
             MevProtectionStrategy::JitoProtection,
         ];
-        
+
         assert!(strategies.contains(&MevProtectionStrategy::JitoProtection));
         assert!(!strategies.contains(&MevProtectionStrategy::MaximalProtection));
     }
@@ -708,11 +764,14 @@ mod tests {
         let router = MevProtectedRouter::new(config, fee_estimator);
         let route = create_test_route();
 
-        let obfuscated_routes = router.generate_obfuscated_routes(&route, 1_000_000_000).unwrap();
-        
+        let obfuscated_routes = router
+            .generate_obfuscated_routes(&route, 1_000_000_000)
+            .unwrap();
+
         assert_eq!(obfuscated_routes.len(), 3);
-        
-        let total_amount: f64 = obfuscated_routes.iter()
+
+        let total_amount: f64 = obfuscated_routes
+            .iter()
             .map(|r| r.steps.iter().map(|s| s.amount_in).sum::<f64>())
             .sum();
         assert!((total_amount - 1_000_000_000.0).abs() < 1.0);
@@ -727,7 +786,7 @@ mod tests {
 
         let key1 = router.generate_route_cache_key(&route, 1_000_000_000);
         let key2 = router.generate_route_cache_key(&route, 1_000_000_000);
-        
+
         assert_eq!(key1, key2);
         assert!(key1.starts_with("route_"));
     }

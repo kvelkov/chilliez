@@ -1,27 +1,27 @@
 //! Enhanced Real-Time Balance Monitoring Module
-//! 
+//!
 //! This module provides comprehensive real-time balance monitoring with WebSocket
 //! integration, thread-safe updates, and alert systems for discrepancies.
 
 use crate::{
     error::ArbError,
-    solana::{
-        websocket::{SolanaWebsocketManager},
-        rpc::SolanaRpcClient,
-    },
+    solana::{rpc::SolanaRpcClient, websocket::SolanaWebsocketManager},
 };
-use log::{info, warn, error, debug};
+use dashmap::DashMap;
+use log::{debug, error, info, warn};
 use serde::{Deserialize, Serialize};
 use solana_sdk::pubkey::Pubkey;
 use std::{
-    sync::{Arc, atomic::{AtomicBool, AtomicU64, Ordering}},
+    sync::{
+        atomic::{AtomicBool, AtomicU64, Ordering},
+        Arc,
+    },
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use tokio::{
-    sync::{RwLock, broadcast, Mutex},
+    sync::{broadcast, Mutex, RwLock},
     time::interval,
 };
-use dashmap::DashMap;
 
 // =============================================================================
 // Configuration and Types
@@ -124,7 +124,7 @@ impl EnhancedBalanceMonitor {
         _websocket_manager: Option<Arc<SolanaWebsocketManager>>,
     ) -> (Self, broadcast::Receiver<BalanceAlert>) {
         let (alert_sender, alert_receiver) = broadcast::channel(1024);
-        
+
         let monitor = Self {
             config,
             balances: Arc::new(DashMap::new()),
@@ -178,13 +178,16 @@ impl EnhancedBalanceMonitor {
         for account in accounts {
             if !monitored.contains(&account) {
                 monitored.push(account);
-                
+
                 // Initialize balance record with RPC fetch
                 self.initialize_account_balance(account).await?;
             }
         }
-        
-        info!("📊 Added {} accounts to balance monitoring", monitored.len());
+
+        info!(
+            "📊 Added {} accounts to balance monitoring",
+            monitored.len()
+        );
         Ok(())
     }
 
@@ -201,24 +204,38 @@ impl EnhancedBalanceMonitor {
     /// Get current monitoring metrics
     pub fn get_metrics(&self) -> BalanceMonitorMetrics {
         BalanceMonitorMetrics {
-            total_updates_processed: AtomicU64::new(self.metrics.total_updates_processed.load(Ordering::Relaxed)),
-            websocket_updates: AtomicU64::new(self.metrics.websocket_updates.load(Ordering::Relaxed)),
-            rpc_verifications: AtomicU64::new(self.metrics.rpc_verifications.load(Ordering::Relaxed)),
-            discrepancies_detected: AtomicU64::new(self.metrics.discrepancies_detected.load(Ordering::Relaxed)),
+            total_updates_processed: AtomicU64::new(
+                self.metrics.total_updates_processed.load(Ordering::Relaxed),
+            ),
+            websocket_updates: AtomicU64::new(
+                self.metrics.websocket_updates.load(Ordering::Relaxed),
+            ),
+            rpc_verifications: AtomicU64::new(
+                self.metrics.rpc_verifications.load(Ordering::Relaxed),
+            ),
+            discrepancies_detected: AtomicU64::new(
+                self.metrics.discrepancies_detected.load(Ordering::Relaxed),
+            ),
             alerts_sent: AtomicU64::new(self.metrics.alerts_sent.load(Ordering::Relaxed)),
-            last_update_timestamp: AtomicU64::new(self.metrics.last_update_timestamp.load(Ordering::Relaxed)),
+            last_update_timestamp: AtomicU64::new(
+                self.metrics.last_update_timestamp.load(Ordering::Relaxed),
+            ),
             is_healthy: AtomicBool::new(self.metrics.is_healthy.load(Ordering::Relaxed)),
         }
     }
 
     /// Apply optimistic balance update (for pending transactions)
-    pub async fn apply_optimistic_update(&self, account: Pubkey, change: i64) -> Result<(), ArbError> {
+    pub async fn apply_optimistic_update(
+        &self,
+        account: Pubkey,
+        change: i64,
+    ) -> Result<(), ArbError> {
         if !self.config.enable_optimistic_balance_tracking {
             return Ok(());
         }
 
         if let Some(mut balance_record) = self.balances.get_mut(&account) {
-            balance_record.optimistic_balance = 
+            balance_record.optimistic_balance =
                 (balance_record.optimistic_balance as i64 + change).max(0) as u64;
             balance_record.pending_changes += change;
             balance_record.last_optimistic_update = SystemTime::now()
@@ -226,8 +243,10 @@ impl EnhancedBalanceMonitor {
                 .unwrap_or_default()
                 .as_secs();
 
-            debug!("💫 Applied optimistic balance update: account={}, change={}, new_optimistic={}", 
-                   account, change, balance_record.optimistic_balance);
+            debug!(
+                "💫 Applied optimistic balance update: account={}, change={}, new_optimistic={}",
+                account, change, balance_record.optimistic_balance
+            );
         }
 
         Ok(())
@@ -255,12 +274,21 @@ impl EnhancedBalanceMonitor {
                 };
 
                 self.balances.insert(account, balance_record);
-                debug!("📋 Initialized balance for account {}: {} lamports", account, balance);
+                debug!(
+                    "📋 Initialized balance for account {}: {} lamports",
+                    account, balance
+                );
                 Ok(())
             }
             Err(e) => {
-                error!("❌ Failed to initialize balance for account {}: {}", account, e);
-                Err(ArbError::NetworkError(format!("Balance initialization failed: {}", e)))
+                error!(
+                    "❌ Failed to initialize balance for account {}: {}",
+                    account, e
+                );
+                Err(ArbError::NetworkError(format!(
+                    "Balance initialization failed: {}",
+                    e
+                )))
             }
         }
     }
@@ -282,11 +310,13 @@ impl EnhancedBalanceMonitor {
         let is_running = self.is_running.clone();
 
         tokio::spawn(async move {
-            let mut interval = interval(Duration::from_secs(config.periodic_verification_interval_secs));
-            
+            let mut interval = interval(Duration::from_secs(
+                config.periodic_verification_interval_secs,
+            ));
+
             while is_running.load(Ordering::Relaxed) {
                 interval.tick().await;
-                
+
                 debug!("🔍 Starting periodic balance verification...");
                 let mut discrepancies_found = 0;
 
@@ -300,12 +330,18 @@ impl EnhancedBalanceMonitor {
                             metrics.rpc_verifications.fetch_add(1, Ordering::Relaxed);
 
                             // Check for discrepancies
-                            let difference = (fresh_balance as i64 - current_record.confirmed_balance as i64).abs();
-                            let discrepancy_percent = (difference as f64 / current_record.confirmed_balance.max(1) as f64) * 100.0;
+                            let difference = (fresh_balance as i64
+                                - current_record.confirmed_balance as i64)
+                                .abs();
+                            let discrepancy_percent = (difference as f64
+                                / current_record.confirmed_balance.max(1) as f64)
+                                * 100.0;
 
                             if discrepancy_percent > config.balance_threshold_alert_percent {
                                 discrepancies_found += 1;
-                                metrics.discrepancies_detected.fetch_add(1, Ordering::Relaxed);
+                                metrics
+                                    .discrepancies_detected
+                                    .fetch_add(1, Ordering::Relaxed);
 
                                 let alert = BalanceAlert {
                                     alert_type: AlertType::BalanceDiscrepancy,
@@ -352,17 +388,26 @@ impl EnhancedBalanceMonitor {
                 // Update safety mode based on discrepancies
                 if discrepancies_found > 0 {
                     safety_mode.store(true, Ordering::Relaxed);
-                    warn!("🚨 Safety mode activated due to {} balance discrepancies", discrepancies_found);
+                    warn!(
+                        "🚨 Safety mode activated due to {} balance discrepancies",
+                        discrepancies_found
+                    );
                 } else {
                     safety_mode.store(false, Ordering::Relaxed);
                 }
 
                 metrics.last_update_timestamp.store(
-                    SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs(),
-                    Ordering::Relaxed
+                    SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs(),
+                    Ordering::Relaxed,
                 );
 
-                debug!("✅ Periodic balance verification completed. Discrepancies: {}", discrepancies_found);
+                debug!(
+                    "✅ Periodic balance verification completed. Discrepancies: {}",
+                    discrepancies_found
+                );
             }
         });
     }
@@ -374,22 +419,28 @@ impl EnhancedBalanceMonitor {
 
         tokio::spawn(async move {
             let mut interval = interval(Duration::from_secs(60)); // Health check every minute
-            
+
             while is_running.load(Ordering::Relaxed) {
                 interval.tick().await;
-                
+
                 let last_update = metrics.last_update_timestamp.load(Ordering::Relaxed);
-                let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
-                
+                let now = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs();
+
                 // Check if system is healthy (recent updates)
                 let is_healthy = (now - last_update) < 120; // Healthy if updated within 2 minutes
                 metrics.is_healthy.store(is_healthy, Ordering::Relaxed);
-                
+
                 if !is_healthy {
                     let alert = BalanceAlert {
                         alert_type: AlertType::VerificationFailure,
                         account: Pubkey::default(), // System-wide alert
-                        message: format!("Balance monitor health check failed. Last update: {} seconds ago", now - last_update),
+                        message: format!(
+                            "Balance monitor health check failed. Last update: {} seconds ago",
+                            now - last_update
+                        ),
                         timestamp: SystemTime::now(),
                         severity: AlertSeverity::Critical,
                         details: Some(serde_json::json!({
@@ -438,27 +489,39 @@ impl AtomicBalanceOperations {
         balance_monitor: &EnhancedBalanceMonitor,
     ) -> Result<(), ArbError> {
         // Get or create lock for this account
-        let lock = self.balance_locks.entry(*account).or_insert_with(|| Arc::new(Mutex::new(()))).clone();
+        let lock = self
+            .balance_locks
+            .entry(*account)
+            .or_insert_with(|| Arc::new(Mutex::new(())))
+            .clone();
         let _guard = lock.lock().await;
 
         // Perform atomic check
         if let Some(balance_record) = balance_monitor.get_balance(account).await {
             let available_balance = balance_record.optimistic_balance;
-            
+
             if available_balance < required_amount {
                 return Err(ArbError::InsufficientBalance(format!(
-                    "Insufficient balance: required {}, available {}", 
+                    "Insufficient balance: required {}, available {}",
                     required_amount, available_balance
                 )));
             }
 
             // Reserve the amount optimistically
-            balance_monitor.apply_optimistic_update(*account, -(required_amount as i64)).await?;
-            
-            info!("💰 Atomic balance reservation successful: account={}, reserved={}", account, required_amount);
+            balance_monitor
+                .apply_optimistic_update(*account, -(required_amount as i64))
+                .await?;
+
+            info!(
+                "💰 Atomic balance reservation successful: account={}, reserved={}",
+                account, required_amount
+            );
             Ok(())
         } else {
-            Err(ArbError::AccountNotFound(format!("Account {} not monitored", account)))
+            Err(ArbError::AccountNotFound(format!(
+                "Account {} not monitored",
+                account
+            )))
         }
     }
 
@@ -469,12 +532,21 @@ impl AtomicBalanceOperations {
         amount: u64,
         balance_monitor: &EnhancedBalanceMonitor,
     ) -> Result<(), ArbError> {
-        let lock = self.balance_locks.entry(*account).or_insert_with(|| Arc::new(Mutex::new(()))).clone();
+        let lock = self
+            .balance_locks
+            .entry(*account)
+            .or_insert_with(|| Arc::new(Mutex::new(())))
+            .clone();
         let _guard = lock.lock().await;
 
-        balance_monitor.apply_optimistic_update(*account, amount as i64).await?;
-        
-        info!("🔓 Balance reservation released: account={}, amount={}", account, amount);
+        balance_monitor
+            .apply_optimistic_update(*account, amount as i64)
+            .await?;
+
+        info!(
+            "🔓 Balance reservation released: account={}, amount={}",
+            account, amount
+        );
         Ok(())
     }
 }

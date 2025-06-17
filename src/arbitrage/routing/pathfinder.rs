@@ -1,18 +1,18 @@
 // src/arbitrage/routing/pathfinder.rs
 //! PathFinder Module for Multi-Hop Route Discovery
-//! 
+//!
 //! This module implements various pathfinding algorithms to discover optimal
 //! trading routes across multiple DEXs and pools.
 
 use anyhow::Result;
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 // Removed unused import
-use std::collections::{BinaryHeap, HashMap, HashSet, VecDeque};
-use std::time::{Duration, Instant};
 use log::{info, warn};
 use solana_sdk::pubkey::Pubkey;
+use std::collections::{BinaryHeap, HashMap, HashSet, VecDeque};
+use std::time::{Duration, Instant};
 
-use super::graph::{RoutingGraph, RouteEdge};
+use super::graph::{RouteEdge, RoutingGraph};
 
 /// Configuration for pathfinding algorithms
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -198,7 +198,8 @@ impl PathFinder {
         // Check cache first
         let cache_key = (from_pubkey, to_pubkey);
         if let Some((cached_paths, cache_time)) = self.path_cache.get(&cache_key) {
-            if cache_time.elapsed() < Duration::from_secs(30) { // 30-second cache
+            if cache_time.elapsed() < Duration::from_secs(30) {
+                // 30-second cache
                 let cached_paths_clone = cached_paths.clone();
                 self.update_cache_stats(true);
                 return Ok(self.adapt_paths_for_amount(cached_paths_clone, amount_in));
@@ -209,30 +210,38 @@ impl PathFinder {
         // Find paths using the configured algorithm
         let paths = match self.config.algorithm {
             PathfinderAlgorithm::Dijkstra => {
-                self.dijkstra_search(graph, from_pubkey, to_pubkey, amount_in).await?
+                self.dijkstra_search(graph, from_pubkey, to_pubkey, amount_in)
+                    .await?
             }
             PathfinderAlgorithm::AStar => {
-                self.astar_search(graph, from_pubkey, to_pubkey, amount_in).await?
+                self.astar_search(graph, from_pubkey, to_pubkey, amount_in)
+                    .await?
             }
             PathfinderAlgorithm::BellmanFord => {
-                self.bellman_ford_search(graph, from_pubkey, to_pubkey, amount_in).await?
+                self.bellman_ford_search(graph, from_pubkey, to_pubkey, amount_in)
+                    .await?
             }
             PathfinderAlgorithm::BFS => {
-                self.bfs_search(graph, from_pubkey, to_pubkey, amount_in).await?
+                self.bfs_search(graph, from_pubkey, to_pubkey, amount_in)
+                    .await?
             }
             PathfinderAlgorithm::KShortest => {
-                self.k_shortest_search(graph, from_pubkey, to_pubkey, amount_in).await?
+                self.k_shortest_search(graph, from_pubkey, to_pubkey, amount_in)
+                    .await?
             }
             PathfinderAlgorithm::MultiObjective => {
-                self.multi_objective_search(graph, from_pubkey, to_pubkey, amount_in).await?
+                self.multi_objective_search(graph, from_pubkey, to_pubkey, amount_in)
+                    .await?
             }
         };
 
         // Cache the results
-        self.path_cache.insert(cache_key, (paths.clone(), Instant::now()));
-        
+        self.path_cache
+            .insert(cache_key, (paths.clone(), Instant::now()));
+
         // Clean up old cache entries periodically
-        if self.last_cleanup.elapsed() > Duration::from_secs(300) { // 5 minutes
+        if self.last_cleanup.elapsed() > Duration::from_secs(300) {
+            // 5 minutes
             self.cleanup_cache();
         }
 
@@ -240,14 +249,19 @@ impl PathFinder {
         if !paths.is_empty() {
             self.stats.successful_searches += 1;
         }
-        
+
         let search_time = start_time.elapsed();
         let algorithm = self.config.algorithm.clone();
         let paths_for_stats = paths.clone();
         self.update_algorithm_stats(&algorithm, search_time, !paths.is_empty(), &paths_for_stats);
 
-        info!("Found {} paths from {} to {} in {:?}", 
-              paths.len(), from_token, to_token, search_time);
+        info!(
+            "Found {} paths from {} to {} in {:?}",
+            paths.len(),
+            from_token,
+            to_token,
+            search_time
+        );
 
         Ok(paths)
     }
@@ -260,10 +274,13 @@ impl PathFinder {
         to_token: &str,
         amount_in: f64,
     ) -> Result<Option<RoutePath>> {
-        let paths = self.find_all_paths(graph, from_token, to_token, amount_in).await?;
-        
+        let paths = self
+            .find_all_paths(graph, from_token, to_token, amount_in)
+            .await?;
+
         // Return path with best expected output
-        Ok(paths.into_iter()
+        Ok(paths
+            .into_iter()
             .max_by(|a, b| a.expected_output.partial_cmp(&b.expected_output).unwrap()))
     }
 
@@ -276,12 +293,14 @@ impl PathFinder {
         amount_in: f64,
         k: usize,
     ) -> Result<Vec<RoutePath>> {
-        let mut paths = self.find_all_paths(graph, from_token, to_token, amount_in).await?;
-        
+        let mut paths = self
+            .find_all_paths(graph, from_token, to_token, amount_in)
+            .await?;
+
         // Sort by expected output (descending) and take top k
         paths.sort_by(|a, b| b.expected_output.partial_cmp(&a.expected_output).unwrap());
         paths.truncate(k);
-        
+
         Ok(paths)
     }
 
@@ -294,10 +313,13 @@ impl PathFinder {
         amount_in: f64,
         constraints: &PathConstraints,
     ) -> Result<Vec<RoutePath>> {
-        let all_paths = self.find_all_paths(graph, from_token, to_token, amount_in).await?;
-        
+        let all_paths = self
+            .find_all_paths(graph, from_token, to_token, amount_in)
+            .await?;
+
         // Filter paths based on constraints
-        let filtered_paths: Vec<RoutePath> = all_paths.into_iter()
+        let filtered_paths: Vec<RoutePath> = all_paths
+            .into_iter()
             .filter(|path| {
                 // Check max hops constraint
                 if let Some(max_hops) = constraints.max_hops {
@@ -305,14 +327,14 @@ impl PathFinder {
                         return false;
                     }
                 }
-                
-                // Check max gas cost constraint  
+
+                // Check max gas cost constraint
                 if let Some(max_gas) = constraints.max_gas_cost {
                     if path.estimated_gas_cost > max_gas {
                         return false;
                     }
                 }
-                
+
                 // Check execution time constraint
                 if let Some(max_time) = constraints.max_execution_time {
                     if let Some(exec_time) = path.execution_time_estimate {
@@ -321,37 +343,41 @@ impl PathFinder {
                         }
                     }
                 }
-                
+
                 // Check minimum output constraint
                 if let Some(min_output) = constraints.min_output_amount {
                     if path.expected_output < min_output {
                         return false;
                     }
                 }
-                
+
                 // Check required DEXs
                 if let Some(ref required_dexs) = constraints.required_dexs {
-                    let path_dexs: std::collections::HashSet<String> = path.steps.iter()
+                    let path_dexs: std::collections::HashSet<String> = path
+                        .steps
+                        .iter()
                         .map(|step| step.dex_type.to_string())
                         .collect();
                     if !required_dexs.iter().all(|dex| path_dexs.contains(dex)) {
                         return false;
                     }
                 }
-                
+
                 // Check forbidden DEXs
                 if let Some(ref forbidden_dexs) = constraints.forbidden_dexs {
-                    let path_uses_forbidden = path.steps.iter()
+                    let path_uses_forbidden = path
+                        .steps
+                        .iter()
                         .any(|step| forbidden_dexs.contains(&step.dex_type.to_string()));
                     if path_uses_forbidden {
                         return false;
                     }
                 }
-                
+
                 true
             })
             .collect();
-            
+
         Ok(filtered_paths)
     }
 
@@ -388,7 +414,7 @@ impl PathFinder {
             if current.token == to_token && !current.path.is_empty() {
                 let route_path = self.build_route_path(current.path, amount_in).await?;
                 paths.push(route_path);
-                
+
                 if paths.len() >= self.config.max_routes {
                     break;
                 }
@@ -409,7 +435,7 @@ impl PathFinder {
                     }
 
                     let new_distance = current.distance + edge.weight;
-                    
+
                     // Skip if weight is too high
                     if new_distance > self.config.max_weight_threshold {
                         continue;
@@ -422,7 +448,7 @@ impl PathFinder {
 
                     if new_distance < *distances.get(&neighbor_token).unwrap_or(&f64::INFINITY) {
                         distances.insert(neighbor_token, new_distance);
-                        
+
                         let mut new_path = current.path.clone();
                         new_path.push(edge);
 
@@ -441,7 +467,9 @@ impl PathFinder {
         paths.sort_by(|a, b| {
             let score_a = self.calculate_path_score(a);
             let score_b = self.calculate_path_score(b);
-            score_b.partial_cmp(&score_a).unwrap_or(std::cmp::Ordering::Equal)
+            score_b
+                .partial_cmp(&score_a)
+                .unwrap_or(std::cmp::Ordering::Equal)
         });
 
         Ok(paths)
@@ -458,7 +486,8 @@ impl PathFinder {
         // For now, use Dijkstra as A* requires good heuristics
         // TODO: Implement proper A* with token pair frequency heuristics
         warn!("A* algorithm not fully implemented, falling back to Dijkstra");
-        self.dijkstra_search(graph, from_token, to_token, amount_in).await
+        self.dijkstra_search(graph, from_token, to_token, amount_in)
+            .await
     }
 
     /// Bellman-Ford algorithm for handling negative weights
@@ -472,7 +501,8 @@ impl PathFinder {
         // Bellman-Ford is less suitable for finding multiple paths
         // Use Dijkstra for now
         warn!("Bellman-Ford algorithm not optimal for pathfinding, using Dijkstra");
-        self.dijkstra_search(graph, from_token, to_token, amount_in).await
+        self.dijkstra_search(graph, from_token, to_token, amount_in)
+            .await
     }
 
     /// Breadth-first search for unweighted paths
@@ -497,7 +527,7 @@ impl PathFinder {
             if current_token == to_token && !current_path.is_empty() {
                 let route_path = self.build_route_path(current_path, amount_in).await?;
                 paths.push(route_path);
-                
+
                 if paths.len() >= self.config.max_routes {
                     break;
                 }
@@ -538,7 +568,7 @@ impl PathFinder {
     ) -> Result<Vec<RoutePath>> {
         // Use Dijkstra with multiple path tracking
         let all_paths = graph.find_paths(from_token, to_token, self.config.max_hops);
-        
+
         let mut route_paths = Vec::new();
         for path in all_paths.into_iter().take(self.config.max_routes) {
             let route_path = self.build_route_path(path, amount_in).await?;
@@ -560,18 +590,24 @@ impl PathFinder {
         let mut all_paths = Vec::new();
 
         // Dijkstra for shortest weighted path
-        let dijkstra_paths = self.dijkstra_search(graph, from_token, to_token, amount_in).await?;
+        let dijkstra_paths = self
+            .dijkstra_search(graph, from_token, to_token, amount_in)
+            .await?;
         all_paths.extend(dijkstra_paths);
 
         // BFS for shortest hop count
-        let bfs_paths = self.bfs_search(graph, from_token, to_token, amount_in).await?;
+        let bfs_paths = self
+            .bfs_search(graph, from_token, to_token, amount_in)
+            .await?;
         all_paths.extend(bfs_paths);
 
         // Remove duplicates and sort by combined score
         all_paths.sort_by(|a, b| {
             let score_a = self.calculate_multi_objective_score(a);
             let score_b = self.calculate_multi_objective_score(b);
-            score_b.partial_cmp(&score_a).unwrap_or(std::cmp::Ordering::Equal)
+            score_b
+                .partial_cmp(&score_a)
+                .unwrap_or(std::cmp::Ordering::Equal)
         });
 
         // Remove duplicates based on path similarity
@@ -584,7 +620,11 @@ impl PathFinder {
     }
 
     /// Build a RoutePath from a vector of RouteEdges
-    async fn build_route_path(&self, edges: Vec<RouteEdge>, initial_amount: f64) -> Result<RoutePath> {
+    async fn build_route_path(
+        &self,
+        edges: Vec<RouteEdge>,
+        initial_amount: f64,
+    ) -> Result<RoutePath> {
         let mut steps = Vec::new();
         let mut current_amount = initial_amount;
         let mut total_fees = 0.0;
@@ -595,7 +635,7 @@ impl PathFinder {
         for (i, edge) in edges.iter().enumerate() {
             let fee_amount = current_amount * (edge.fee_bps as f64 / 10000.0);
             let amount_out = current_amount - fee_amount;
-            
+
             // Calculate price impact (simplified)
             let price_impact = self.calculate_price_impact(current_amount, edge.liquidity);
 
@@ -645,7 +685,7 @@ impl PathFinder {
         if liquidity <= 0.0 {
             return 1.0; // 100% impact for zero liquidity
         }
-        
+
         // Simplified constant product formula impact
         let impact_factor = amount / liquidity;
         impact_factor.min(1.0)
@@ -657,7 +697,7 @@ impl PathFinder {
         let fee_penalty = path.total_fees / 100.0;
         let confidence_bonus = path.confidence_score;
         let liquidity_bonus = path.liquidity_score;
-        
+
         output_factor + confidence_bonus + liquidity_bonus - fee_penalty
     }
 
@@ -669,7 +709,11 @@ impl PathFinder {
             path.confidence_score,
             path.liquidity_score,
             path.dex_diversity_score,
-            1.0 / (path.execution_time_estimate.unwrap_or(Duration::from_millis(500)).as_millis() as f64 / 1000.0), // Speed score
+            1.0 / (path
+                .execution_time_estimate
+                .unwrap_or(Duration::from_millis(500))
+                .as_millis() as f64
+                / 1000.0), // Speed score
         ];
 
         weights.iter().zip(scores.iter()).map(|(w, s)| w * s).sum()
@@ -681,7 +725,10 @@ impl PathFinder {
             return false;
         }
 
-        let same_pools = path_a.steps.iter().zip(path_b.steps.iter())
+        let same_pools = path_a
+            .steps
+            .iter()
+            .zip(path_b.steps.iter())
             .all(|(step_a, step_b)| step_a.pool_address == step_b.pool_address);
 
         same_pools
@@ -693,7 +740,8 @@ impl PathFinder {
             return 0.0;
         }
 
-        let avg_liquidity = steps.iter().map(|s| s.pool_liquidity).sum::<f64>() / steps.len() as f64;
+        let avg_liquidity =
+            steps.iter().map(|s| s.pool_liquidity).sum::<f64>() / steps.len() as f64;
         let liquidity_score = (avg_liquidity.ln() / 30.0).min(1.0).max(0.0);
 
         let avg_impact = steps.iter().map(|s| s.price_impact).sum::<f64>() / steps.len() as f64;
@@ -708,7 +756,10 @@ impl PathFinder {
             return 0.0;
         }
 
-        let min_liquidity = steps.iter().map(|s| s.pool_liquidity).fold(f64::INFINITY, f64::min);
+        let min_liquidity = steps
+            .iter()
+            .map(|s| s.pool_liquidity)
+            .fold(f64::INFINITY, f64::min);
         (min_liquidity.ln() / 25.0).min(1.0).max(0.0)
     }
 
@@ -727,19 +778,23 @@ impl PathFinder {
     fn adapt_paths_for_amount(&self, paths: Vec<RoutePath>, new_amount: f64) -> Vec<RoutePath> {
         // For now, just scale the amounts proportionally
         // In production, this would recalculate based on actual AMM curves
-        paths.into_iter().map(|mut path| {
-            let scale_factor = new_amount / path.steps.first().map(|s| s.amount_in).unwrap_or(1.0);
-            
-            for step in &mut path.steps {
-                step.amount_in *= scale_factor;
-                step.amount_out *= scale_factor;
-            }
-            
-            path.expected_output *= scale_factor;
-            path.total_fees *= scale_factor;
-            
-            path
-        }).collect()
+        paths
+            .into_iter()
+            .map(|mut path| {
+                let scale_factor =
+                    new_amount / path.steps.first().map(|s| s.amount_in).unwrap_or(1.0);
+
+                for step in &mut path.steps {
+                    step.amount_in *= scale_factor;
+                    step.amount_out *= scale_factor;
+                }
+
+                path.expected_output *= scale_factor;
+                path.total_fees *= scale_factor;
+
+                path
+            })
+            .collect()
     }
 
     /// Update cache hit/miss statistics
@@ -747,7 +802,8 @@ impl PathFinder {
         let total = self.stats.total_searches as f64;
         if total > 0.0 {
             if hit {
-                self.stats.cache_hit_rate = (self.stats.cache_hit_rate * (total - 1.0) + 1.0) / total;
+                self.stats.cache_hit_rate =
+                    (self.stats.cache_hit_rate * (total - 1.0) + 1.0) / total;
             } else {
                 self.stats.cache_hit_rate = self.stats.cache_hit_rate * (total - 1.0) / total;
             }
@@ -762,34 +818,42 @@ impl PathFinder {
         success: bool,
         paths: &[RoutePath],
     ) {
-        
         // Calculate average quality first (using immutable self)
         let avg_quality = if !paths.is_empty() {
-            paths.iter().map(|p| self.calculate_path_score(p)).sum::<f64>() / paths.len() as f64
+            paths
+                .iter()
+                .map(|p| self.calculate_path_score(p))
+                .sum::<f64>()
+                / paths.len() as f64
         } else {
             0.0
         };
 
         // Now update stats (using mutable self)
         let algo_name = format!("{:?}", algorithm);
-        let stats = self.stats.algorithm_performance.entry(algo_name).or_insert(AlgorithmStats {
-            usage_count: 0,
-            success_rate: 0.0,
-            average_time: Duration::from_millis(0),
-            average_quality: 0.0,
-        });
+        let stats = self
+            .stats
+            .algorithm_performance
+            .entry(algo_name)
+            .or_insert(AlgorithmStats {
+                usage_count: 0,
+                success_rate: 0.0,
+                average_time: Duration::from_millis(0),
+                average_quality: 0.0,
+            });
 
         stats.usage_count += 1;
         let count = stats.usage_count as f64;
-        
+
         // Update success rate
-        stats.success_rate = (stats.success_rate * (count - 1.0) + if success { 1.0 } else { 0.0 }) / count;
-        
+        stats.success_rate =
+            (stats.success_rate * (count - 1.0) + if success { 1.0 } else { 0.0 }) / count;
+
         // Update average time
         let old_time_ms = stats.average_time.as_millis() as f64;
         let new_time_ms = (old_time_ms * (count - 1.0) + search_time.as_millis() as f64) / count;
         stats.average_time = Duration::from_millis(new_time_ms as u64);
-        
+
         // Update average quality
         if !paths.is_empty() {
             stats.average_quality = (stats.average_quality * (count - 1.0) + avg_quality) / count;
@@ -799,7 +863,8 @@ impl PathFinder {
     /// Clean up old cache entries
     fn cleanup_cache(&mut self) {
         let cutoff_time = Instant::now() - Duration::from_secs(300); // 5 minutes
-        self.path_cache.retain(|_, (_, timestamp)| *timestamp > cutoff_time);
+        self.path_cache
+            .retain(|_, (_, timestamp)| *timestamp > cutoff_time);
         self.last_cleanup = Instant::now();
     }
 
@@ -808,9 +873,15 @@ impl PathFinder {
         // This would normally query a token registry
         // For now, create deterministic addresses for testing
         match token_symbol.to_uppercase().as_str() {
-            "SOL" => Ok(solana_sdk::pubkey!("So11111111111111111111111111111111111111112")),
-            "USDC" => Ok(solana_sdk::pubkey!("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v")),
-            "USDT" => Ok(solana_sdk::pubkey!("Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB")),
+            "SOL" => Ok(solana_sdk::pubkey!(
+                "So11111111111111111111111111111111111111112"
+            )),
+            "USDC" => Ok(solana_sdk::pubkey!(
+                "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+            )),
+            "USDT" => Ok(solana_sdk::pubkey!(
+                "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB"
+            )),
             _ => {
                 // Generate a deterministic address for unknown tokens
                 use std::collections::hash_map::DefaultHasher;
@@ -845,11 +916,11 @@ impl PathFinder {
 mod tests {
     use super::*;
     use crate::arbitrage::routing::graph::RoutingGraph;
-    use crate::utils::{PoolInfo, PoolToken, DexType};
+    use crate::utils::{DexType, PoolInfo, PoolToken};
 
     fn create_test_graph() -> RoutingGraph {
         let graph = RoutingGraph::new();
-        
+
         // Add some test pools for pathfinding
         let sol_mint = solana_sdk::pubkey!("So11111111111111111111111111111111111111112");
         let usdc_mint = solana_sdk::pubkey!("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v");
@@ -923,7 +994,7 @@ mod tests {
 
         graph.add_pool(std::sync::Arc::new(pool1)).unwrap();
         graph.add_pool(std::sync::Arc::new(pool2)).unwrap();
-        
+
         graph
     }
 
@@ -931,7 +1002,7 @@ mod tests {
     fn test_pathfinder_creation() {
         let config = PathfinderConfig::default();
         let pathfinder = PathFinder::new(config);
-        
+
         assert_eq!(pathfinder.stats.total_searches, 0);
         assert_eq!(pathfinder.stats.successful_searches, 0);
     }
@@ -947,15 +1018,13 @@ mod tests {
         };
         let mut pathfinder = PathFinder::new(config);
 
-        let paths = pathfinder.find_all_paths(
-            &graph,
-            "SOL",
-            "USDT",
-            100.0,
-        ).await.unwrap();
+        let paths = pathfinder
+            .find_all_paths(&graph, "SOL", "USDT", 100.0)
+            .await
+            .unwrap();
 
         assert!(!paths.is_empty());
-        
+
         let first_path = &paths[0];
         assert_eq!(first_path.steps.len(), 2); // SOL -> USDC -> USDT
         assert!(first_path.expected_output > 0.0);
@@ -973,12 +1042,10 @@ mod tests {
         };
         let mut pathfinder = PathFinder::new(config);
 
-        let paths = pathfinder.find_all_paths(
-            &graph,
-            "SOL",
-            "USDT",
-            100.0,
-        ).await.unwrap();
+        let paths = pathfinder
+            .find_all_paths(&graph, "SOL", "USDT", 100.0)
+            .await
+            .unwrap();
 
         assert!(!paths.is_empty());
     }
@@ -987,35 +1054,39 @@ mod tests {
     fn test_token_resolution() {
         let config = PathfinderConfig::default();
         let pathfinder = PathFinder::new(config);
-        
+
         let sol_address = pathfinder.resolve_token_address("SOL").unwrap();
         let usdc_address = pathfinder.resolve_token_address("USDC").unwrap();
-        
-        assert_eq!(sol_address, solana_sdk::pubkey!("So11111111111111111111111111111111111111112"));
-        assert_eq!(usdc_address, solana_sdk::pubkey!("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"));
+
+        assert_eq!(
+            sol_address,
+            solana_sdk::pubkey!("So11111111111111111111111111111111111111112")
+        );
+        assert_eq!(
+            usdc_address,
+            solana_sdk::pubkey!("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v")
+        );
     }
 
     #[test]
     fn test_confidence_score_calculation() {
         let config = PathfinderConfig::default();
         let pathfinder = PathFinder::new(config);
-        
-        let steps = vec![
-            RouteStep {
-                pool_address: Pubkey::new_unique(),
-                dex_type: DexType::Raydium,
-                from_token: Pubkey::new_unique(),
-                to_token: Pubkey::new_unique(),
-                amount_in: 100.0,
-                amount_out: 99.0,
-                fee_bps: 25,
-                pool_liquidity: 1_000_000.0,
-                price_impact: 0.01,
-                execution_order: 0,
-                slippage_tolerance: Some(0.01),
-            }
-        ];
-        
+
+        let steps = vec![RouteStep {
+            pool_address: Pubkey::new_unique(),
+            dex_type: DexType::Raydium,
+            from_token: Pubkey::new_unique(),
+            to_token: Pubkey::new_unique(),
+            amount_in: 100.0,
+            amount_out: 99.0,
+            fee_bps: 25,
+            pool_liquidity: 1_000_000.0,
+            price_impact: 0.01,
+            execution_order: 0,
+            slippage_tolerance: Some(0.01),
+        }];
+
         let confidence = pathfinder.calculate_confidence_score(&steps);
         assert!(confidence > 0.0);
         assert!(confidence <= 1.0);
@@ -1025,7 +1096,7 @@ mod tests {
     fn test_dex_diversity_score() {
         let config = PathfinderConfig::default();
         let pathfinder = PathFinder::new(config);
-        
+
         let steps = vec![
             RouteStep {
                 pool_address: Pubkey::new_unique(),
@@ -1052,9 +1123,9 @@ mod tests {
                 price_impact: 0.02,
                 execution_order: 1,
                 slippage_tolerance: Some(0.01),
-            }
+            },
         ];
-        
+
         let diversity = pathfinder.calculate_dex_diversity_score(&steps);
         assert_eq!(diversity, 1.0); // Two different DEXs
     }
@@ -1066,20 +1137,16 @@ mod tests {
         let mut pathfinder = PathFinder::new(config);
 
         // First search
-        let paths1 = pathfinder.find_all_paths(
-            &graph,
-            "SOL",
-            "USDC",
-            100.0,
-        ).await.unwrap();
+        let paths1 = pathfinder
+            .find_all_paths(&graph, "SOL", "USDC", 100.0)
+            .await
+            .unwrap();
 
         // Second search (should hit cache)
-        let paths2 = pathfinder.find_all_paths(
-            &graph,
-            "SOL",
-            "USDC",
-            100.0,
-        ).await.unwrap();
+        let paths2 = pathfinder
+            .find_all_paths(&graph, "SOL", "USDC", 100.0)
+            .await
+            .unwrap();
 
         assert_eq!(paths1.len(), paths2.len());
         assert!(pathfinder.stats.cache_hit_rate > 0.0);

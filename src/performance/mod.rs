@@ -1,23 +1,23 @@
 // src/performance/mod.rs
 //! Performance Optimization Module
-//! 
+//!
 //! This module provides high-performance parallel processing, caching, and
 //! optimization strategies for the Solana DEX arbitrage bot.
 
-pub mod parallel;
+pub mod benchmark;
 pub mod cache;
 pub mod metrics;
-pub mod benchmark;
+pub mod parallel;
 
-pub use parallel::{ParallelExecutor, ParallelStats, ParallelConfig};
+pub use benchmark::*;
 pub use cache::*;
 pub use metrics::*;
-pub use benchmark::*;
+pub use parallel::{ParallelConfig, ParallelExecutor, ParallelStats};
 
 use anyhow::Result;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
-use std::sync::Arc;
 
 /// Performance configuration for the entire system
 #[derive(Debug, Clone)]
@@ -45,9 +45,9 @@ impl Default for PerformanceConfig {
         Self {
             max_concurrent_workers: num_cpus::get().max(4),
             operation_timeout: Duration::from_secs(30),
-            pool_cache_ttl: Duration::from_secs(10),      // 10s for pool states
-            route_cache_ttl: Duration::from_secs(30),     // 30s for routes
-            quote_cache_ttl: Duration::from_secs(5),      // 5s for quotes
+            pool_cache_ttl: Duration::from_secs(10), // 10s for pool states
+            route_cache_ttl: Duration::from_secs(30), // 30s for routes
+            quote_cache_ttl: Duration::from_secs(5), // 5s for quotes
             max_cache_size: 10000,
             metrics_enabled: true,
             benchmark_interval: Duration::from_secs(60),
@@ -67,8 +67,9 @@ pub struct PerformanceManager {
 impl PerformanceManager {
     /// Create a new performance manager
     pub async fn new(config: PerformanceConfig) -> Result<Self> {
-        let parallel_executor = Arc::new(ParallelExecutor::new(config.max_concurrent_workers).await?);
-        
+        let parallel_executor =
+            Arc::new(ParallelExecutor::new(config.max_concurrent_workers).await?);
+
         // Convert PerformanceConfig to CacheConfig
         let cache_config = CacheConfig {
             pool_ttl: config.pool_cache_ttl,
@@ -77,9 +78,9 @@ impl PerformanceManager {
             metadata_ttl: Duration::from_secs(300), // Default for metadata
             max_entries_per_cache: config.max_cache_size,
             cleanup_interval: Duration::from_secs(60), // Default
-            enable_auto_refresh: true, // Default
+            enable_auto_refresh: true,                 // Default
         };
-        
+
         let cache_manager = Arc::new(CacheManager::new(cache_config).await?);
         let metrics_collector = Arc::new(RwLock::new(MetricsCollector::new()));
         let benchmark_runner = Arc::new(BenchmarkRunner::new(config.clone()));
@@ -124,17 +125,17 @@ impl PerformanceManager {
                 let mut interval_timer = tokio::time::interval(interval);
                 loop {
                     interval_timer.tick().await;
-                    
+
                     if let Err(e) = benchmark.run_system_benchmark().await {
                         log::warn!("Benchmark failed: {}", e);
                     }
-                    
+
                     let mut collector = metrics.write().await;
                     collector.record_system_stats().await;
                 }
             });
         }
-        
+
         Ok(())
     }
 
@@ -143,7 +144,7 @@ impl PerformanceManager {
         let metrics = self.metrics_collector.read().await;
         let cache_stats = self.cache_manager.get_stats().await;
         let parallel_stats = self.parallel_executor.get_stats().await;
-        
+
         PerformanceReport {
             timestamp: Instant::now(),
             metrics: metrics.get_summary(),

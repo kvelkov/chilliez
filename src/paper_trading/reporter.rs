@@ -3,12 +3,12 @@
 
 use super::{PaperTradingAnalytics, VirtualPortfolio};
 use crate::arbitrage::opportunity::MultiHopArbOpportunity;
+use anyhow::Result;
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::Path;
-use chrono::{DateTime, Utc};
-use anyhow::Result;
 
 /// Trade log entry for paper trading
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -62,11 +62,11 @@ impl PaperTradingReporter {
     pub fn new(output_dir: &str) -> Result<Self> {
         // Ensure output directory exists
         std::fs::create_dir_all(output_dir)?;
-        
+
         let timestamp = Utc::now().format("%Y%m%d_%H%M%S");
         let trade_log_path = format!("{}/paper_trades_{}.jsonl", output_dir, timestamp);
         let analytics_log_path = format!("{}/paper_analytics_{}.json", output_dir, timestamp);
-        
+
         Ok(Self {
             trade_log_path,
             analytics_log_path,
@@ -80,14 +80,19 @@ impl PaperTradingReporter {
             .create(true)
             .append(true)
             .open(&self.trade_log_path)?;
-            
+
         let json_line = serde_json::to_string(&entry)?;
         writeln!(file, "{}", json_line)?;
         file.flush()?;
-        
-        log::info!("📝 Logged paper trade: {} {} -> {} (profit: {})", 
-                  entry.opportunity_id, entry.token_in, entry.token_out, entry.actual_profit);
-        
+
+        log::info!(
+            "📝 Logged paper trade: {} {} -> {} (profit: {})",
+            entry.opportunity_id,
+            entry.token_in,
+            entry.token_out,
+            entry.actual_profit
+        );
+
         Ok(())
     }
 
@@ -116,33 +121,50 @@ impl PaperTradingReporter {
             fees_paid,
             execution_success,
             failure_reason,
-            dex_route: opportunity.pool_path.iter().map(|p| format!("Pool_{}", p)).collect(),
+            dex_route: opportunity
+                .pool_path
+                .iter()
+                .map(|p| format!("Pool_{}", p))
+                .collect(),
             gas_cost,
         }
     }
 
     /// Export analytics data to JSON file
-    pub fn export_analytics(&self, analytics: &PaperTradingAnalytics, portfolio: &VirtualPortfolio) -> Result<()> {
+    pub fn export_analytics(
+        &self,
+        analytics: &PaperTradingAnalytics,
+        portfolio: &VirtualPortfolio,
+    ) -> Result<()> {
         let performance_data = self.generate_performance_summary(analytics, portfolio);
-        
+
         let json_data = serde_json::to_string_pretty(&performance_data)?;
         std::fs::write(&self.analytics_log_path, json_data)?;
-        
-        log::info!("📊 Exported paper trading analytics to: {}", self.analytics_log_path);
+
+        log::info!(
+            "📊 Exported paper trading analytics to: {}",
+            self.analytics_log_path
+        );
         Ok(())
     }
 
     /// Generate performance summary from analytics and portfolio data
-    fn generate_performance_summary(&self, analytics: &PaperTradingAnalytics, portfolio: &VirtualPortfolio) -> PerformanceSummary {
+    fn generate_performance_summary(
+        &self,
+        analytics: &PaperTradingAnalytics,
+        portfolio: &VirtualPortfolio,
+    ) -> PerformanceSummary {
         let session_end = Utc::now();
         let balances = portfolio.get_balances();
-        
+
         // Calculate portfolio values (simplified - would need actual token prices)
         let portfolio_value_start = 1_000_000_000; // 1 SOL equivalent in lamports (example)
         let portfolio_value_end: u64 = balances.values().sum();
-        
+
         let return_percentage = if portfolio_value_start > 0 {
-            ((portfolio_value_end as f64 - portfolio_value_start as f64) / portfolio_value_start as f64) * 100.0
+            ((portfolio_value_end as f64 - portfolio_value_start as f64)
+                / portfolio_value_start as f64)
+                * 100.0
         } else {
             0.0
         };
@@ -171,17 +193,27 @@ impl PaperTradingReporter {
     pub fn export_trades_to_csv(&self, output_path: &str) -> Result<()> {
         // Read JSONL file and convert to CSV
         let trade_logs = self.read_trade_logs()?;
-        
+
         let mut wtr = csv::Writer::from_path(output_path)?;
-        
+
         // Write header
         wtr.write_record(&[
-            "timestamp", "opportunity_id", "token_in", "token_out", 
-            "amount_in", "amount_out", "expected_profit", "actual_profit",
-            "slippage_applied", "fees_paid", "execution_success", "failure_reason",
-            "dex_route", "gas_cost"
+            "timestamp",
+            "opportunity_id",
+            "token_in",
+            "token_out",
+            "amount_in",
+            "amount_out",
+            "expected_profit",
+            "actual_profit",
+            "slippage_applied",
+            "fees_paid",
+            "execution_success",
+            "failure_reason",
+            "dex_route",
+            "gas_cost",
         ])?;
-        
+
         // Write trade data
         for trade in trade_logs {
             wtr.write_record(&[
@@ -201,7 +233,7 @@ impl PaperTradingReporter {
                 trade.gas_cost.to_string(),
             ])?;
         }
-        
+
         wtr.flush()?;
         log::info!("📈 Exported trade logs to CSV: {}", output_path);
         Ok(())
@@ -212,33 +244,44 @@ impl PaperTradingReporter {
         if !Path::new(&self.trade_log_path).exists() {
             return Ok(Vec::new());
         }
-        
+
         let content = std::fs::read_to_string(&self.trade_log_path)?;
         let mut trades = Vec::new();
-        
+
         for line in content.lines() {
             if let Ok(trade) = serde_json::from_str::<TradeLogEntry>(line) {
                 trades.push(trade);
             }
         }
-        
+
         Ok(trades)
     }
 
     /// Print performance summary to console
-    pub fn print_performance_summary(&self, analytics: &PaperTradingAnalytics, portfolio: &VirtualPortfolio) {
+    pub fn print_performance_summary(
+        &self,
+        analytics: &PaperTradingAnalytics,
+        portfolio: &VirtualPortfolio,
+    ) {
         let summary = self.generate_performance_summary(analytics, portfolio);
-        
+
         println!("\n🏆 === Paper Trading Performance Summary ===");
-        println!("📅 Session Duration: {} to {}", 
-                summary.session_start.format("%Y-%m-%d %H:%M:%S UTC"),
-                summary.session_end.format("%Y-%m-%d %H:%M:%S UTC"));
-        println!("📊 Total Trades: {} (✅ {} successful, ❌ {} failed)", 
-                summary.total_trades, summary.successful_trades, summary.failed_trades);
+        println!(
+            "📅 Session Duration: {} to {}",
+            summary.session_start.format("%Y-%m-%d %H:%M:%S UTC"),
+            summary.session_end.format("%Y-%m-%d %H:%M:%S UTC")
+        );
+        println!(
+            "📊 Total Trades: {} (✅ {} successful, ❌ {} failed)",
+            summary.total_trades, summary.successful_trades, summary.failed_trades
+        );
         println!("📈 Success Rate: {:.2}%", summary.success_rate);
         println!("💰 Total P&L: {} lamports", summary.total_profit_loss);
         println!("💸 Total Fees: {} lamports", summary.total_fees_paid);
-        println!("📊 Average Profit/Trade: {:.2} lamports", summary.average_profit_per_trade);
+        println!(
+            "📊 Average Profit/Trade: {:.2} lamports",
+            summary.average_profit_per_trade
+        );
         println!("🎯 Largest Win: {} lamports", summary.largest_win);
         println!("😞 Largest Loss: {} lamports", summary.largest_loss);
         println!("📊 Portfolio Return: {:.2}%", summary.return_percentage);
@@ -246,8 +289,10 @@ impl PaperTradingReporter {
             println!("📈 Sharpe Ratio: {:.4}", sharpe);
         }
         println!("📉 Max Drawdown: {:.2}%", summary.max_drawdown);
-        println!("💼 Portfolio Value: {} -> {} lamports", 
-                summary.portfolio_value_start, summary.portfolio_value_end);
+        println!(
+            "💼 Portfolio Value: {} -> {} lamports",
+            summary.portfolio_value_start, summary.portfolio_value_end
+        );
         println!("================================================\n");
     }
 
@@ -260,15 +305,15 @@ impl PaperTradingReporter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Arc;
     use crate::utils::{DexType, PoolInfo, PoolToken};
+    use std::sync::Arc;
     use tempfile::tempdir;
 
     #[test]
     fn test_reporter_creation() {
         let temp_dir = tempdir().unwrap();
         let reporter = PaperTradingReporter::new(temp_dir.path().to_str().unwrap()).unwrap();
-        
+
         let (trade_path, analytics_path) = reporter.get_log_paths();
         assert!(trade_path.contains("paper_trades_"));
         assert!(analytics_path.contains("paper_analytics_"));
@@ -279,7 +324,7 @@ mod tests {
         // Create a mock opportunity
         use crate::arbitrage::opportunity::*;
         use solana_sdk::pubkey::Pubkey;
-        
+
         let pool = PoolInfo {
             address: Pubkey::new_unique(), // Fix: Use 'address' instead of 'pool_address'
             name: "Test Pool".to_string(),
@@ -311,7 +356,7 @@ mod tests {
             tick_array_2: None,
             oracle: None,
         };
-        
+
         let opportunity = MultiHopArbOpportunity {
             id: "test_opportunity".to_string(),
             hops: vec![], // Empty for this test
@@ -337,19 +382,19 @@ mod tests {
             estimated_gas_cost: Some(5000),
             detected_at: Some(std::time::Instant::now()),
         };
-        
+
         let entry = PaperTradingReporter::create_trade_log_entry(
-            &opportunity, 
-            1000000, 
-            1050000, 
-            50000, 
-            0.01, 
-            5000, 
-            true, 
-            None, 
-            5000
+            &opportunity,
+            1000000,
+            1050000,
+            50000,
+            0.01,
+            5000,
+            true,
+            None,
+            5000,
         );
-        
+
         assert_eq!(entry.amount_in, 1000000);
         assert_eq!(entry.amount_out, 1050000);
         assert_eq!(entry.actual_profit, 50000);

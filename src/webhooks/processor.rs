@@ -1,10 +1,10 @@
 // src/webhooks/processor.rs
 //! Pool update processor for handling real-time webhook notifications
 
-use crate::webhooks::types::{HeliusWebhookNotification, PoolUpdateEvent, PoolUpdateType};
 use crate::utils::PoolInfo;
+use crate::webhooks::types::{HeliusWebhookNotification, PoolUpdateEvent, PoolUpdateType};
 use anyhow::{anyhow, Result as AnyhowResult};
-use log::{info, warn, debug};
+use log::{debug, info, warn};
 use solana_sdk::pubkey::Pubkey;
 use std::collections::HashMap;
 use std::str::FromStr;
@@ -41,7 +41,10 @@ impl PoolUpdateProcessor {
     }
 
     /// Process a Helius webhook notification
-    pub async fn process_notification(&self, notification: &HeliusWebhookNotification) -> AnyhowResult<()> {
+    pub async fn process_notification(
+        &self,
+        notification: &HeliusWebhookNotification,
+    ) -> AnyhowResult<()> {
         // Update stats
         {
             let mut stats = self.stats.write().await;
@@ -49,7 +52,10 @@ impl PoolUpdateProcessor {
             stats.last_update_timestamp = notification.timestamp;
         }
 
-        debug!("Processing notification for signature: {}", notification.txn_signature);
+        debug!(
+            "Processing notification for signature: {}",
+            notification.txn_signature
+        );
 
         // Parse the pool update event
         let update_event = match self.parse_notification(notification).await {
@@ -62,7 +68,8 @@ impl PoolUpdateProcessor {
         };
 
         // Update event type counters
-        self.increment_event_counter(&update_event.update_type).await;
+        self.increment_event_counter(&update_event.update_type)
+            .await;
 
         // Use enhanced pool update that considers static pool information
         if let Err(e) = self.enhanced_pool_update(&update_event).await {
@@ -79,7 +86,10 @@ impl PoolUpdateProcessor {
     }
 
     /// Parse a webhook notification into a pool update event
-    async fn parse_notification(&self, notification: &HeliusWebhookNotification) -> AnyhowResult<PoolUpdateEvent> {
+    async fn parse_notification(
+        &self,
+        notification: &HeliusWebhookNotification,
+    ) -> AnyhowResult<PoolUpdateEvent> {
         // Parse program ID
         let program_id = Pubkey::from_str(&notification.program_id)
             .map_err(|e| anyhow!("Invalid program ID: {}", e))?;
@@ -103,7 +113,10 @@ impl PoolUpdateProcessor {
     }
 
     /// Determine the type of pool update from the notification
-    async fn determine_update_type(&self, notification: &HeliusWebhookNotification) -> PoolUpdateType {
+    async fn determine_update_type(
+        &self,
+        notification: &HeliusWebhookNotification,
+    ) -> PoolUpdateType {
         // Check for token transfers to determine operation type
         if let Some(transfers) = &notification.token_transfers {
             if transfers.len() >= 2 {
@@ -118,7 +131,10 @@ impl PoolUpdateProcessor {
 
         // Check account data changes
         if let Some(account_data) = &notification.account_data {
-            if account_data.iter().any(|data| data.native_balance_change != 0) {
+            if account_data
+                .iter()
+                .any(|data| data.native_balance_change != 0)
+            {
                 return PoolUpdateType::PriceUpdate;
             }
         }
@@ -127,10 +143,14 @@ impl PoolUpdateProcessor {
     }
 
     /// Find the pool address from the notification accounts
-    async fn find_pool_address(&self, notification: &HeliusWebhookNotification, program_id: &Pubkey) -> AnyhowResult<Pubkey> {
+    async fn find_pool_address(
+        &self,
+        notification: &HeliusWebhookNotification,
+        program_id: &Pubkey,
+    ) -> AnyhowResult<Pubkey> {
         // For most DEXs, the pool address is usually the first account
         // or can be identified by specific patterns
-        
+
         if notification.accounts.is_empty() {
             return Err(anyhow!("No accounts in notification"));
         }
@@ -139,7 +159,10 @@ impl PoolUpdateProcessor {
         for account_str in &notification.accounts {
             if let Ok(account_pubkey) = Pubkey::from_str(account_str) {
                 // Check if this looks like a pool account for the specific DEX
-                if self.is_likely_pool_account(&account_pubkey, program_id).await {
+                if self
+                    .is_likely_pool_account(&account_pubkey, program_id)
+                    .await
+                {
                     return Ok(account_pubkey);
                 }
             }
@@ -167,14 +190,14 @@ impl PoolUpdateProcessor {
     #[allow(dead_code)]
     async fn update_pool_info(&self, event: &PoolUpdateEvent) -> AnyhowResult<()> {
         let mut pool_cache = self.pool_cache.write().await;
-        
+
         // If we have the pool in cache, we could update its information
         if let Some(pool_info) = pool_cache.get_mut(&event.pool_address) {
             // Update timestamp
             if let Some(pool_arc) = Arc::get_mut(pool_info) {
                 pool_arc.last_update_timestamp = event.timestamp;
             }
-            
+
             info!("Updated pool info for {}", event.pool_address);
         } else {
             debug!("Pool {} not in cache, skipping update", event.pool_address);
@@ -186,16 +209,16 @@ impl PoolUpdateProcessor {
     /// Notify all registered callbacks about the pool update
     async fn notify_callbacks(&self, event: PoolUpdateEvent) {
         let callbacks = self.update_callbacks.read().await;
-        
+
         for callback in callbacks.iter() {
             callback(event.clone());
         }
     }
 
     /// Add a callback to be notified of pool updates
-    pub async fn add_update_callback<F>(&self, callback: F) 
-    where 
-        F: Fn(PoolUpdateEvent) + Send + Sync + 'static 
+    pub async fn add_update_callback<F>(&self, callback: F)
+    where
+        F: Fn(PoolUpdateEvent) + Send + Sync + 'static,
     {
         let mut callbacks = self.update_callbacks.write().await;
         callbacks.push(Box::new(callback));
@@ -210,9 +233,15 @@ impl PoolUpdateProcessor {
 
     /// Register static pools for webhook monitoring
     /// This method takes pools discovered via static methods and sets them up for real-time updates
-    pub async fn register_static_pools(&self, pools: HashMap<Pubkey, Arc<PoolInfo>>) -> AnyhowResult<()> {
-        info!("🔗 Registering {} static pools for webhook monitoring", pools.len());
-        
+    pub async fn register_static_pools(
+        &self,
+        pools: HashMap<Pubkey, Arc<PoolInfo>>,
+    ) -> AnyhowResult<()> {
+        info!(
+            "🔗 Registering {} static pools for webhook monitoring",
+            pools.len()
+        );
+
         // Add to pool cache
         {
             let mut cache = self.pool_cache.write().await;
@@ -255,7 +284,7 @@ impl PoolUpdateProcessor {
     pub async fn get_monitoring_stats(&self) -> MonitoringStats {
         let cache = self.pool_cache.read().await;
         let stats = self.stats.read().await;
-        
+
         let mut pools_by_dex = HashMap::new();
         for pool in cache.values() {
             let dex_name = format!("{:?}", pool.dex_type);
@@ -297,8 +326,10 @@ impl PoolUpdateProcessor {
         let mut stats = self.stats.write().await;
         match update_type {
             PoolUpdateType::Swap => stats.swap_events += 1,
-            PoolUpdateType::AddLiquidity | PoolUpdateType::RemoveLiquidity => stats.liquidity_events += 1,
-            PoolUpdateType::PriceUpdate => {}, // Don't count price updates separately
+            PoolUpdateType::AddLiquidity | PoolUpdateType::RemoveLiquidity => {
+                stats.liquidity_events += 1
+            }
+            PoolUpdateType::PriceUpdate => {} // Don't count price updates separately
             PoolUpdateType::Unknown => stats.unknown_events += 1,
         }
     }
@@ -317,13 +348,13 @@ impl PoolUpdateProcessor {
     /// Enhanced pool update that considers static pool information
     pub async fn enhanced_pool_update(&self, event: &PoolUpdateEvent) -> AnyhowResult<()> {
         let mut pool_cache = self.pool_cache.write().await;
-        
+
         if let Some(pool_info) = pool_cache.get_mut(&event.pool_address) {
             // Create an enhanced update that preserves static pool information
             if let Some(pool_arc) = Arc::get_mut(pool_info) {
                 // Update timestamp
                 pool_arc.last_update_timestamp = event.timestamp;
-                
+
                 // Could update other fields based on event data
                 // For example, update liquidity if we detect liquidity changes
                 match event.update_type {
@@ -332,27 +363,38 @@ impl PoolUpdateProcessor {
                         // Update swap-related metrics
                     }
                     PoolUpdateType::AddLiquidity | PoolUpdateType::RemoveLiquidity => {
-                        debug!("💰 Processing liquidity event for pool {}", event.pool_address);
-                        // Update liquidity-related metrics  
+                        debug!(
+                            "💰 Processing liquidity event for pool {}",
+                            event.pool_address
+                        );
+                        // Update liquidity-related metrics
                     }
                     PoolUpdateType::PriceUpdate => {
                         debug!("📈 Processing price update for pool {}", event.pool_address);
                         // Update price-related metrics
                     }
                     PoolUpdateType::Unknown => {
-                        debug!("❓ Processing unknown event type for pool {}", event.pool_address);
+                        debug!(
+                            "❓ Processing unknown event type for pool {}",
+                            event.pool_address
+                        );
                     }
                 }
             }
-            
-            info!("✅ Enhanced update completed for pool {}", event.pool_address);
+
+            info!(
+                "✅ Enhanced update completed for pool {}",
+                event.pool_address
+            );
         } else {
-            debug!("❌ Pool {} not found in monitored pools", event.pool_address);
+            debug!(
+                "❌ Pool {} not found in monitored pools",
+                event.pool_address
+            );
         }
 
         Ok(())
     }
-
 }
 
 /// Statistics for pool monitoring
@@ -382,11 +424,11 @@ mod tests {
         assert_eq!(stats.total_notifications, 0);
     }
 
-    #[tokio::test] 
+    #[tokio::test]
     async fn test_stats_update() {
         let processor = PoolUpdateProcessor::new();
         processor.increment_successful_updates().await;
-        
+
         let stats = processor.get_stats().await;
         assert_eq!(stats.successful_updates, 1);
     }

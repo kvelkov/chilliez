@@ -17,8 +17,7 @@ use crate::{
     dex::math::phoenix,
     utils::DexType,
     websocket::price_feeds::{
-        ConnectionStatus, PriceUpdate, WebSocketFeed, WebSocketConfig,
-        WebSocketMetrics,
+        ConnectionStatus, PriceUpdate, WebSocketConfig, WebSocketFeed, WebSocketMetrics,
     },
 };
 
@@ -81,10 +80,7 @@ struct PhoenixLevel {
 
 impl PhoenixWebSocketFeed {
     /// Create new Phoenix WebSocket feed
-    pub fn new(
-        config: WebSocketConfig,
-        update_sender: mpsc::UnboundedSender<PriceUpdate>,
-    ) -> Self {
+    pub fn new(config: WebSocketConfig, update_sender: mpsc::UnboundedSender<PriceUpdate>) -> Self {
         Self {
             config,
             websocket: None,
@@ -97,7 +93,11 @@ impl PhoenixWebSocketFeed {
     }
 
     /// Subscribe to a specific Phoenix market
-    pub async fn subscribe_to_market(&mut self, market_address: &str, pair_name: &str) -> Result<()> {
+    pub async fn subscribe_to_market(
+        &mut self,
+        market_address: &str,
+        pair_name: &str,
+    ) -> Result<()> {
         if !matches!(self.status, ConnectionStatus::Connected) {
             return Err(anyhow!("Not connected to Phoenix WebSocket"));
         }
@@ -110,8 +110,9 @@ impl PhoenixWebSocketFeed {
         });
 
         if let Some(ref mut ws) = self.websocket {
-            ws.send(Message::Text(subscription_message.to_string())).await?;
-            
+            ws.send(Message::Text(subscription_message.to_string()))
+                .await?;
+
             // Track subscription
             let subscription = PhoenixSubscription {
                 market_address: market_address.to_string(),
@@ -125,12 +126,14 @@ impl PhoenixWebSocketFeed {
                 subscriptions.insert(market_address.to_string(), subscription);
             }
 
-            info!("📊 Subscribed to Phoenix market: {} ({})", pair_name, market_address);
+            info!(
+                "📊 Subscribed to Phoenix market: {} ({})",
+                pair_name, market_address
+            );
         }
 
         Ok(())
     }
-
 }
 
 #[async_trait::async_trait]
@@ -144,14 +147,15 @@ impl WebSocketFeed for PhoenixWebSocketFeed {
         self.status = ConnectionStatus::Connecting;
 
         let url = Url::parse(&self.config.url)?;
-        
+
         match connect_async(url).await {
             Ok((ws_stream, _)) => {
                 self.websocket = Some(ws_stream);
                 self.status = ConnectionStatus::Connected;
                 self.metrics.total_reconnections += 1;
-                self.metrics.last_message_timestamp = Some(chrono::Utc::now().timestamp_millis() as u64);
-                
+                self.metrics.last_message_timestamp =
+                    Some(chrono::Utc::now().timestamp_millis() as u64);
+
                 info!("✅ Connected to Phoenix WebSocket");
                 Ok(())
             }
@@ -168,10 +172,10 @@ impl WebSocketFeed for PhoenixWebSocketFeed {
         if let Some(mut ws) = self.websocket.take() {
             let _ = ws.close(None).await;
         }
-        
+
         self.status = ConnectionStatus::Disconnected;
         self.subscribed_markets.write().unwrap().clear();
-        
+
         info!("🔌 Disconnected from Phoenix WebSocket");
         Ok(())
     }
@@ -191,10 +195,10 @@ impl WebSocketFeed for PhoenixWebSocketFeed {
                 r#"{{"type":"subscribe","channel":"orderbook","market":"{}"}}"#,
                 address
             );
-            
+
             if let Some(ref mut ws) = self.websocket {
                 ws.send(Message::Text(subscribe_msg)).await?;
-                
+
                 // Track subscription
                 let subscription = PhoenixSubscription {
                     market_address: address.clone(),
@@ -202,8 +206,11 @@ impl WebSocketFeed for PhoenixWebSocketFeed {
                     subscribed_at: chrono::Utc::now().timestamp_millis() as u64,
                     last_update: None,
                 };
-                
-                self.subscribed_markets.write().unwrap().insert(address, subscription);
+
+                self.subscribed_markets
+                    .write()
+                    .unwrap()
+                    .insert(address, subscription);
             }
         }
 
@@ -221,26 +228,26 @@ impl WebSocketFeed for PhoenixWebSocketFeed {
                     if let Some(market_id) = data["market"].as_str() {
                         if let Some(order_data) = data["data"].as_object() {
                             let timestamp = chrono::Utc::now().timestamp_millis() as u64;
-                            
+
                             // Parse order book data from Phoenix
                             let best_bid_price = order_data
                                 .get("bestBid")
                                 .and_then(|bid| bid.get("price"))
                                 .and_then(|p| p.as_f64())
                                 .unwrap_or(0.0);
-                                
+
                             let best_ask_price = order_data
                                 .get("bestAsk")
                                 .and_then(|ask| ask.get("price"))
                                 .and_then(|p| p.as_f64())
                                 .unwrap_or(0.0);
-                                
+
                             let best_bid_size = order_data
                                 .get("bestBid")
                                 .and_then(|bid| bid.get("size"))
                                 .and_then(|s| s.as_f64())
                                 .unwrap_or(0.0);
-                                
+
                             let best_ask_size = order_data
                                 .get("bestAsk")
                                 .and_then(|ask| ask.get("size"))
@@ -252,7 +259,7 @@ impl WebSocketFeed for PhoenixWebSocketFeed {
                                 price: (best_bid_price * 1_000_000.0) as u64,
                                 size: best_bid_size as u64,
                             }];
-                            
+
                             let asks = vec![phoenix::OrderBookLevel {
                                 price: (best_ask_price * 1_000_000.0) as u64,
                                 size: best_ask_size as u64,
@@ -261,7 +268,9 @@ impl WebSocketFeed for PhoenixWebSocketFeed {
                             // Calculate market metrics using production Phoenix math
                             let market_metrics = phoenix::calculate_market_metrics(&bids, &asks)
                                 .unwrap_or_else(|_| phoenix::MarketMetrics {
-                                    mid_price: ((best_bid_price + best_ask_price) / 2.0 * 1_000_000.0) as u64,
+                                    mid_price: ((best_bid_price + best_ask_price) / 2.0
+                                        * 1_000_000.0)
+                                        as u64,
                                     best_bid: (best_bid_price * 1_000_000.0) as u64,
                                     best_ask: (best_ask_price * 1_000_000.0) as u64,
                                     spread_bps: 0,
@@ -270,20 +279,18 @@ impl WebSocketFeed for PhoenixWebSocketFeed {
                                 });
 
                             let mid_price_f64 = market_metrics.mid_price as f64 / 1_000_000.0;
-                            
+
                             let total_bid_liquidity = order_data
                                 .get("totalBidLiquidity")
                                 .and_then(|l| l.as_f64())
                                 .unwrap_or(best_bid_size);
-                                
+
                             let total_ask_liquidity = order_data
                                 .get("totalAskLiquidity")
                                 .and_then(|l| l.as_f64())
                                 .unwrap_or(best_ask_size);
 
-                            let volume_24h = order_data
-                                .get("volume24h")
-                                .and_then(|v| v.as_f64());
+                            let volume_24h = order_data.get("volume24h").and_then(|v| v.as_f64());
 
                             // Create production-quality price update with Phoenix order book data
                             let update = PriceUpdate {
@@ -293,24 +300,30 @@ impl WebSocketFeed for PhoenixWebSocketFeed {
                                 token_b_mint: "QUOTE".to_string(), // Would be parsed from market metadata
                                 token_a_reserve: total_ask_liquidity as u64, // Base token liquidity
                                 token_b_reserve: (total_bid_liquidity * mid_price_f64) as u64, // Quote token liquidity
-                                price_a_to_b: if mid_price_f64 > 0.0 { 1.0 / mid_price_f64 } else { 0.0 },
+                                price_a_to_b: if mid_price_f64 > 0.0 {
+                                    1.0 / mid_price_f64
+                                } else {
+                                    0.0
+                                },
                                 price_b_to_a: mid_price_f64,
                                 timestamp,
-                                liquidity: Some((total_bid_liquidity + total_ask_liquidity) as u128),
+                                liquidity: Some(
+                                    (total_bid_liquidity + total_ask_liquidity) as u128,
+                                ),
                                 volume_24h: volume_24h.map(|v| v as u64),
                             };
-                            
+
                             updates.push(update);
-                            
+
                             // Update subscription tracking
                             if let Ok(mut subscriptions) = self.subscribed_markets.write() {
                                 if let Some(subscription) = subscriptions.get_mut(market_id) {
                                     subscription.last_update = Some(timestamp);
                                 }
                             }
-                            
+
                             debug!("📊 Phoenix market update: {} - mid_price: {:.6}, spread: {} bps, bid_depth: {}, ask_depth: {}",
-                                   market_id, mid_price_f64, market_metrics.spread_bps, 
+                                   market_id, mid_price_f64, market_metrics.spread_bps,
                                    market_metrics.bid_depth_1pct, market_metrics.ask_depth_1pct);
                         }
                     }
@@ -357,7 +370,7 @@ mod tests {
 
         let (tx, _rx) = mpsc::unbounded_channel();
         let feed = PhoenixWebSocketFeed::new(config, tx);
-        
+
         assert_eq!(feed.dex_type(), DexType::Phoenix);
         assert_eq!(feed.status(), ConnectionStatus::Disconnected);
     }
@@ -375,7 +388,7 @@ mod tests {
 
         let (tx, _rx) = mpsc::unbounded_channel();
         let feed = PhoenixWebSocketFeed::new(config, tx);
-        
+
         let test_message = r#"{
             "type": "marketUpdate",
             "marketId": "ABC123",

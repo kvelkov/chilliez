@@ -1,18 +1,18 @@
 //! Ephemeral Wallet Pool for Arbitrage Operations
-//! 
+//!
 //! This module provides a wallet pool system for generating ephemeral wallets
 //! for arbitrage operations, managing their lifecycle, and handling profit sweeps.
 
+use log::{debug, info, warn};
 use solana_sdk::{
-    signature::{Keypair, Signer},
+    hash::Hash,
     pubkey::Pubkey,
+    signature::{Keypair, Signer},
     system_instruction,
     transaction::Transaction,
-    hash::Hash,
 };
-use std::time::{Duration, Instant};
 use std::collections::VecDeque;
-use log::{info, warn, debug};
+use std::time::{Duration, Instant};
 
 /// Configuration for the wallet pool
 #[derive(Debug, Clone)]
@@ -32,9 +32,9 @@ pub struct WalletPoolConfig {
 impl Default for WalletPoolConfig {
     fn default() -> Self {
         Self {
-            wallet_ttl_secs: 300,           // 5 minutes
+            wallet_ttl_secs: 300,             // 5 minutes
             sweep_threshold_lamports: 10_000, // 0.00001 SOL
-            fee_reserve_lamports: 5_000,    // 0.000005 SOL
+            fee_reserve_lamports: 5_000,      // 0.000005 SOL
             max_pool_size: 100,
             auto_cleanup: true,
         }
@@ -119,7 +119,7 @@ impl WalletPool {
         // Check if we can reuse an existing wallet
         let ttl = Duration::from_secs(self.config.wallet_ttl_secs);
         let has_valid_wallet = self.wallets.iter().any(|w| !w.is_expired(ttl));
-        
+
         if !has_valid_wallet {
             // Generate a new wallet if none available or all expired
             self.generate_new_wallet_internal();
@@ -143,40 +143,43 @@ impl WalletPool {
     fn generate_new_wallet_internal(&mut self) {
         // Enforce pool size limit
         if self.wallets.len() >= self.config.max_pool_size {
-            warn!("⚠️ Wallet pool at capacity ({}), removing oldest wallet", self.config.max_pool_size);
+            warn!(
+                "⚠️ Wallet pool at capacity ({}), removing oldest wallet",
+                self.config.max_pool_size
+            );
             self.wallets.pop_front();
         }
 
         let wallet = EphemeralWallet::new();
         self.total_wallets_created += 1;
-        
-        info!("🆕 Generated new ephemeral wallet: {} (total: {})", 
-              wallet.pubkey(), self.total_wallets_created);
-        
+
+        info!(
+            "🆕 Generated new ephemeral wallet: {} (total: {})",
+            wallet.pubkey(),
+            self.total_wallets_created
+        );
+
         self.wallets.push_back(wallet);
     }
 
     /// Get all wallets that have expired
     pub fn get_expired_wallets(&self) -> Vec<&EphemeralWallet> {
         let ttl = Duration::from_secs(self.config.wallet_ttl_secs);
-        self.wallets
-            .iter()
-            .filter(|w| w.is_expired(ttl))
-            .collect()
+        self.wallets.iter().filter(|w| w.is_expired(ttl)).collect()
     }
 
     /// Remove expired wallets from the pool
     pub fn cleanup_expired_wallets(&mut self) -> usize {
         let initial_count = self.wallets.len();
         let ttl = Duration::from_secs(self.config.wallet_ttl_secs);
-        
+
         self.wallets.retain(|w| !w.is_expired(ttl));
-        
+
         let removed_count = initial_count - self.wallets.len();
         if removed_count > 0 {
             debug!("🧹 Cleaned up {} expired wallets", removed_count);
         }
-        
+
         removed_count
     }
 
@@ -190,12 +193,12 @@ impl WalletPool {
         if balance_lamports <= self.config.fee_reserve_lamports {
             return None;
         }
-        
+
         let sweep_amount = balance_lamports.saturating_sub(self.config.fee_reserve_lamports);
         if sweep_amount < self.config.sweep_threshold_lamports {
             return None;
         }
-        
+
         Some(sweep_amount)
     }
 
@@ -206,15 +209,16 @@ impl WalletPool {
         sweep_amount: u64,
         recent_blockhash: Hash,
     ) -> Transaction {
-        let instr = system_instruction::transfer(
-            &wallet.pubkey(),
-            &self.collector,
-            sweep_amount,
-        );
+        let instr = system_instruction::transfer(&wallet.pubkey(), &self.collector, sweep_amount);
 
         self.total_sweeps_performed += 1;
-        info!("💰 Creating sweep transaction: {} lamports from {} to {} (sweep #{})",
-              sweep_amount, wallet.pubkey(), self.collector, self.total_sweeps_performed);
+        info!(
+            "💰 Creating sweep transaction: {} lamports from {} to {} (sweep #{})",
+            sweep_amount,
+            wallet.pubkey(),
+            self.collector,
+            self.total_sweeps_performed
+        );
 
         Transaction::new_signed_with_payer(
             &[instr],
@@ -228,10 +232,10 @@ impl WalletPool {
     pub fn get_stats(&self) -> WalletPoolStats {
         let _now = Instant::now();
         let ttl = Duration::from_secs(self.config.wallet_ttl_secs);
-        
+
         let active_wallets = self.wallets.iter().filter(|w| !w.is_expired(ttl)).count();
         let expired_wallets = self.wallets.len() - active_wallets;
-        
+
         let avg_age = if !self.wallets.is_empty() {
             self.wallets.iter().map(|w| w.age().as_secs()).sum::<u64>() / self.wallets.len() as u64
         } else {
@@ -265,7 +269,10 @@ impl WalletPool {
 
     /// Update collector address
     pub fn update_collector(&mut self, new_collector: Pubkey) {
-        info!("🔄 Updating collector address from {} to {}", self.collector, new_collector);
+        info!(
+            "🔄 Updating collector address from {} to {}",
+            self.collector, new_collector
+        );
         self.collector = new_collector;
     }
 }

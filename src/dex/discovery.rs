@@ -3,13 +3,11 @@
 //! Consolidates pool_management.rs, banned_pairs.rs, and routing.rs functionality.
 
 use crate::dex::{
+    api::{DexClient, PoolDiscoverable},
     clients::{
-        lifinity::LifinityPoolParser,
-        meteora::MeteoraPoolParser,
-        orca::OrcaPoolParser,
+        lifinity::LifinityPoolParser, meteora::MeteoraPoolParser, orca::OrcaPoolParser,
         raydium::RaydiumPoolParser,
     },
-    api::{DexClient, PoolDiscoverable},
 };
 use crate::solana::rpc::SolanaRpcClient;
 use crate::utils::{DexType, PoolInfo, PoolParser as UtilsPoolParser};
@@ -34,35 +32,60 @@ use tokio::time::Instant;
 /// Static registry mapping DEX program IDs to their corresponding `PoolParser` instances.
 /// This registry allows the dynamic dispatch of parsing logic based on an account's owner program.
 #[allow(dead_code)] // Used by pool discovery systems
-pub static POOL_PARSER_REGISTRY: Lazy<HashMap<Pubkey, Arc<dyn UtilsPoolParser>>> = Lazy::new(|| {
-    let mut m = HashMap::new();
+pub static POOL_PARSER_REGISTRY: Lazy<HashMap<Pubkey, Arc<dyn UtilsPoolParser>>> =
+    Lazy::new(|| {
+        let mut m = HashMap::new();
 
-    // --- Register Orca Parser for Whirlpools ---
-    let orca_parser = Arc::new(OrcaPoolParser);
-    let orca_program_id = orca_parser.get_program_id();
-    m.insert(orca_program_id, orca_parser.clone() as Arc<dyn UtilsPoolParser>);
-    log::info!("Registered Orca Whirlpool parser for program ID: {}", orca_program_id);
+        // --- Register Orca Parser for Whirlpools ---
+        let orca_parser = Arc::new(OrcaPoolParser);
+        let orca_program_id = orca_parser.get_program_id();
+        m.insert(
+            orca_program_id,
+            orca_parser.clone() as Arc<dyn UtilsPoolParser>,
+        );
+        log::info!(
+            "Registered Orca Whirlpool parser for program ID: {}",
+            orca_program_id
+        );
 
-    // --- Register Raydium Parser ---
-    let raydium_parser = Arc::new(RaydiumPoolParser);
-    let raydium_program_id = raydium_parser.get_program_id();
-    m.insert(raydium_program_id, raydium_parser.clone() as Arc<dyn UtilsPoolParser>);
-    log::info!("Registered Raydium pool parser for program ID: {}", raydium_program_id);
+        // --- Register Raydium Parser ---
+        let raydium_parser = Arc::new(RaydiumPoolParser);
+        let raydium_program_id = raydium_parser.get_program_id();
+        m.insert(
+            raydium_program_id,
+            raydium_parser.clone() as Arc<dyn UtilsPoolParser>,
+        );
+        log::info!(
+            "Registered Raydium pool parser for program ID: {}",
+            raydium_program_id
+        );
 
-    // --- Register Lifinity Parser ---
-    let lifinity_parser = Arc::new(LifinityPoolParser);
-    let lifinity_program_id = lifinity_parser.get_program_id();
-    m.insert(lifinity_program_id, lifinity_parser.clone() as Arc<dyn UtilsPoolParser>);
-    log::info!("Registered Lifinity pool parser for program ID: {}", lifinity_program_id);
+        // --- Register Lifinity Parser ---
+        let lifinity_parser = Arc::new(LifinityPoolParser);
+        let lifinity_program_id = lifinity_parser.get_program_id();
+        m.insert(
+            lifinity_program_id,
+            lifinity_parser.clone() as Arc<dyn UtilsPoolParser>,
+        );
+        log::info!(
+            "Registered Lifinity pool parser for program ID: {}",
+            lifinity_program_id
+        );
 
-    // --- Register Meteora Parser ---
-    let meteora_parser = Arc::new(MeteoraPoolParser);
-    let meteora_program_id = meteora_parser.get_program_id();
-    m.insert(meteora_program_id, meteora_parser.clone() as Arc<dyn UtilsPoolParser>);
-    log::info!("Registered Meteora pool parser for program ID: {}", meteora_program_id);
+        // --- Register Meteora Parser ---
+        let meteora_parser = Arc::new(MeteoraPoolParser);
+        let meteora_program_id = meteora_parser.get_program_id();
+        m.insert(
+            meteora_program_id,
+            meteora_parser.clone() as Arc<dyn UtilsPoolParser>,
+        );
+        log::info!(
+            "Registered Meteora pool parser for program ID: {}",
+            meteora_program_id
+        );
 
-    m
-});
+        m
+    });
 
 // =====================================================================================
 // BANNED PAIRS MANAGEMENT
@@ -81,7 +104,10 @@ impl BannedPairKey {
         if token_a <= token_b {
             Self { token_a, token_b }
         } else {
-            Self { token_a: token_b, token_b: token_a }
+            Self {
+                token_a: token_b,
+                token_b: token_a,
+            }
         }
     }
 }
@@ -106,15 +132,20 @@ impl BannedPairsManager {
     /// Load banned pairs from CSV file
     fn load_from_csv(&mut self) -> Result<()> {
         if !Path::new(&self.csv_file_path).exists() {
-            info!("Banned pairs CSV file does not exist, starting with empty list: {}", self.csv_file_path);
+            info!(
+                "Banned pairs CSV file does not exist, starting with empty list: {}",
+                self.csv_file_path
+            );
             return Ok(());
         }
 
         let file = std::fs::File::open(&self.csv_file_path)
             .with_context(|| format!("Failed to open banned pairs CSV: {}", self.csv_file_path))?;
-        
-        let mut reader = ReaderBuilder::new().has_headers(true).from_reader(BufReader::new(file));
-        
+
+        let mut reader = ReaderBuilder::new()
+            .has_headers(true)
+            .from_reader(BufReader::new(file));
+
         for result in reader.records() {
             let record = result.with_context(|| "Failed to read CSV record")?;
             if record.len() >= 2 {
@@ -136,7 +167,9 @@ impl BannedPairsManager {
             .create(true)
             .truncate(true)
             .open(&self.csv_file_path)
-            .with_context(|| format!("Failed to create banned pairs CSV: {}", self.csv_file_path))?;
+            .with_context(|| {
+                format!("Failed to create banned pairs CSV: {}", self.csv_file_path)
+            })?;
 
         let mut writer = CsvWriterBuilder::new().has_headers(true).from_writer(file);
         writer.write_record(&["token_a", "token_b"])?;
@@ -190,7 +223,7 @@ pub struct PoolValidationConfig {
 impl Default for PoolValidationConfig {
     fn default() -> Self {
         Self {
-            min_liquidity_usd: 1000.0, // $1000 minimum liquidity
+            min_liquidity_usd: 1000.0,  // $1000 minimum liquidity
             max_price_impact_bps: 1000, // 10% max price impact
             require_balanced_reserves: false,
         }
@@ -215,7 +248,7 @@ impl PoolDiscoveryService {
         rpc_client: Arc<SolanaRpcClient>,
     ) -> Result<Self> {
         let banned_pairs_manager = BannedPairsManager::new(banned_pairs_csv_path)?;
-        
+
         Ok(Self {
             pool_cache: Arc::new(DashMap::new()),
             dex_clients,
@@ -228,16 +261,23 @@ impl PoolDiscoveryService {
     /// Discover pools from all DEX clients
     pub async fn discover_all_pools(&self) -> Result<usize> {
         let start_time = Instant::now();
-        info!("Starting pool discovery across {} DEX clients", self.dex_clients.len());
+        info!(
+            "Starting pool discovery across {} DEX clients",
+            self.dex_clients.len()
+        );
 
         let mut discovery_tasks = Vec::new();
-        
+
         for dex_client in &self.dex_clients {
             let client = dex_client.clone();
             let task = tokio::spawn(async move {
                 match client.discover_pools().await {
                     Ok(pools) => {
-                        info!("Discovered {} pools from {}", pools.len(), client.dex_name());
+                        info!(
+                            "Discovered {} pools from {}",
+                            pools.len(),
+                            client.dex_name()
+                        );
                         Ok((client.dex_name().to_string(), pools))
                     }
                     Err(e) => {
@@ -289,7 +329,10 @@ impl PoolDiscoveryService {
         let validated_pools = self.validate_pools(filtered_pools).await;
         let validation_filtered = filtered_pools_len - validated_pools.len();
         if validation_filtered > 0 {
-            info!("Filtered out {} pools during validation", validation_filtered);
+            info!(
+                "Filtered out {} pools during validation",
+                validation_filtered
+            );
         }
 
         // Update cache
@@ -316,13 +359,13 @@ impl PoolDiscoveryService {
     /// Validate pools according to configuration
     async fn validate_pools(&self, pools: Vec<PoolInfo>) -> Vec<PoolInfo> {
         let mut validated = Vec::new();
-        
+
         for pool in pools {
             if self.validate_single_pool(&pool).await {
                 validated.push(pool);
             }
         }
-        
+
         validated
     }
 
@@ -346,7 +389,10 @@ impl PoolDiscoveryService {
 
     /// Get all cached pools
     pub fn get_all_cached_pools(&self) -> Vec<Arc<PoolInfo>> {
-        self.pool_cache.iter().map(|entry| entry.value().clone()).collect()
+        self.pool_cache
+            .iter()
+            .map(|entry| entry.value().clone())
+            .collect()
     }
 
     // The following methods are currently unused and are left for future use or reference.
@@ -453,8 +499,8 @@ impl PoolDiscoveryService {
 /// Finds the appropriate DEX client for a given pool based on its dex_type
 #[allow(dead_code)] // Used by routing systems
 pub fn find_dex_client_for_pool(
-    pool: &PoolInfo, 
-    dex_clients: &[Arc<dyn DexClient>]
+    pool: &PoolInfo,
+    dex_clients: &[Arc<dyn DexClient>],
 ) -> Option<Arc<dyn DexClient>> {
     for dex_client in dex_clients {
         let dex_name = dex_client.get_name();
@@ -468,7 +514,7 @@ pub fn find_dex_client_for_pool(
             DexType::Whirlpool => dex_name == "Orca",
             DexType::Unknown(name) => dex_name == name,
         };
-        
+
         if matches {
             return Some(dex_client.clone());
         }
@@ -479,11 +525,11 @@ pub fn find_dex_client_for_pool(
 /// Groups pools by their DEX type for batch operations
 pub fn _group_pools_by_dex(pools: &[PoolInfo]) -> HashMap<String, Vec<&PoolInfo>> {
     let mut grouped = HashMap::new();
-    
+
     for pool in pools {
         let dex_name = match &pool.dex_type {
             DexType::Orca => "Orca",
-            DexType::Raydium => "Raydium", 
+            DexType::Raydium => "Raydium",
             DexType::Lifinity => "Lifinity",
             DexType::Meteora => "Meteora",
             DexType::Phoenix => "Phoenix",
@@ -491,24 +537,27 @@ pub fn _group_pools_by_dex(pools: &[PoolInfo]) -> HashMap<String, Vec<&PoolInfo>
             DexType::Whirlpool => "Orca",
             DexType::Unknown(name) => name.as_str(),
         };
-        
-        grouped.entry(dex_name.to_string()).or_insert_with(Vec::new).push(pool);
+
+        grouped
+            .entry(dex_name.to_string())
+            .or_insert_with(Vec::new)
+            .push(pool);
     }
-    
+
     grouped
 }
 
 /// Find pools that support a specific token pair
 pub fn _find_pools_for_pair(
-    pools: &[Arc<PoolInfo>], 
-    token_a: &Pubkey, 
-    token_b: &Pubkey
+    pools: &[Arc<PoolInfo>],
+    token_a: &Pubkey,
+    token_b: &Pubkey,
 ) -> Vec<Arc<PoolInfo>> {
     pools
         .iter()
         .filter(|pool| {
-            (pool.token_a.mint == *token_a && pool.token_b.mint == *token_b) ||
-            (pool.token_a.mint == *token_b && pool.token_b.mint == *token_a)
+            (pool.token_a.mint == *token_a && pool.token_b.mint == *token_b)
+                || (pool.token_a.mint == *token_b && pool.token_b.mint == *token_a)
         })
         .cloned()
         .collect()

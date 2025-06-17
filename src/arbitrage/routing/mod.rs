@@ -1,6 +1,6 @@
 // src/arbitrage/routing/mod.rs
 //! Advanced Multi-Hop Routing and Smart Order Routing System
-//! 
+//!
 //! Provides sophisticated routing capabilities for optimal trade execution:
 //! - Cross-DEX multi-hop routing optimization
 //! - Path finding algorithms for best prices across multiple pools
@@ -9,80 +9,40 @@
 //! - MEV-aware routing to minimize sandwich attacks
 //! - Failover routing when primary paths fail
 
-pub mod graph;
-pub mod pathfinder;
-pub mod splitter;
-pub mod optimizer;
-pub mod mev_protection;
 pub mod failover;
+pub mod graph;
+pub mod mev_protection;
+pub mod optimizer;
+pub mod pathfinder;
 pub mod smart_router;
+pub mod splitter;
 
-pub use graph::{
-    RoutingGraph,
-    PoolNode,
-    RouteEdge,
-    LiquidityPool,
-    PoolMetrics,
-    PoolHealth,
-};
+pub use graph::{LiquidityPool, PoolHealth, PoolMetrics, PoolNode, RouteEdge, RoutingGraph};
 
 pub use pathfinder::{
-    PathFinder,
-    RoutePath,
-    RouteStep,
-    PathfinderConfig,
-    PathfinderAlgorithm,
-    PathConstraints,
+    PathConstraints, PathFinder, PathfinderAlgorithm, PathfinderConfig, RoutePath, RouteStep,
 };
 
-pub use splitter::{
-    RouteSplitter,
-    SplitRoute,
-    SplitStrategy,
-    OptimalSplit,
-};
+pub use splitter::{OptimalSplit, RouteSplitter, SplitRoute, SplitStrategy};
 
-pub use optimizer::{
-    RouteOptimizer,
-    OptimizationGoal,
-    RouteScore,
-    OptimizationConstraints,
-};
+pub use optimizer::{OptimizationConstraints, OptimizationGoal, RouteOptimizer, RouteScore};
 
 pub use mev_protection::{
-    MevProtectedRouter,
-    MevRisk,
-    MevProtectionStrategy,
-    MevThreatAnalysis,
+    MevProtectedRouter, MevProtectionConfig, MevProtectionStrategy, MevRisk, MevThreatAnalysis,
     ProtectedRoute,
-    MevProtectionConfig,
 };
 
 pub use failover::{
-    FailoverRouter,
-    FailoverStrategy,
-    ExecutionStatus,
-    DexHealthStatus,
-    FailoverConfig,
-    FailoverPlan,
-    ExecutionAttempt,
-    ExecutionResult,
+    DexHealthStatus, ExecutionAttempt, ExecutionResult, ExecutionStatus, FailoverConfig,
+    FailoverPlan, FailoverRouter, FailoverStrategy,
 };
 
 pub use smart_router::{
-    SmartRouter,
-    SmartRouterConfig,
-    RouteRequest,
+    ExecutionRecommendation, RecommendedAction, RiskAssessment, RiskLevel, RouteConstraints,
+    RouteQualityMetrics, RouteRequest, RoutingPriority, SmartRouter, SmartRouterConfig,
     SmartRoutingResult,
-    RoutingPriority,
-    RouteQualityMetrics,
-    ExecutionRecommendation,
-    RecommendedAction,
-    RiskAssessment,
-    RiskLevel,
-    RouteConstraints,
 };
 
 // Re-export common types for convenience
+pub use serde::{Deserialize, Serialize};
 pub use std::time::Duration;
-pub use serde::{Serialize, Deserialize};

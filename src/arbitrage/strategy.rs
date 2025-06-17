@@ -8,21 +8,21 @@ use crate::config::Config;
 use crate::error::ArbError;
 use crate::local_metrics::Metrics;
 use crate::utils::PoolInfo;
-use log::{info, warn, debug};
+use chrono;
+use log::{debug, info, warn};
+use petgraph::graph::{DiGraph, NodeIndex};
 use solana_sdk::pubkey::Pubkey;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use chrono;
-use petgraph::graph::{DiGraph, NodeIndex};
 
 /// Edge weight for the arbitrage graph
 /// Using negative log of exchange rates to detect profitable cycles
 #[derive(Debug, Clone)]
 struct EdgeWeight {
-    weight: f64,           // -ln(exchange_rate) 
-    exchange_rate: f64,    // Original exchange rate
-    pool_address: Pubkey,  // Pool where this swap occurs
+    weight: f64,              // -ln(exchange_rate)
+    exchange_rate: f64,       // Original exchange rate
+    pool_address: Pubkey,     // Pool where this swap occurs
     _liquidity: Option<u128>, // not in use - Field has a leading underscore and is not read in current calculations.
 }
 
@@ -47,7 +47,7 @@ impl MarketGraph {
         // Ensure both tokens exist as nodes in the graph
         let node_a = self.get_or_create_node(pool.token_a.mint);
         let node_b = self.get_or_create_node(pool.token_b.mint);
-        
+
         // Calculate exchange rates in both directions
         if let Some(liquidity) = pool.liquidity {
             if liquidity > 0 {
@@ -55,23 +55,31 @@ impl MarketGraph {
                 let rate_b_to_a = self.calculate_exchange_rate(pool, false);
                 if rate_a_to_b > 0.0 {
                     let weight_a_to_b = -rate_a_to_b.ln();
-                    self.graph.add_edge(node_a, node_b, EdgeWeight {
-                        weight: weight_a_to_b,
-                        exchange_rate: rate_a_to_b,
-                        pool_address: pool.address,
-                        _liquidity: Some(liquidity),
-                    });
+                    self.graph.add_edge(
+                        node_a,
+                        node_b,
+                        EdgeWeight {
+                            weight: weight_a_to_b,
+                            exchange_rate: rate_a_to_b,
+                            pool_address: pool.address,
+                            _liquidity: Some(liquidity),
+                        },
+                    );
                 } else {
                     // Skip zero rate edges
                 }
                 if rate_b_to_a > 0.0 {
                     let weight_b_to_a = -rate_b_to_a.ln();
-                    self.graph.add_edge(node_b, node_a, EdgeWeight {
-                        weight: weight_b_to_a,
-                        exchange_rate: rate_b_to_a,
-                        pool_address: pool.address,
-                        _liquidity: Some(liquidity),
-                    });
+                    self.graph.add_edge(
+                        node_b,
+                        node_a,
+                        EdgeWeight {
+                            weight: weight_b_to_a,
+                            exchange_rate: rate_b_to_a,
+                            pool_address: pool.address,
+                            _liquidity: Some(liquidity),
+                        },
+                    );
                 } else {
                     // Skip zero rate edges
                 }
@@ -80,7 +88,7 @@ impl MarketGraph {
             }
         }
     }
-    
+
     fn get_or_create_node(&mut self, token_mint: Pubkey) -> NodeIndex {
         if let Some(&node_idx) = self.token_to_node.get(&token_mint) {
             node_idx
@@ -91,12 +99,12 @@ impl MarketGraph {
             node_idx
         }
     }
-    
+
     fn calculate_exchange_rate(&self, pool: &PoolInfo, a_to_b: bool) -> f64 {
+        use num_traits::ToPrimitive;
         use rust_decimal::Decimal;
         use rust_decimal_macros::dec;
-        use num_traits::ToPrimitive;
-        
+
         // Use precise arithmetic for exchange rate calculations
         if let Some(liquidity) = pool.liquidity {
             if liquidity > 0 {
@@ -104,7 +112,8 @@ impl MarketGraph {
                 if let Some(sqrt_price) = pool.sqrt_price {
                     // Use precise arithmetic for price calculation
                     let sqrt_price_decimal = Decimal::from(sqrt_price);
-                    let price_decimal = sqrt_price_decimal * sqrt_price_decimal / Decimal::from(1u128 << 64);
+                    let price_decimal =
+                        sqrt_price_decimal * sqrt_price_decimal / Decimal::from(1u128 << 64);
                     let rate_decimal = if a_to_b {
                         price_decimal
                     } else {
@@ -152,11 +161,11 @@ impl MarketGraph {
             }
         }
     }
-    
+
     fn node_count(&self) -> usize {
         self.graph.node_count()
     }
-    
+
     fn edge_count(&self) -> usize {
         self.graph.edge_count()
     }
@@ -186,9 +195,12 @@ impl ArbitrageStrategy {
         _metrics: &Arc<Mutex<Metrics>>, // Metrics can be used for detailed performance tracking
     ) -> Result<Vec<MultiHopArbOpportunity>, ArbError> {
         use crate::utils::timing::Timer;
-        
+
         let mut timer = Timer::start("arbitrage_detection");
-        info!("Strategy module: Starting opportunity detection across {} pools.", pools.len());
+        info!(
+            "Strategy module: Starting opportunity detection across {} pools.",
+            pools.len()
+        );
 
         if pools.is_empty() {
             warn!("No pools provided to the strategy module. Cannot detect opportunities.");
@@ -196,18 +208,22 @@ impl ArbitrageStrategy {
         }
 
         // --- CORE ARBITRAGE DETECTION LOGIC ---
-        
+
         // 1. Build the Market Graph
         debug!("Building market graph from {} pools", pools.len());
         let mut graph = MarketGraph::new();
-        
+
         for pool in pools.values() {
             graph.add_pool(pool);
         }
         timer.checkpoint("market_graph_built");
-        
-        info!("Market graph built with {} tokens and {} edges", graph.node_count(), graph.edge_count());
-        
+
+        info!(
+            "Market graph built with {} tokens and {} edges",
+            graph.node_count(),
+            graph.edge_count()
+        );
+
         if graph.node_count() == 0 || graph.edge_count() == 0 {
             warn!("Market graph is empty - no tokens or edges found");
             return Ok(Vec::new());
@@ -215,13 +231,15 @@ impl ArbitrageStrategy {
 
         // 2. Run Bellman-Ford Algorithm for each potential starting token
         let mut all_opportunities = Vec::new();
-        
+
         // Focus on major tokens as starting points (SOL, USDC, USDT, etc.)
         let major_tokens = self.get_major_tokens(&graph);
         timer.checkpoint("major_tokens_identified");
-        
+
         for &start_token in &major_tokens {
-            if let Some(opportunities) = self.detect_cycles_from_token(&graph, start_token, pools)? {
+            if let Some(opportunities) =
+                self.detect_cycles_from_token(&graph, start_token, pools)?
+            {
                 all_opportunities.extend(opportunities);
             }
         }
@@ -232,12 +250,15 @@ impl ArbitrageStrategy {
         timer.checkpoint("opportunities_filtered");
 
         let duration = timer.finish_with_threshold(1000); // Warn if > 1 second
-        info!("Strategy module: Detection complete. Found {} potential opportunities in {:.2}ms.", 
-              all_opportunities.len(), duration.as_millis());
+        info!(
+            "Strategy module: Detection complete. Found {} potential opportunities in {:.2}ms.",
+            all_opportunities.len(),
+            duration.as_millis()
+        );
 
         Ok(all_opportunities)
     }
-    
+
     /// Detect arbitrage cycles starting from a specific token using Bellman-Ford
     fn detect_cycles_from_token(
         &self,
@@ -245,7 +266,10 @@ impl ArbitrageStrategy {
         start_token: Pubkey,
         pools: &HashMap<Pubkey, Arc<PoolInfo>>,
     ) -> Result<Option<Vec<MultiHopArbOpportunity>>, ArbError> {
-        log::debug!("[detect_cycles_from_token] Starting from token: {}", start_token);
+        log::debug!(
+            "[detect_cycles_from_token] Starting from token: {}",
+            start_token
+        );
         let start_node = match graph.token_to_node.get(&start_token) {
             Some(&node) => node,
             None => return Ok(None),
@@ -292,7 +316,11 @@ impl ArbitrageStrategy {
                         if new_dist < distances[&to_node] {
                             // Negative cycle detected!
                             cycle_nodes.insert(to_node);
-                            log::debug!("[detect_cycles_from_token] Negative cycle detected: {} -> {}", graph.node_to_token[&from_node], graph.node_to_token[&to_node]);
+                            log::debug!(
+                                "[detect_cycles_from_token] Negative cycle detected: {} -> {}",
+                                graph.node_to_token[&from_node],
+                                graph.node_to_token[&to_node]
+                            );
                         }
                     }
                 }
@@ -301,20 +329,24 @@ impl ArbitrageStrategy {
         // Extract cycles from detected negative cycle nodes
         let mut opportunities = Vec::new();
         for &cycle_node in &cycle_nodes {
-            if let Some(opportunity) = self.extract_cycle_from_node(
-                graph, 
-                &predecessors, 
-                cycle_node, 
-                start_token, 
-                pools
-            ) {
-                log::debug!("[detect_cycles_from_token] Extracted opportunity: id={}, profit_pct={}", opportunity.id, opportunity.profit_pct);
+            if let Some(opportunity) =
+                self.extract_cycle_from_node(graph, &predecessors, cycle_node, start_token, pools)
+            {
+                log::debug!(
+                    "[detect_cycles_from_token] Extracted opportunity: id={}, profit_pct={}",
+                    opportunity.id,
+                    opportunity.profit_pct
+                );
                 opportunities.push(opportunity);
             }
         }
-        Ok(if opportunities.is_empty() { None } else { Some(opportunities) })
+        Ok(if opportunities.is_empty() {
+            None
+        } else {
+            Some(opportunities)
+        })
     }
-    
+
     /// Extract a cycle from the predecessor array when a negative cycle is detected
     fn extract_cycle_from_node(
         &self,
@@ -327,34 +359,34 @@ impl ArbitrageStrategy {
         let mut path = Vec::new();
         let mut current = cycle_node;
         let mut visited = HashSet::new();
-        
+
         // Follow predecessors to find the actual cycle
         while !visited.contains(&current) {
             visited.insert(current);
             path.push(current);
-            
+
             if let Some(Some(pred)) = predecessors.get(&current) {
                 current = *pred;
             } else {
                 break;
             }
-            
+
             // Prevent infinite loops
             if path.len() > 20 {
                 warn!("Cycle extraction exceeded maximum length, breaking");
                 break;
             }
         }
-        
+
         // Find where the cycle actually starts
         if let Some(cycle_start_pos) = path.iter().position(|&node| node == current) {
             let cycle_path = &path[cycle_start_pos..];
-            
+
             if cycle_path.len() < 2 {
                 debug!("Cycle too short to be profitable");
                 return None;
             }
-            
+
             // Convert cycle to hops
             let mut total_rate_fwd = 1.0f64;
             let mut total_rate_rev = 1.0f64;
@@ -374,9 +406,11 @@ impl ArbitrageStrategy {
                         hops_fwd.push(crate::arbitrage::opportunity::ArbHop {
                             dex: self.get_dex_type_for_pool(&edge_weight.pool_address, pools),
                             pool: edge_weight.pool_address,
-                            input_token: self.get_token_symbol(&from_token, pools)
+                            input_token: self
+                                .get_token_symbol(&from_token, pools)
                                 .unwrap_or_else(|| from_token.to_string()),
-                            output_token: self.get_token_symbol(&to_token, pools)
+                            output_token: self
+                                .get_token_symbol(&to_token, pools)
                                 .unwrap_or_else(|| to_token.to_string()),
                             input_amount: 1000.0,
                             expected_output: 1000.0 * edge_weight.exchange_rate,
@@ -392,9 +426,11 @@ impl ArbitrageStrategy {
                         hops_rev.push(crate::arbitrage::opportunity::ArbHop {
                             dex: self.get_dex_type_for_pool(&edge_weight.pool_address, pools),
                             pool: edge_weight.pool_address,
-                            input_token: self.get_token_symbol(&from_token, pools)
+                            input_token: self
+                                .get_token_symbol(&from_token, pools)
                                 .unwrap_or_else(|| from_token.to_string()),
-                            output_token: self.get_token_symbol(&to_token, pools)
+                            output_token: self
+                                .get_token_symbol(&to_token, pools)
                                 .unwrap_or_else(|| to_token.to_string()),
                             input_amount: 1000.0,
                             expected_output: 1000.0 * edge_weight.exchange_rate,
@@ -404,53 +440,58 @@ impl ArbitrageStrategy {
             }
             // Debug info available in detailed logs if needed
             // Use the direction with the higher profit
-            let (hops, total_rate, _): (Vec<crate::arbitrage::opportunity::ArbHop>, f64, f64) = if total_rate_fwd > total_rate_rev {
-                (hops_fwd, total_rate_fwd, (total_rate_fwd - 1.0) * 100.0)
-            } else {
-                (hops_rev, total_rate_rev, (total_rate_rev - 1.0) * 100.0)
-            };
-            
+            let (hops, total_rate, _): (Vec<crate::arbitrage::opportunity::ArbHop>, f64, f64) =
+                if total_rate_fwd > total_rate_rev {
+                    (hops_fwd, total_rate_fwd, (total_rate_fwd - 1.0) * 100.0)
+                } else {
+                    (hops_rev, total_rate_rev, (total_rate_rev - 1.0) * 100.0)
+                };
+
             if hops.is_empty() {
                 debug!("No valid hops found for cycle");
                 return None;
             }
-            
+
             // Calculate profit
             let gross_profit_pct = (total_rate - 1.0) * 100.0;
-            
+
             if gross_profit_pct >= self.min_profit_threshold_pct {
                 // Create dex_path and pool_path
-                let dex_path: Vec<crate::utils::DexType> = hops.iter()
-                    .map(|hop| hop.dex.clone())
-                    .collect();
-                let pool_path: Vec<Pubkey> = hops.iter()
-                    .map(|hop| hop.pool)
-                    .collect();
-                
+                let dex_path: Vec<crate::utils::DexType> =
+                    hops.iter().map(|hop| hop.dex.clone()).collect();
+                let pool_path: Vec<Pubkey> = hops.iter().map(|hop| hop.pool).collect();
+
                 // Get token symbols
-                let input_token_symbol = self.get_token_symbol(&start_token, pools)
+                let input_token_symbol = self
+                    .get_token_symbol(&start_token, pools)
                     .unwrap_or_else(|| start_token.to_string());
                 let output_token_symbol = input_token_symbol.clone(); // Circular arbitrage
-                
+
                 // Get intermediate tokens
-                let intermediate_tokens: Vec<String> = hops.iter()
+                let intermediate_tokens: Vec<String> = hops
+                    .iter()
                     .skip(1)
                     .map(|hop| hop.input_token.clone())
                     .collect();
-                
+
                 // Get source and target pools
-                let source_pool = pools.get(&hops[0].pool)
+                let source_pool = pools
+                    .get(&hops[0].pool)
                     .cloned()
                     .unwrap_or_else(|| Arc::new(PoolInfo::default()));
-                let target_pool = pools.get(&hops[hops.len()-1].pool)
+                let target_pool = pools
+                    .get(&hops[hops.len() - 1].pool)
                     .cloned()
                     .unwrap_or_else(|| Arc::new(PoolInfo::default()));
-                
+
                 let profit_amount = gross_profit_pct * 1000.0 / 100.0;
                 let hops_clone = hops.clone();
-                
+
                 return Some(MultiHopArbOpportunity {
-                    id: format!("arb_{}", chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0)),
+                    id: format!(
+                        "arb_{}",
+                        chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0)
+                    ),
                     hops,
                     total_profit: profit_amount,
                     profit_pct: gross_profit_pct,
@@ -461,7 +502,10 @@ impl ArbitrageStrategy {
                     dex_path,
                     pool_path,
                     risk_score: Some(0.2),
-                    notes: Some(format!("Detected via Bellman-Ford, cycle length: {}", cycle_path.len())),
+                    notes: Some(format!(
+                        "Detected via Bellman-Ford, cycle length: {}",
+                        cycle_path.len()
+                    )),
                     estimated_profit_usd: None,
                     input_amount_usd: None,
                     output_amount_usd: None,
@@ -471,8 +515,10 @@ impl ArbitrageStrategy {
                     input_token_mint: start_token,
                     output_token_mint: start_token,
                     intermediate_token_mint: if !hops_clone.is_empty() {
-                        Some(self.get_token_mint_from_symbol(&hops_clone[0].output_token, pools)
-                            .unwrap_or(start_token))
+                        Some(
+                            self.get_token_mint_from_symbol(&hops_clone[0].output_token, pools)
+                                .unwrap_or(start_token),
+                        )
                     } else {
                         None
                     },
@@ -480,29 +526,32 @@ impl ArbitrageStrategy {
                     detected_at: Some(std::time::Instant::now()),
                 });
             } else {
-                debug!("Cycle profit {:.2}% below threshold {:.2}%", 
-                       gross_profit_pct, self.min_profit_threshold_pct);
+                debug!(
+                    "Cycle profit {:.2}% below threshold {:.2}%",
+                    gross_profit_pct, self.min_profit_threshold_pct
+                );
             }
         }
-        
+
         None
     }
-    
+
     /// Get major tokens to use as starting points for cycle detection
     fn get_major_tokens(&self, graph: &MarketGraph) -> Vec<Pubkey> {
         // In a real implementation, you'd maintain a list of major tokens (SOL, USDC, USDT, etc.)
         // For now, we'll return tokens with the most connections (highest degree)
-        let mut token_degrees: Vec<(Pubkey, usize)> = graph.token_to_node
+        let mut token_degrees: Vec<(Pubkey, usize)> = graph
+            .token_to_node
             .iter()
             .map(|(&token, &node_idx)| {
                 let degree = graph.graph.edges(node_idx).count();
                 (token, degree)
             })
             .collect();
-        
+
         // Sort by degree (number of connections) in descending order
         token_degrees.sort_by(|a, b| b.1.cmp(&a.1));
-        
+
         // Return top tokens (up to 5)
         token_degrees
             .into_iter()
@@ -510,24 +559,32 @@ impl ArbitrageStrategy {
             .map(|(token, _)| token)
             .collect()
     }
-    
+
     /// Filter and deduplicate opportunities
-    fn filter_opportunities(&self, mut opportunities: Vec<MultiHopArbOpportunity>) -> Vec<MultiHopArbOpportunity> {
+    fn filter_opportunities(
+        &self,
+        mut opportunities: Vec<MultiHopArbOpportunity>,
+    ) -> Vec<MultiHopArbOpportunity> {
         // Remove duplicates and low-profit opportunities
         opportunities.dedup_by(|a, b| {
-            a.input_token == b.input_token && 
-            a.hops.len() == b.hops.len() &&
-            a.hops.iter().zip(b.hops.iter()).all(|(h1, h2)| h1.pool == h2.pool)
+            a.input_token == b.input_token
+                && a.hops.len() == b.hops.len()
+                && a.hops
+                    .iter()
+                    .zip(b.hops.iter())
+                    .all(|(h1, h2)| h1.pool == h2.pool)
         });
-        
+
         // Sort by profit potential
-        opportunities.sort_by(|a, b| 
-            b.total_profit.partial_cmp(&a.total_profit).unwrap_or(std::cmp::Ordering::Equal)
-        );
-        
+        opportunities.sort_by(|a, b| {
+            b.total_profit
+                .partial_cmp(&a.total_profit)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+
         // Limit to top opportunities to avoid overwhelming the system
         opportunities.truncate(10);
-        
+
         opportunities
     }
 
@@ -540,15 +597,24 @@ impl ArbitrageStrategy {
     pub fn set_min_profit_threshold(&mut self, threshold_pct: f64) {
         self.min_profit_threshold_pct = threshold_pct;
     }
-    
+
     /// Helper methods for token and pool operations
-    fn get_dex_type_for_pool(&self, pool_address: &Pubkey, pools: &HashMap<Pubkey, Arc<PoolInfo>>) -> crate::utils::DexType {
-        pools.get(pool_address)
+    fn get_dex_type_for_pool(
+        &self,
+        pool_address: &Pubkey,
+        pools: &HashMap<Pubkey, Arc<PoolInfo>>,
+    ) -> crate::utils::DexType {
+        pools
+            .get(pool_address)
             .map(|pool| pool.dex_type.clone())
             .unwrap_or(crate::utils::DexType::Orca) // Default fallback
     }
-    
-    fn get_token_symbol(&self, token_mint: &Pubkey, pools: &HashMap<Pubkey, Arc<PoolInfo>>) -> Option<String> {
+
+    fn get_token_symbol(
+        &self,
+        token_mint: &Pubkey,
+        pools: &HashMap<Pubkey, Arc<PoolInfo>>,
+    ) -> Option<String> {
         for pool in pools.values() {
             if pool.token_a.mint == *token_mint {
                 return Some(pool.token_a.symbol.clone());
@@ -559,8 +625,12 @@ impl ArbitrageStrategy {
         }
         None
     }
-    
-    fn get_token_mint_from_symbol(&self, symbol: &str, pools: &HashMap<Pubkey, Arc<PoolInfo>>) -> Option<Pubkey> {
+
+    fn get_token_mint_from_symbol(
+        &self,
+        symbol: &str,
+        pools: &HashMap<Pubkey, Arc<PoolInfo>>,
+    ) -> Option<Pubkey> {
         for pool in pools.values() {
             if pool.token_a.symbol == symbol {
                 return Some(pool.token_a.mint);

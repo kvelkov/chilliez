@@ -1,6 +1,6 @@
 // src/performance/metrics.rs
 //! Performance Metrics Collection and Analysis
-//! 
+//!
 //! This module provides comprehensive performance monitoring including:
 //! - System resource usage tracking
 //! - Latency measurements
@@ -8,11 +8,11 @@
 //! - Error rate monitoring
 
 use anyhow::Result;
-use serde::{Serialize, Deserialize};
+use log::debug;
+use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
 use std::time::{Duration, Instant, SystemTime};
 use sysinfo::System;
-use log::{debug};
 
 /// Comprehensive metrics collector
 pub struct MetricsCollector {
@@ -117,7 +117,7 @@ impl ThroughputTracker {
     fn record_operation(&mut self) {
         let now = Instant::now();
         self.operations.push_back(now);
-        
+
         // Remove old operations outside the window
         let cutoff = now - self.window_duration;
         while let Some(&front) = self.operations.front() {
@@ -176,10 +176,12 @@ impl ErrorTracker {
             return 0.0;
         }
 
-        let error_count = self.error_rate_window.iter()
+        let error_count = self
+            .error_rate_window
+            .iter()
             .filter(|(_, is_error)| *is_error)
             .count();
-        
+
         error_count as f64 / self.error_rate_window.len() as f64
     }
 }
@@ -227,7 +229,10 @@ impl MetricsCollector {
     /// Record an operation completion
     pub fn record_operation(&mut self, operation_name: &str, duration: Duration, success: bool) {
         // Update operation metrics
-        let metrics = self.operation_metrics.entry(operation_name.to_string()).or_default();
+        let metrics = self
+            .operation_metrics
+            .entry(operation_name.to_string())
+            .or_default();
         metrics.total_operations += 1;
         metrics.total_duration += duration;
         metrics.last_operation = Some(Instant::now());
@@ -253,11 +258,14 @@ impl MetricsCollector {
 
         // Record for latency tracking
         self.latency_tracker.record(duration);
-        
+
         // Record for throughput tracking
         self.throughput_tracker.record_operation();
 
-        debug!("Recorded operation '{}': duration={:?}, success={}", operation_name, duration, success);
+        debug!(
+            "Recorded operation '{}': duration={:?}, success={}",
+            operation_name, duration, success
+        );
     }
 
     /// Record system statistics
@@ -268,18 +276,23 @@ impl MetricsCollector {
         self.system_metrics.cpu_usage = self.system_info.global_cpu_info().cpu_usage();
 
         // Memory usage
-        self.system_metrics.memory_total_mb = self.system_info.total_memory() as f64 / 1024.0 / 1024.0;
-        self.system_metrics.memory_available_mb = self.system_info.available_memory() as f64 / 1024.0 / 1024.0;
-        self.system_metrics.memory_usage_mb = self.system_metrics.memory_total_mb - self.system_metrics.memory_available_mb;
+        self.system_metrics.memory_total_mb =
+            self.system_info.total_memory() as f64 / 1024.0 / 1024.0;
+        self.system_metrics.memory_available_mb =
+            self.system_info.available_memory() as f64 / 1024.0 / 1024.0;
+        self.system_metrics.memory_usage_mb =
+            self.system_metrics.memory_total_mb - self.system_metrics.memory_available_mb;
 
         // Process information
         self.system_metrics.process_count = self.system_info.processes().len();
-        
+
         // Uptime
         self.system_metrics.uptime = self.start_time.elapsed();
 
-        debug!("System stats updated: CPU={:.1}%, Memory={:.1}MB", 
-               self.system_metrics.cpu_usage, self.system_metrics.memory_usage_mb);
+        debug!(
+            "System stats updated: CPU={:.1}%, Memory={:.1}MB",
+            self.system_metrics.cpu_usage, self.system_metrics.memory_usage_mb
+        );
     }
 
     /// Calculate health score based on various metrics
@@ -294,7 +307,8 @@ impl MetricsCollector {
         }
 
         // Memory health (penalty for high usage)
-        let memory_usage_ratio = self.system_metrics.memory_usage_mb / self.system_metrics.memory_total_mb;
+        let memory_usage_ratio =
+            self.system_metrics.memory_usage_mb / self.system_metrics.memory_total_mb;
         if memory_usage_ratio > 0.9 {
             score -= 0.3;
         } else if memory_usage_ratio > 0.7 {
@@ -321,7 +335,7 @@ impl MetricsCollector {
     /// Get comprehensive metrics summary
     pub fn get_summary(&self) -> MetricsSummary {
         let mut operation_stats = HashMap::new();
-        
+
         for (name, metrics) in &self.operation_metrics {
             let success_rate = if metrics.total_operations > 0 {
                 metrics.successful_operations as f64 / metrics.total_operations as f64
@@ -329,18 +343,23 @@ impl MetricsCollector {
                 1.0
             };
 
-            operation_stats.insert(name.clone(), OperationStats {
-                total_count: metrics.total_operations,
-                success_rate,
-                avg_duration_ms: metrics.avg_duration.as_millis() as f64,
-                p95_duration_ms: self.latency_tracker.percentile(95.0).as_millis() as f64,
-                p99_duration_ms: self.latency_tracker.percentile(99.0).as_millis() as f64,
-            });
+            operation_stats.insert(
+                name.clone(),
+                OperationStats {
+                    total_count: metrics.total_operations,
+                    success_rate,
+                    avg_duration_ms: metrics.avg_duration.as_millis() as f64,
+                    p95_duration_ms: self.latency_tracker.percentile(95.0).as_millis() as f64,
+                    p99_duration_ms: self.latency_tracker.percentile(99.0).as_millis() as f64,
+                },
+            );
         }
 
         MetricsSummary {
-            timestamp: SystemTime::now().duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default().as_secs(),
+            timestamp: SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs(),
             uptime_seconds: self.system_metrics.uptime.as_secs(),
             cpu_usage: self.system_metrics.cpu_usage,
             memory_usage_mb: self.system_metrics.memory_usage_mb,
@@ -364,13 +383,14 @@ impl MetricsCollector {
     /// Export metrics to JSON
     pub fn export_json(&self) -> Result<String> {
         let summary = self.get_summary();
-        serde_json::to_string_pretty(&summary).map_err(|e| anyhow::anyhow!("JSON export failed: {}", e))
+        serde_json::to_string_pretty(&summary)
+            .map_err(|e| anyhow::anyhow!("JSON export failed: {}", e))
     }
 
     /// Get detailed performance report
     pub fn get_detailed_report(&self) -> String {
         let summary = self.get_summary();
-        
+
         format!(
             "PERFORMANCE METRICS REPORT\n\
              ==========================\n\
@@ -403,10 +423,14 @@ impl MetricsCollector {
             summary.error_rate * 100.0,
             summary.throughput_ops_per_sec,
             summary.network_latency_ms,
-            summary.operation_stats.get("route_calculation")
+            summary
+                .operation_stats
+                .get("route_calculation")
                 .map(|s| s.p95_duration_ms)
                 .unwrap_or(0.0),
-            summary.operation_stats.get("route_calculation")
+            summary
+                .operation_stats
+                .get("route_calculation")
                 .map(|s| s.p99_duration_ms)
                 .unwrap_or(0.0),
             self.format_operation_stats(&summary.operation_stats)
@@ -415,7 +439,7 @@ impl MetricsCollector {
 
     fn format_operation_stats(&self, stats: &HashMap<String, OperationStats>) -> String {
         let mut result = String::new();
-        
+
         for (operation, stat) in stats {
             result.push_str(&format!(
                 "{}: {} ops, {:.1}% success, {:.1}ms avg\n",
@@ -425,11 +449,11 @@ impl MetricsCollector {
                 stat.avg_duration_ms
             ));
         }
-        
+
         if result.is_empty() {
             result = "No operations recorded yet\n".to_string();
         }
-        
+
         result
     }
 }
@@ -441,18 +465,18 @@ mod tests {
     #[test]
     fn test_latency_tracker() {
         let mut tracker = LatencyTracker::new(5);
-        
+
         // Add some samples
         tracker.record(Duration::from_millis(10));
         tracker.record(Duration::from_millis(20));
         tracker.record(Duration::from_millis(30));
         tracker.record(Duration::from_millis(40));
         tracker.record(Duration::from_millis(50));
-        
+
         // Test percentiles
         assert_eq!(tracker.percentile(50.0), Duration::from_millis(30));
         assert_eq!(tracker.percentile(95.0), Duration::from_millis(50));
-        
+
         // Test average
         assert_eq!(tracker.average(), Duration::from_millis(30));
     }
@@ -460,12 +484,12 @@ mod tests {
     #[test]
     fn test_throughput_tracker() {
         let mut tracker = ThroughputTracker::new(Duration::from_secs(1));
-        
+
         // Record some operations
         for _ in 0..5 {
             tracker.record_operation();
         }
-        
+
         // Should show 5 ops/sec
         assert_eq!(tracker.operations_per_second(), 5.0);
     }
@@ -473,13 +497,13 @@ mod tests {
     #[test]
     fn test_error_tracker() {
         let mut tracker = ErrorTracker::default();
-        
+
         // Record some operations
         tracker.record_success();
         tracker.record_success();
         tracker.record_error("timeout");
         tracker.record_success();
-        
+
         // Error rate should be 25%
         assert!((tracker.error_rate() - 0.25).abs() < 0.01);
     }
@@ -487,15 +511,20 @@ mod tests {
     #[tokio::test]
     async fn test_metrics_collector() {
         let mut collector = MetricsCollector::new();
-        
+
         // Record some operations
         collector.record_operation("test_op", Duration::from_millis(50), true);
         collector.record_operation("test_op", Duration::from_millis(75), true);
         collector.record_operation("test_op", Duration::from_millis(25), false);
-        
+
         let summary = collector.get_summary();
-        
-        assert_eq!(summary.operation_stats.get("test_op").unwrap().total_count, 3);
-        assert!((summary.operation_stats.get("test_op").unwrap().success_rate - 0.6667).abs() < 0.01);
+
+        assert_eq!(
+            summary.operation_stats.get("test_op").unwrap().total_count,
+            3
+        );
+        assert!(
+            (summary.operation_stats.get("test_op").unwrap().success_rate - 0.6667).abs() < 0.01
+        );
     }
 }

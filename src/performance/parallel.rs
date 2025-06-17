@@ -1,6 +1,6 @@
 // src/performance/parallel.rs
 //! Parallel Processing Engine for High-Performance Operations
-//! 
+//!
 //! This module provides concurrent execution capabilities for:
 //! - DEX quote calculations
 //! - Transaction simulations
@@ -10,12 +10,12 @@
 
 use anyhow::Result;
 use futures::{stream::FuturesUnordered, StreamExt};
+use log::{debug, info};
 use std::future::Future;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::{RwLock, Semaphore};
 use tokio::time::timeout;
-use log::{debug, info};
 
 /// Configuration for parallel execution
 #[derive(Debug, Clone)]
@@ -60,8 +60,11 @@ pub struct ParallelStats {
 impl ParallelExecutor {
     /// Create a new parallel executor
     pub async fn new(max_workers: usize) -> Result<Self> {
-        info!("🚀 Initializing ParallelExecutor with {} workers", max_workers);
-        
+        info!(
+            "🚀 Initializing ParallelExecutor with {} workers",
+            max_workers
+        );
+
         Ok(Self {
             semaphore: Arc::new(Semaphore::new(max_workers)),
             stats: Arc::new(RwLock::new(ParallelStats::default())),
@@ -83,7 +86,7 @@ impl ParallelExecutor {
 
         let start_time = Instant::now();
         let task_count = tasks.len();
-        
+
         debug!("Executing {} tasks concurrently", task_count);
 
         // Update queue length
@@ -93,15 +96,18 @@ impl ParallelExecutor {
         }
 
         let mut futures = FuturesUnordered::new();
-        
+
         for task in tasks {
             let semaphore = self.semaphore.clone();
             let stats = self.stats.clone();
             let timeout_duration = self.timeout_duration;
 
             let future = async move {
-                let _permit = semaphore.acquire().await.map_err(|e| anyhow::anyhow!("Semaphore error: {}", e))?;
-                
+                let _permit = semaphore
+                    .acquire()
+                    .await
+                    .map_err(|e| anyhow::anyhow!("Semaphore error: {}", e))?;
+
                 // Update active workers count
                 {
                     let mut s = stats.write().await;
@@ -116,12 +122,12 @@ impl ParallelExecutor {
                 {
                     let mut s = stats.write().await;
                     s.active_workers -= 1;
-                    
+
                     match &result {
                         Ok(Ok(_)) => {
                             s.completed_tasks += 1;
                             s.total_execution_time += task_duration;
-                            
+
                             // Update duration stats
                             if s.completed_tasks == 1 {
                                 s.min_task_duration = task_duration;
@@ -131,7 +137,10 @@ impl ParallelExecutor {
                                 s.min_task_duration = s.min_task_duration.min(task_duration);
                                 s.max_task_duration = s.max_task_duration.max(task_duration);
                                 s.avg_task_duration = Duration::from_nanos(
-                                    (s.avg_task_duration.as_nanos() as u64 * (s.completed_tasks - 1) + task_duration.as_nanos() as u64) / s.completed_tasks
+                                    (s.avg_task_duration.as_nanos() as u64
+                                        * (s.completed_tasks - 1)
+                                        + task_duration.as_nanos() as u64)
+                                        / s.completed_tasks,
                                 );
                             }
                         }
@@ -169,18 +178,23 @@ impl ParallelExecutor {
 
     /// Execute DEX quotes in parallel across multiple DEXs
     pub async fn execute_parallel_quotes<T>(
-        &self, 
-        quote_functions: Vec<Box<dyn FnOnce() -> tokio::task::JoinHandle<Result<T>> + Send>>
+        &self,
+        quote_functions: Vec<Box<dyn FnOnce() -> tokio::task::JoinHandle<Result<T>> + Send>>,
     ) -> Vec<Result<T>>
     where
         T: Send + 'static,
     {
-        let tasks: Vec<_> = quote_functions.into_iter().map(|quote_fn| {
-            move || async move {
-                let handle = quote_fn();
-                handle.await.map_err(|e| anyhow::anyhow!("Join error: {}", e))?
-            }
-        }).collect();
+        let tasks: Vec<_> = quote_functions
+            .into_iter()
+            .map(|quote_fn| {
+                move || async move {
+                    let handle = quote_fn();
+                    handle
+                        .await
+                        .map_err(|e| anyhow::anyhow!("Join error: {}", e))?
+                }
+            })
+            .collect();
 
         self.execute_concurrent(tasks).await
     }
@@ -191,26 +205,39 @@ impl ParallelExecutor {
         F: FnOnce() -> tokio::task::JoinHandle<Result<T>> + Send,
         T: Send + 'static,
     {
-        let tasks: Vec<_> = simulations.into_iter().map(|sim| {
-            move || async move {
-                sim().await.map_err(|e| anyhow::anyhow!("Join error: {}", e))?
-            }
-        }).collect();
+        let tasks: Vec<_> = simulations
+            .into_iter()
+            .map(|sim| {
+                move || async move {
+                    sim()
+                        .await
+                        .map_err(|e| anyhow::anyhow!("Join error: {}", e))?
+                }
+            })
+            .collect();
 
         self.execute_concurrent(tasks).await
     }
 
     /// Execute route optimizations in parallel
-    pub async fn execute_parallel_optimizations<F, T>(&self, optimizations: Vec<F>) -> Vec<Result<T>>
+    pub async fn execute_parallel_optimizations<F, T>(
+        &self,
+        optimizations: Vec<F>,
+    ) -> Vec<Result<T>>
     where
         F: FnOnce() -> tokio::task::JoinHandle<Result<T>> + Send,
         T: Send + 'static,
     {
-        let tasks: Vec<_> = optimizations.into_iter().map(|opt| {
-            move || async move {
-                opt().await.map_err(|e| anyhow::anyhow!("Join error: {}", e))?
-            }
-        }).collect();
+        let tasks: Vec<_> = optimizations
+            .into_iter()
+            .map(|opt| {
+                move || async move {
+                    opt()
+                        .await
+                        .map_err(|e| anyhow::anyhow!("Join error: {}", e))?
+                }
+            })
+            .collect();
 
         self.execute_concurrent(tasks).await
     }
@@ -246,18 +273,20 @@ mod tests {
     #[tokio::test]
     async fn test_parallel_executor() {
         let executor = ParallelExecutor::new(4).await.unwrap();
-        
+
         // Create some test tasks
-        let tasks: Vec<_> = (0..10).map(|i| {
-            move || async move {
-                sleep(Duration::from_millis(100)).await;
-                Ok::<_, anyhow::Error>(i * 2)
-            }
-        }).collect();
-        
+        let tasks: Vec<_> = (0..10)
+            .map(|i| {
+                move || async move {
+                    sleep(Duration::from_millis(100)).await;
+                    Ok::<_, anyhow::Error>(i * 2)
+                }
+            })
+            .collect();
+
         let results = executor.execute_concurrent(tasks).await;
         assert_eq!(results.len(), 10);
-        
+
         // Check that all tasks completed successfully
         for (i, result) in results.iter().enumerate() {
             assert!(result.is_ok());
@@ -268,21 +297,23 @@ mod tests {
     #[tokio::test]
     async fn test_parallel_stats() {
         let executor = ParallelExecutor::new(2).await.unwrap();
-        
-        let tasks: Vec<_> = (0..5).map(|i| {
-            move || async move {
-                sleep(Duration::from_millis(50)).await;
-                if i == 2 {
-                    Err(anyhow::anyhow!("Test error"))
-                } else {
-                    Ok::<_, anyhow::Error>(i)
+
+        let tasks: Vec<_> = (0..5)
+            .map(|i| {
+                move || async move {
+                    sleep(Duration::from_millis(50)).await;
+                    if i == 2 {
+                        Err(anyhow::anyhow!("Test error"))
+                    } else {
+                        Ok::<_, anyhow::Error>(i)
+                    }
                 }
-            }
-        }).collect();
-        
+            })
+            .collect();
+
         let _results = executor.execute_concurrent(tasks).await;
         let stats = executor.get_stats().await;
-        
+
         assert_eq!(stats.completed_tasks, 4);
         assert_eq!(stats.failed_tasks, 1);
         assert!(stats.avg_task_duration > Duration::from_millis(40));

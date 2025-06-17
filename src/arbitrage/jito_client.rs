@@ -1,19 +1,19 @@
 //! Jito Bundle Client for MEV Protection
-//! 
+//!
 //! This module provides functionality to submit transaction bundles via Jito
 //! for MEV protection and atomic execution of arbitrage trades.
 
+use crate::error::ArbError;
+use log::{debug, error, info, warn};
+use solana_client::nonblocking::rpc_client::RpcClient;
 use solana_sdk::{
-    transaction::Transaction,
+    hash::Hash,
     pubkey::Pubkey,
     signature::{Keypair, Signer},
     system_instruction,
-    hash::Hash,
+    transaction::Transaction,
 };
-use solana_client::nonblocking::rpc_client::RpcClient;
 use std::time::{Duration, Instant};
-use log::{info, warn, error, debug};
-use crate::error::ArbError;
 
 type Result<T> = std::result::Result<T, ArbError>;
 
@@ -49,7 +49,9 @@ impl Default for JitoConfig {
             retry_delay_ms: 1000,
             dynamic_tips: true,
             // Official Jito tip account
-            tip_account: "96gYZGLnJYVFmbjzopPSU6QiEV5fGqZNyN9nmNhvrZU5".parse().unwrap(),
+            tip_account: "96gYZGLnJYVFmbjzopPSU6QiEV5fGqZNyN9nmNhvrZU5"
+                .parse()
+                .unwrap(),
         }
     }
 }
@@ -75,7 +77,10 @@ pub struct JitoClient {
 impl JitoClient {
     /// Create a new Jito client
     pub fn new(config: JitoConfig, rpc_client: RpcClient) -> Self {
-        info!("🚀 Initializing Jito client with endpoint: {}", config.bundle_endpoint);
+        info!(
+            "🚀 Initializing Jito client with endpoint: {}",
+            config.bundle_endpoint
+        );
         Self {
             config,
             rpc_client,
@@ -91,19 +96,25 @@ impl JitoClient {
     /// Submit a bundle of transactions atomically
     pub async fn submit_bundle(&mut self, transactions: Vec<Transaction>) -> Result<String> {
         let start_time = Instant::now();
-        
-        if transactions.is_empty() {
-            return Err(ArbError::InvalidInput("Cannot submit empty bundle".to_string()));
-        }
 
-        if transactions.len() > self.config.max_bundle_size {
+        if transactions.is_empty() {
             return Err(ArbError::InvalidInput(
-                format!("Bundle size {} exceeds maximum {}", 
-                        transactions.len(), self.config.max_bundle_size)
+                "Cannot submit empty bundle".to_string(),
             ));
         }
 
-        info!("📦 Submitting bundle with {} transactions", transactions.len());
+        if transactions.len() > self.config.max_bundle_size {
+            return Err(ArbError::InvalidInput(format!(
+                "Bundle size {} exceeds maximum {}",
+                transactions.len(),
+                self.config.max_bundle_size
+            )));
+        }
+
+        info!(
+            "📦 Submitting bundle with {} transactions",
+            transactions.len()
+        );
         let tx_count = transactions.len();
 
         // For now, we'll simulate bundle submission by sending transactions individually
@@ -113,16 +124,19 @@ impl JitoClient {
         let submission_time = start_time.elapsed();
         self.update_stats(true, tx_count, submission_time);
 
-        info!("✅ Bundle submitted successfully: {} (took {:.2}ms)", 
-              bundle_id, submission_time.as_millis());
+        info!(
+            "✅ Bundle submitted successfully: {} (took {:.2}ms)",
+            bundle_id,
+            submission_time.as_millis()
+        );
 
         Ok(bundle_id)
     }
 
     /// Submit a bundle with a custom tip amount
     pub async fn submit_bundle_with_tip(
-        &mut self, 
-        mut transactions: Vec<Transaction>, 
+        &mut self,
+        mut transactions: Vec<Transaction>,
         tip_lamports: u64,
         tip_payer: &Keypair,
         recent_blockhash: Hash,
@@ -142,11 +156,8 @@ impl JitoClient {
         tip_lamports: u64,
         recent_blockhash: Hash,
     ) -> Transaction {
-        let tip_instruction = system_instruction::transfer(
-            &payer.pubkey(),
-            &self.config.tip_account,
-            tip_lamports,
-        );
+        let tip_instruction =
+            system_instruction::transfer(&payer.pubkey(), &self.config.tip_account, tip_lamports);
 
         Transaction::new_signed_with_payer(
             &[tip_instruction],
@@ -166,12 +177,14 @@ impl JitoClient {
         // In production, this would consider network congestion, competition, etc.
         let base_tip = self.config.default_tip_lamports;
         let dynamic_tip = (trade_value_lamports as f64 * 0.0001) as u64; // 0.01% of trade value
-        
+
         let optimal_tip = base_tip.max(dynamic_tip).min(trade_value_lamports / 100); // Cap at 1%
-        
-        debug!("💡 Calculated optimal tip: {} lamports (base: {}, dynamic: {})", 
-               optimal_tip, base_tip, dynamic_tip);
-        
+
+        debug!(
+            "💡 Calculated optimal tip: {} lamports (base: {}, dynamic: {})",
+            optimal_tip, base_tip, dynamic_tip
+        );
+
         Ok(optimal_tip)
     }
 
@@ -181,10 +194,10 @@ impl JitoClient {
         // 1. Serialize transactions
         // 2. Send to Jito bundle endpoint
         // 3. Return bundle ID
-        
+
         // For now, we'll send transactions individually as a fallback
         let mut bundle_id = String::new();
-        
+
         for (i, tx) in transactions.iter().enumerate() {
             match self.submit_transaction_with_retry(tx).await {
                 Ok(signature) => {
@@ -206,9 +219,13 @@ impl JitoClient {
     /// Submit a single transaction with retry logic
     async fn submit_transaction_with_retry(&self, transaction: &Transaction) -> Result<String> {
         let mut last_error = None;
-        
+
         for attempt in 1..=self.config.max_retries {
-            match self.rpc_client.send_and_confirm_transaction(transaction).await {
+            match self
+                .rpc_client
+                .send_and_confirm_transaction(transaction)
+                .await
+            {
                 Ok(signature) => {
                     if attempt > 1 {
                         info!("✅ Transaction succeeded on attempt {}", attempt);
@@ -218,25 +235,29 @@ impl JitoClient {
                 Err(e) => {
                     last_error = Some(e);
                     if attempt < self.config.max_retries {
-                        let delay = Duration::from_millis(self.config.retry_delay_ms * attempt as u64);
-                        warn!("⚠️ Transaction attempt {} failed, retrying in {:?}", attempt, delay);
+                        let delay =
+                            Duration::from_millis(self.config.retry_delay_ms * attempt as u64);
+                        warn!(
+                            "⚠️ Transaction attempt {} failed, retrying in {:?}",
+                            attempt, delay
+                        );
                         tokio::time::sleep(delay).await;
                     }
                 }
             }
         }
 
-        Err(ArbError::TransactionFailed(
-            format!("Transaction failed after {} attempts: {:?}", 
-                    self.config.max_retries, last_error)
-        ))
+        Err(ArbError::TransactionFailed(format!(
+            "Transaction failed after {} attempts: {:?}",
+            self.config.max_retries, last_error
+        )))
     }
 
     /// Update bundle submission statistics
     fn update_stats(&mut self, success: bool, tx_count: usize, submission_time: Duration) {
         self.stats.total_bundles_submitted += 1;
         self.stats.total_transactions += tx_count as u64;
-        
+
         if success {
             self.stats.successful_submissions += 1;
         } else {
@@ -249,8 +270,9 @@ impl JitoClient {
             self.stats.average_submission_time_ms = new_time_ms;
         } else {
             let total_submissions = self.stats.total_bundles_submitted as f64;
-            self.stats.average_submission_time_ms = 
-                (self.stats.average_submission_time_ms * (total_submissions - 1.0) + new_time_ms) / total_submissions;
+            self.stats.average_submission_time_ms =
+                (self.stats.average_submission_time_ms * (total_submissions - 1.0) + new_time_ms)
+                    / total_submissions;
         }
     }
 
@@ -264,7 +286,8 @@ impl JitoClient {
         if self.stats.total_bundles_submitted == 0 {
             return 0.0;
         }
-        (self.stats.successful_submissions as f64 / self.stats.total_bundles_submitted as f64) * 100.0
+        (self.stats.successful_submissions as f64 / self.stats.total_bundles_submitted as f64)
+            * 100.0
     }
 
     /// Update configuration
@@ -278,7 +301,7 @@ impl JitoClient {
         if self.stats.total_bundles_submitted < 10 {
             return true; // Not enough data
         }
-        
+
         self.get_success_rate() > 80.0 && self.stats.average_submission_time_ms < 30_000.0
     }
 }
@@ -301,11 +324,12 @@ impl BundleBuilder {
     /// Add a transaction to the bundle
     pub fn add_transaction(mut self, transaction: Transaction) -> Result<Self> {
         if self.transactions.len() >= self.max_size {
-            return Err(ArbError::InvalidInput(
-                format!("Bundle is full (max size: {})", self.max_size)
-            ));
+            return Err(ArbError::InvalidInput(format!(
+                "Bundle is full (max size: {})",
+                self.max_size
+            )));
         }
-        
+
         self.transactions.push(transaction);
         Ok(self)
     }
@@ -313,12 +337,13 @@ impl BundleBuilder {
     /// Add multiple transactions to the bundle
     pub fn add_transactions(mut self, transactions: Vec<Transaction>) -> Result<Self> {
         if self.transactions.len() + transactions.len() > self.max_size {
-            return Err(ArbError::InvalidInput(
-                format!("Adding {} transactions would exceed max bundle size {}", 
-                        transactions.len(), self.max_size)
-            ));
+            return Err(ArbError::InvalidInput(format!(
+                "Adding {} transactions would exceed max bundle size {}",
+                transactions.len(),
+                self.max_size
+            )));
         }
-        
+
         self.transactions.extend(transactions);
         Ok(self)
     }

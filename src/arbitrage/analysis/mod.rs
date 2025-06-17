@@ -10,9 +10,9 @@ pub use math::*;
 use crate::config::settings::Config;
 use crate::local_metrics::Metrics;
 use crate::solana::rpc::SolanaRpcClient;
+use anyhow::Result;
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use anyhow::Result;
 
 pub struct ArbitrageAnalyzer {
     pub advanced_math: math::AdvancedArbitrageMath,
@@ -32,7 +32,11 @@ impl ArbitrageAnalyzer {
         }
     }
 
-    pub fn new_with_rpc(config: &Config, metrics: Arc<Mutex<Metrics>>, rpc_client: Arc<SolanaRpcClient>) -> Self {
+    pub fn new_with_rpc(
+        config: &Config,
+        metrics: Arc<Mutex<Metrics>>,
+        rpc_client: Arc<SolanaRpcClient>,
+    ) -> Self {
         Self {
             advanced_math: math::AdvancedArbitrageMath::new(12),
             fee_manager: fee::FeeManager::new(rpc_client),
@@ -47,7 +51,9 @@ impl ArbitrageAnalyzer {
         input_amount: &crate::utils::TokenAmount,
         sol_price_usd: f64,
     ) -> Result<crate::arbitrage::analysis::FeeBreakdown> {
-        self.fee_manager.calculate_multihop_fees(pools, input_amount, sol_price_usd).await
+        self.fee_manager
+            .calculate_multihop_fees(pools, input_amount, sol_price_usd)
+            .await
     }
 
     // Backwards compatibility - deprecated

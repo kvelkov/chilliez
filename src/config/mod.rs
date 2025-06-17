@@ -4,8 +4,8 @@ pub mod settings;
 // Re-export the primary Config struct
 pub use settings::*; // Re-export all items from settings.rs
 
-use std::sync::Arc;
 use std::path::Path;
+use std::sync::Arc;
 
 /// Loads and returns the application configuration.
 /// This function will call `dotenv::dotenv()` to load environment variables from a .env file,
@@ -23,8 +23,7 @@ pub fn _load_app_config() -> settings::Config {
 /// Loads the application configuration from a file.
 /// Returns an Arc-wrapped Config for shared use.
 fn _load_app_config_from_file(path: &str) -> Arc<Config> {
-    let config = settings::Config::load(Path::new(path))
-        .expect("Failed to load config from file");
+    let config = settings::Config::load(Path::new(path)).expect("Failed to load config from file");
     Arc::new(config)
 }
 

@@ -1,22 +1,14 @@
 //! Concurrency Manager Module
-//! 
+//!
 //! This module handles thread-safe execution, deadlock prevention, and
 //! concurrent operation management for the arbitrage orchestrator.
 
 use super::core::ArbitrageOrchestrator;
-use crate::{
-    arbitrage::opportunity::MultiHopArbOpportunity,
-    error::ArbError,
-    utils::DexType,
-};
+use crate::{arbitrage::opportunity::MultiHopArbOpportunity, error::ArbError, utils::DexType};
 
-use log::{info, warn, debug, error};
+use log::{debug, error, info, warn};
 use solana_sdk::pubkey::Pubkey;
-use std::{
-    collections::HashMap,
-    sync::atomic::Ordering,
-    time::Duration,
-};
+use std::{collections::HashMap, sync::atomic::Ordering, time::Duration};
 use tokio::time::timeout;
 
 impl ArbitrageOrchestrator {
@@ -28,12 +20,15 @@ impl ArbitrageOrchestrator {
         // Check if we're at max concurrent executions
         let current_executions = self.concurrent_executions.load(Ordering::Relaxed);
         if current_executions >= self.max_concurrent_executions {
-            return Err(ArbError::ResourceExhausted("Maximum concurrent executions reached".to_string()));
+            return Err(ArbError::ResourceExhausted(
+                "Maximum concurrent executions reached".to_string(),
+            ));
         }
 
         // Acquire execution semaphore (limits concurrency)
-        let _permit = self.execution_semaphore.acquire().await
-            .map_err(|e| ArbError::ResourceExhausted(format!("Failed to acquire execution permit: {}", e)))?;
+        let _permit = self.execution_semaphore.acquire().await.map_err(|e| {
+            ArbError::ResourceExhausted(format!("Failed to acquire execution permit: {}", e))
+        })?;
 
         // Increment concurrent execution counter
         self.concurrent_executions.fetch_add(1, Ordering::Relaxed);
@@ -45,7 +40,7 @@ impl ArbitrageOrchestrator {
         } else {
             DexType::Orca // Default fallback
         };
-        
+
         let pair_key = (
             dex_type,
             opportunity.input_token_mint,
@@ -53,7 +48,8 @@ impl ArbitrageOrchestrator {
         );
 
         // Get or create a lock for this specific trading pair
-        let pair_lock = self.trading_pairs_locks
+        let pair_lock = self
+            .trading_pairs_locks
             .entry(pair_key.clone())
             .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())));
         let pair_lock = pair_lock.clone();
@@ -61,11 +57,16 @@ impl ArbitrageOrchestrator {
         let result = {
             // Use timeout to prevent deadlocks
             let lock_timeout = Duration::from_secs(30);
-            let pair_guard = timeout(lock_timeout, pair_lock.lock()).await
-                .map_err(|_| ArbError::DeadlockPrevention("Failed to acquire pair lock within timeout".to_string()))?;
+            let pair_guard = timeout(lock_timeout, pair_lock.lock()).await.map_err(|_| {
+                ArbError::DeadlockPrevention(
+                    "Failed to acquire pair lock within timeout".to_string(),
+                )
+            })?;
 
             // Perform the actual execution with the lock held
-            let execution_result = self.execute_opportunity_with_balance_safety(opportunity.clone()).await;
+            let execution_result = self
+                .execute_opportunity_with_balance_safety(opportunity.clone())
+                .await;
 
             // Release the lock by dropping the guard
             drop(pair_guard);
@@ -88,15 +89,21 @@ impl ArbitrageOrchestrator {
     }
 
     /// Execute opportunity with balance safety checks
-    async fn execute_opportunity_with_balance_safety(&self, opportunity: MultiHopArbOpportunity) -> Result<(), ArbError> {
+    async fn execute_opportunity_with_balance_safety(
+        &self,
+        opportunity: MultiHopArbOpportunity,
+    ) -> Result<(), ArbError> {
         // Check balance monitor safety mode
         if let Some(ref balance_monitor) = self.balance_monitor {
             if balance_monitor.is_safety_mode_active() {
-                return Err(ArbError::SafetyModeActive("Balance monitor safety mode is active".to_string()));
+                return Err(ArbError::SafetyModeActive(
+                    "Balance monitor safety mode is active".to_string(),
+                ));
             }
 
             // Perform balance checks before execution
-            self.perform_pre_execution_balance_checks(&opportunity, balance_monitor).await?;
+            self.perform_pre_execution_balance_checks(&opportunity, balance_monitor)
+                .await?;
         }
 
         // Execute the opportunity
@@ -104,7 +111,8 @@ impl ArbitrageOrchestrator {
 
         // Perform post-execution balance checks
         if let Some(ref balance_monitor) = self.balance_monitor {
-            self.perform_post_execution_balance_checks(&opportunity, balance_monitor, &result).await?;
+            self.perform_post_execution_balance_checks(&opportunity, balance_monitor, &result)
+                .await?;
         }
 
         result
@@ -120,11 +128,13 @@ impl ArbitrageOrchestrator {
 
         // Check if we have sufficient balance for the input amount
         let required_balance = _opportunity.input_amount;
-        
+
         // This would integrate with the balance monitor to check current balances
         // For now, we'll log the check
-        debug!("💰 Required balance: {} for token {}", 
-               required_balance, _opportunity.input_token);
+        debug!(
+            "💰 Required balance: {} for token {}",
+            required_balance, _opportunity.input_token
+        );
 
         Ok(())
     }
@@ -143,7 +153,10 @@ impl ArbitrageOrchestrator {
                 debug!("✅ Execution successful, balance changes should be reflected");
             }
             Err(e) => {
-                warn!("❌ Execution failed: {}, checking for balance inconsistencies", e);
+                warn!(
+                    "❌ Execution failed: {}, checking for balance inconsistencies",
+                    e
+                );
                 // Here we would check if the balance is consistent with the failed execution
             }
         }
@@ -152,7 +165,12 @@ impl ArbitrageOrchestrator {
     }
 
     /// Check if a trading pair is currently being executed (deadlock prevention)
-    pub fn is_pair_being_executed(&self, dex_type: &DexType, token_a: &Pubkey, token_b: &Pubkey) -> bool {
+    pub fn is_pair_being_executed(
+        &self,
+        dex_type: &DexType,
+        token_a: &Pubkey,
+        token_b: &Pubkey,
+    ) -> bool {
         let pair_key = (dex_type.clone(), *token_a, *token_b);
         self.trading_pairs_locks.contains_key(&pair_key)
     }
@@ -160,46 +178,64 @@ impl ArbitrageOrchestrator {
     /// Get current concurrency metrics
     pub fn get_concurrency_metrics(&self) -> HashMap<String, serde_json::Value> {
         let mut metrics = HashMap::new();
-        
-        metrics.insert("current_executions".to_string(), 
-                      serde_json::Value::Number(serde_json::Number::from(
-                          self.concurrent_executions.load(Ordering::Relaxed))));
-        
-        metrics.insert("max_executions".to_string(), 
-                      serde_json::Value::Number(serde_json::Number::from(self.max_concurrent_executions)));
-        
-        metrics.insert("available_permits".to_string(), 
-                      serde_json::Value::Number(serde_json::Number::from(
-                          self.execution_semaphore.available_permits())));
-        
-        metrics.insert("active_pair_locks".to_string(), 
-                      serde_json::Value::Number(serde_json::Number::from(
-                          self.trading_pairs_locks.len())));
+
+        metrics.insert(
+            "current_executions".to_string(),
+            serde_json::Value::Number(serde_json::Number::from(
+                self.concurrent_executions.load(Ordering::Relaxed),
+            )),
+        );
+
+        metrics.insert(
+            "max_executions".to_string(),
+            serde_json::Value::Number(serde_json::Number::from(self.max_concurrent_executions)),
+        );
+
+        metrics.insert(
+            "available_permits".to_string(),
+            serde_json::Value::Number(serde_json::Number::from(
+                self.execution_semaphore.available_permits(),
+            )),
+        );
+
+        metrics.insert(
+            "active_pair_locks".to_string(),
+            serde_json::Value::Number(serde_json::Number::from(self.trading_pairs_locks.len())),
+        );
 
         metrics
     }
 
     /// Execute multiple opportunities with proper concurrency control
-    pub async fn execute_opportunities_concurrently(&self, opportunities: Vec<MultiHopArbOpportunity>) -> Result<Vec<Result<(), ArbError>>, ArbError> {
+    pub async fn execute_opportunities_concurrently(
+        &self,
+        opportunities: Vec<MultiHopArbOpportunity>,
+    ) -> Result<Vec<Result<(), ArbError>>, ArbError> {
         if opportunities.is_empty() {
             return Ok(Vec::new());
         }
 
-        info!("🚀 Executing {} opportunities concurrently with safety controls", opportunities.len());
+        info!(
+            "🚀 Executing {} opportunities concurrently with safety controls",
+            opportunities.len()
+        );
 
         // Check available execution slots
         let available_slots = self.execution_semaphore.available_permits();
         let max_concurrent = available_slots.min(opportunities.len());
 
-        info!("⚡ Available execution slots: {}, will execute {} opportunities concurrently", 
-              available_slots, max_concurrent);
+        info!(
+            "⚡ Available execution slots: {}, will execute {} opportunities concurrently",
+            available_slots, max_concurrent
+        );
 
         // Split opportunities into batches that respect concurrency limits
         let mut results = Vec::new();
-        
+
         for chunk in opportunities.chunks(max_concurrent) {
             // Execute this chunk concurrently
-            let chunk_futures: Vec<_> = chunk.iter()
+            let chunk_futures: Vec<_> = chunk
+                .iter()
                 .map(|op| self.execute_opportunity_with_concurrency_safety(op.clone()))
                 .collect();
 
@@ -212,7 +248,10 @@ impl ArbitrageOrchestrator {
             }
         }
 
-        info!("✅ Concurrent execution completed: {} results", results.len());
+        info!(
+            "✅ Concurrent execution completed: {} results",
+            results.len()
+        );
         Ok(results)
     }
 
@@ -229,11 +268,13 @@ impl ArbitrageOrchestrator {
 
         while self.concurrent_executions.load(Ordering::Relaxed) > 0 {
             if start_time.elapsed() > timeout_duration {
-                error!("⏰ Emergency stop timeout: {} executions still running", 
-                       self.concurrent_executions.load(Ordering::Relaxed));
+                error!(
+                    "⏰ Emergency stop timeout: {} executions still running",
+                    self.concurrent_executions.load(Ordering::Relaxed)
+                );
                 break;
             }
-            
+
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
 
@@ -244,7 +285,10 @@ impl ArbitrageOrchestrator {
         if final_count == 0 {
             info!("✅ Emergency stop completed: all executions halted");
         } else {
-            warn!("⚠️ Emergency stop completed with {} executions still running", final_count);
+            warn!(
+                "⚠️ Emergency stop completed with {} executions still running",
+                final_count
+            );
         }
 
         Ok(())
@@ -253,13 +297,13 @@ impl ArbitrageOrchestrator {
     /// Resume executions after emergency stop
     pub async fn resume_executions(&self) -> Result<(), ArbError> {
         info!("🔄 Resuming execution operations");
-        
+
         // Re-enable executions
         self.execution_enabled.store(true, Ordering::Relaxed);
-        
+
         // Reset concurrent execution counter (in case of inconsistency)
         self.concurrent_executions.store(0, Ordering::Relaxed);
-        
+
         info!("✅ Execution operations resumed");
         Ok(())
     }
@@ -272,7 +316,9 @@ impl ArbitrageOrchestrator {
             max_concurrent_executions: self.max_concurrent_executions,
             available_permits: self.execution_semaphore.available_permits(),
             active_pair_locks: self.trading_pairs_locks.len(),
-            trading_pairs_locked: self.trading_pairs_locks.iter()
+            trading_pairs_locked: self
+                .trading_pairs_locks
+                .iter()
                 .map(|entry| format!("{:?}", entry.key()))
                 .collect(),
         }

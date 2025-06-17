@@ -1,26 +1,26 @@
 // Enhanced API error handling with ban detection and jitter
 // Add to src/api/enhanced_error_handling.rs
 
-use anyhow::{Result, anyhow};
-use log::{warn, error, info};
+use anyhow::{anyhow, Result};
+use log::{error, info, warn};
+use rand::Rng;
+use serde::{Deserialize, Serialize};
 use std::time::{Duration, Instant};
 use tokio::time::sleep;
-use rand::Rng;
-use serde::{Serialize, Deserialize};
 
 /// Enhanced error classification for better handling
 #[derive(Debug, Clone, PartialEq)]
 pub enum ApiErrorType {
-    RateLimit,           // 429 Too Many Requests
-    Banned,              // 403 Forbidden, account suspended
-    Unauthorized,        // 401 Invalid API key
-    ServiceUnavailable,  // 503 Service down
-    BadGateway,          // 502 Gateway issues
-    Timeout,             // Request timeout
-    NetworkError,        // Connection failures
-    InvalidRequest,      // 400 Bad Request
-    InternalError,       // 500 Internal Server Error
-    Unknown,             // Other errors
+    RateLimit,          // 429 Too Many Requests
+    Banned,             // 403 Forbidden, account suspended
+    Unauthorized,       // 401 Invalid API key
+    ServiceUnavailable, // 503 Service down
+    BadGateway,         // 502 Gateway issues
+    Timeout,            // Request timeout
+    NetworkError,       // Connection failures
+    InvalidRequest,     // 400 Bad Request
+    InternalError,      // 500 Internal Server Error
+    Unknown,            // Other errors
 }
 
 /// Ban detection configuration
@@ -53,7 +53,7 @@ impl Default for BanDetectionConfig {
             ban_status_codes: vec![403, 406], // 403 Forbidden, 406 Not Acceptable
             max_consecutive_403s: 3,
             ban_detection_cooldown: Duration::from_secs(15 * 60), // 15 minutes
-            ban_recovery_interval: Duration::from_secs(60 * 60), // 1 hour
+            ban_recovery_interval: Duration::from_secs(60 * 60),  // 1 hour
         }
     }
 }
@@ -64,7 +64,7 @@ pub struct BackoffStrategy {
     pub base_delay: Duration,
     pub max_delay: Duration,
     pub backoff_multiplier: f64,
-    pub jitter_percent: f64,  // 0.0 - 1.0
+    pub jitter_percent: f64, // 0.0 - 1.0
     pub enable_jitter: bool,
 }
 
@@ -129,7 +129,8 @@ impl EnhancedApiErrorHandler {
         };
 
         // Record error for pattern analysis
-        self.error_history.push((Instant::now(), error_type.clone()));
+        self.error_history
+            .push((Instant::now(), error_type.clone()));
         self.cleanup_old_errors();
 
         // Check for ban patterns
@@ -171,7 +172,8 @@ impl EnhancedApiErrorHandler {
         }
 
         // Pattern analysis: high frequency of auth errors
-        let recent_errors: Vec<_> = self.error_history
+        let recent_errors: Vec<_> = self
+            .error_history
             .iter()
             .filter(|(timestamp, _)| timestamp.elapsed() < Duration::from_secs(5 * 60)) // 5 minutes
             .collect();
@@ -180,7 +182,10 @@ impl EnhancedApiErrorHandler {
             let auth_errors = recent_errors
                 .iter()
                 .filter(|(_, error_type)| {
-                    matches!(error_type, ApiErrorType::Unauthorized | ApiErrorType::Banned)
+                    matches!(
+                        error_type,
+                        ApiErrorType::Unauthorized | ApiErrorType::Banned
+                    )
                 })
                 .count();
 
@@ -195,11 +200,17 @@ impl EnhancedApiErrorHandler {
         if !self.is_banned {
             self.is_banned = true;
             self.ban_detected_at = Some(Instant::now());
-            
-            error!("🚨 BAN DETECTED for {} API! Implementing extended backoff", self.provider_name);
+
+            error!(
+                "🚨 BAN DETECTED for {} API! Implementing extended backoff",
+                self.provider_name
+            );
             error!("   Consecutive 403s: {}", self.consecutive_403s);
-            error!("   Recovery attempts will start in {:?}", self.ban_detection.ban_recovery_interval);
-            
+            error!(
+                "   Recovery attempts will start in {:?}",
+                self.ban_detection.ban_recovery_interval
+            );
+
             // Notify monitoring systems
             self.notify_ban_detected().await;
         }
@@ -217,9 +228,13 @@ impl EnhancedApiErrorHandler {
 
         let delay_ms = (self.backoff_strategy.base_delay.as_millis() as f64
             * base_multiplier
-            * self.backoff_strategy.backoff_multiplier.powi(attempt as i32 - 1)) as u64;
+            * self
+                .backoff_strategy
+                .backoff_multiplier
+                .powi(attempt as i32 - 1)) as u64;
 
-        let mut delay = Duration::from_millis(delay_ms.min(self.backoff_strategy.max_delay.as_millis() as u64));
+        let mut delay =
+            Duration::from_millis(delay_ms.min(self.backoff_strategy.max_delay.as_millis() as u64));
 
         // Add jitter to prevent thundering herd
         if self.backoff_strategy.enable_jitter {
@@ -231,9 +246,11 @@ impl EnhancedApiErrorHandler {
             delay = delay.max(Duration::from_secs(5 * 60)); // Minimum 5 minute delay for bans
         }
 
-        info!("🕐 {} API backoff: {:?} for error type: {:?}", 
-              self.provider_name, delay, error_type);
-        
+        info!(
+            "🕐 {} API backoff: {:?} for error type: {:?}",
+            self.provider_name, delay, error_type
+        );
+
         delay
     }
 
@@ -270,12 +287,12 @@ impl EnhancedApiErrorHandler {
         if let Some(ban_time) = self.ban_detected_at {
             if ban_time.elapsed() >= self.ban_detection.ban_recovery_interval {
                 info!("🔄 Attempting ban recovery for {} API", self.provider_name);
-                
+
                 // Reset ban status for testing
                 self.is_banned = false;
                 self.consecutive_403s = 0;
                 self.ban_detected_at = None;
-                
+
                 return true;
             }
         }
@@ -296,17 +313,21 @@ impl EnhancedApiErrorHandler {
     /// Clean up old error history
     fn cleanup_old_errors(&mut self) {
         let cutoff = Instant::now() - Duration::from_secs(60 * 60); // 1 hour
-        self.error_history.retain(|(timestamp, _)| *timestamp > cutoff);
+        self.error_history
+            .retain(|(timestamp, _)| *timestamp > cutoff);
     }
 
     /// Notify monitoring systems of ban detection
     async fn notify_ban_detected(&self) {
         // In a real implementation, this would send alerts to monitoring systems
-        warn!("📧 ALERT: {} API ban detected - switching to fallback providers", self.provider_name);
-        
+        warn!(
+            "📧 ALERT: {} API ban detected - switching to fallback providers",
+            self.provider_name
+        );
+
         // You could integrate with:
         // - Slack notifications
-        // - Email alerts  
+        // - Email alerts
         // - Monitoring dashboards
         // - Automated failover systems
     }
@@ -318,7 +339,8 @@ impl EnhancedApiErrorHandler {
             is_banned: self.is_banned,
             ban_detected_at: self.ban_detected_at,
             consecutive_403s: self.consecutive_403s,
-            time_until_recovery: self.ban_detected_at
+            time_until_recovery: self
+                .ban_detected_at
                 .map(|ban_time| {
                     let elapsed = ban_time.elapsed();
                     if elapsed < self.ban_detection.ban_recovery_interval {
@@ -328,7 +350,8 @@ impl EnhancedApiErrorHandler {
                     }
                 })
                 .flatten(),
-            recent_error_count: self.error_history
+            recent_error_count: self
+                .error_history
                 .iter()
                 .filter(|(timestamp, _)| timestamp.elapsed() < Duration::from_secs(10 * 60)) // 10 minutes
                 .count(),
@@ -338,7 +361,7 @@ impl EnhancedApiErrorHandler {
     /// Parse error string to determine error type
     pub fn parse_error_type(&self, error_str: &str) -> ApiErrorType {
         let error_lower = error_str.to_lowercase();
-        
+
         // Extract status code if present
         let status_code = if error_lower.contains("429") {
             429
@@ -420,8 +443,10 @@ impl EnhancedRetryExecutor {
     {
         // Check if API should be avoided due to ban
         if self.error_handler.should_avoid_api() {
-            return Err(anyhow!("API {} is currently banned, avoiding requests", 
-                              self.error_handler.provider_name));
+            return Err(anyhow!(
+                "API {} is currently banned, avoiding requests",
+                self.error_handler.provider_name
+            ));
         }
 
         let mut attempt = 0;
@@ -440,16 +465,20 @@ impl EnhancedRetryExecutor {
                 }
                 Err(e) => {
                     last_error = Some(e.to_string());
-                    
+
                     // Parse error to classify it
                     let error_type = self.error_handler.parse_error_type(&e.to_string());
-                    
+
                     // Calculate backoff delay
-                    let delay = self.error_handler.calculate_backoff_delay(attempt, &error_type);
-                    
-                    warn!("🔄 {} API attempt {}/{} failed: {} (retrying in {:?})", 
-                          self.error_handler.provider_name, attempt, self.max_attempts, e, delay);
-                    
+                    let delay = self
+                        .error_handler
+                        .calculate_backoff_delay(attempt, &error_type);
+
+                    warn!(
+                        "🔄 {} API attempt {}/{} failed: {} (retrying in {:?})",
+                        self.error_handler.provider_name, attempt, self.max_attempts, e, delay
+                    );
+
                     // Don't wait on the last attempt
                     if attempt < self.max_attempts {
                         sleep(delay).await;
@@ -458,8 +487,11 @@ impl EnhancedRetryExecutor {
             }
         }
 
-        Err(anyhow!("Operation failed after {} attempts. Last error: {}", 
-                   self.max_attempts, last_error.unwrap_or_default()))
+        Err(anyhow!(
+            "Operation failed after {} attempts. Last error: {}",
+            self.max_attempts,
+            last_error.unwrap_or_default()
+        ))
     }
 
     /// Get current ban status
@@ -475,13 +507,19 @@ mod tests {
     #[tokio::test]
     async fn test_ban_detection() {
         let mut handler = EnhancedApiErrorHandler::new("test_api".to_string());
-        
+
         // Simulate multiple 403 errors
         for i in 0..3 {
-            println!("Iteration {}: consecutive_403s before = {}", i, handler.consecutive_403s);
+            println!(
+                "Iteration {}: consecutive_403s before = {}",
+                i, handler.consecutive_403s
+            );
             let error_type = handler.classify_error(403, "Authentication required").await;
-            println!("Iteration {}: consecutive_403s after = {}, error_type = {:?}", i, handler.consecutive_403s, error_type);
-            
+            println!(
+                "Iteration {}: consecutive_403s after = {}, error_type = {:?}",
+                i, handler.consecutive_403s, error_type
+            );
+
             // First two should be Unauthorized, third should trigger ban detection
             if i < 2 {
                 assert_eq!(error_type, ApiErrorType::Unauthorized);
@@ -490,7 +528,7 @@ mod tests {
                 assert_eq!(error_type, ApiErrorType::Banned);
             }
         }
-        
+
         // Should detect ban after threshold
         assert!(handler.is_banned);
     }
@@ -498,10 +536,10 @@ mod tests {
     #[tokio::test]
     async fn test_jitter_backoff() {
         let handler = EnhancedApiErrorHandler::new("test_api".to_string());
-        
+
         let delay1 = handler.calculate_backoff_delay(1, &ApiErrorType::RateLimit);
         let delay2 = handler.calculate_backoff_delay(1, &ApiErrorType::RateLimit);
-        
+
         // With jitter enabled, delays should be different
         assert_ne!(delay1, delay2);
     }
@@ -509,10 +547,19 @@ mod tests {
     #[test]
     fn test_error_classification() {
         let handler = EnhancedApiErrorHandler::new("test_api".to_string());
-        
+
         // Test various error types
-        assert_eq!(handler.parse_error_type("HTTP 429 Too Many Requests"), ApiErrorType::RateLimit);
-        assert_eq!(handler.parse_error_type("Connection timeout"), ApiErrorType::Timeout);
-        assert_eq!(handler.parse_error_type("Network error occurred"), ApiErrorType::NetworkError);
+        assert_eq!(
+            handler.parse_error_type("HTTP 429 Too Many Requests"),
+            ApiErrorType::RateLimit
+        );
+        assert_eq!(
+            handler.parse_error_type("Connection timeout"),
+            ApiErrorType::Timeout
+        );
+        assert_eq!(
+            handler.parse_error_type("Network error occurred"),
+            ApiErrorType::NetworkError
+        );
     }
 }

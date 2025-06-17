@@ -2,8 +2,8 @@
 mod tests {
     // Import all relevant functions and types from our calculator module.
     // Adjust the import path as needed depending on your project hierarchy.
-    use crate::arbitrage::analysis::{OpportunityCalculationResult, is_profitable_calc};
-    
+    use crate::arbitrage::analysis::{is_profitable_calc, OpportunityCalculationResult};
+
     /// Helper function that creates a dummy `OpportunityCalculationResult`
     /// to simulate different arbitrage outcomes. It uses an input amount of 1.0,
     /// so that profit percentage is computed as profit_in_token (since 1.0 is the base).
@@ -12,7 +12,11 @@ mod tests {
             input_amount: 1.0,
             output_amount: 1.0 + profit_in_token,
             profit: profit_in_token,
-            profit_percentage: if 1.0 > 0.0 { profit_in_token / 1.0 } else { 0.0 },
+            profit_percentage: if 1.0 > 0.0 {
+                profit_in_token / 1.0
+            } else {
+                0.0
+            },
         }
     }
 
@@ -22,11 +26,16 @@ mod tests {
         let profit_in_token = 2.0;
         let opp_result = create_dummy_opp_result(profit_in_token);
         let token_price_in_sol = 1.0; // Assume 1:1 conversion for simplicity.
-        let tx_cost_in_sol = 0.5;     // Transaction cost in SOL
+        let tx_cost_in_sol = 0.5; // Transaction cost in SOL
         let min_profit_threshold_sol = 1.0;
         // Net profit = (2.0 * 1.0) - 0.5 = 1.5, which is > 1.0
         assert!(
-            is_profitable_calc(&opp_result, token_price_in_sol, tx_cost_in_sol, min_profit_threshold_sol),
+            is_profitable_calc(
+                &opp_result,
+                token_price_in_sol,
+                tx_cost_in_sol,
+                min_profit_threshold_sol
+            ),
             "Expected net profit to exceed the minimum threshold"
         );
     }
@@ -41,7 +50,12 @@ mod tests {
         let min_profit_threshold_sol = 1.0;
         // Net profit = (0.5 * 1.0) - 0.5 = 0.0 which is below 1.0
         assert!(
-            !is_profitable_calc(&opp_result, token_price_in_sol, tx_cost_in_sol, min_profit_threshold_sol),
+            !is_profitable_calc(
+                &opp_result,
+                token_price_in_sol,
+                tx_cost_in_sol,
+                min_profit_threshold_sol
+            ),
             "Expected net profit to be below the minimum threshold"
         );
     }
@@ -57,7 +71,12 @@ mod tests {
         let min_profit_threshold_sol = 1.0;
         // Here net profit == threshold; our function expects profit > threshold, so return false.
         assert!(
-            !is_profitable_calc(&opp_result, token_price_in_sol, tx_cost_in_sol, min_profit_threshold_sol),
+            !is_profitable_calc(
+                &opp_result,
+                token_price_in_sol,
+                tx_cost_in_sol,
+                min_profit_threshold_sol
+            ),
             "Expected profit equal to threshold to return false"
         );
     }
@@ -74,7 +93,12 @@ mod tests {
         let tx_cost_in_sol = 0.0;
         let min_profit_threshold_sol = 1.0; // Required net profit 1.0, but effective is 0.9
         assert!(
-            !is_profitable_calc(&opp_result, token_price_in_sol, tx_cost_in_sol, min_profit_threshold_sol),
+            !is_profitable_calc(
+                &opp_result,
+                token_price_in_sol,
+                tx_cost_in_sol,
+                min_profit_threshold_sol
+            ),
             "Expected profit after slippage to be insufficient"
         );
     }
@@ -88,7 +112,12 @@ mod tests {
         let tx_cost_in_sol = 0.6; // Net profit = 1.5 - 0.6 = 0.9, below the threshold.
         let min_profit_threshold_sol = 1.0;
         assert!(
-            !is_profitable_calc(&opp_result, token_price_in_sol, tx_cost_in_sol, min_profit_threshold_sol),
+            !is_profitable_calc(
+                &opp_result,
+                token_price_in_sol,
+                tx_cost_in_sol,
+                min_profit_threshold_sol
+            ),
             "Expected net profit after transaction cost to be insufficient"
         );
     }

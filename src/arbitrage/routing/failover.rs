@@ -1,6 +1,6 @@
 // src/arbitrage/routing/failover.rs
 //! Failover Routing and Recovery System
-//! 
+//!
 //! Provides robust failover mechanisms for route execution:
 //! - Automatic route fallback when primary paths fail
 //! - DEX health monitoring and circuit breaker patterns
@@ -8,13 +8,13 @@
 //! - Emergency execution modes
 //! - Recovery strategies and retry policies
 
+use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
-use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 
-use crate::arbitrage::routing::{RoutePath, PathFinder, RoutingGraph};
+use crate::arbitrage::routing::{PathFinder, RoutePath, RoutingGraph};
 
 /// Failover strategy types
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -190,8 +190,8 @@ struct CircuitBreaker {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum CircuitBreakerState {
-    Closed,  // Normal operation
-    Open,    // Failures exceeded threshold, blocking requests
+    Closed,   // Normal operation
+    Open,     // Failures exceeded threshold, blocking requests
     HalfOpen, // Testing if service recovered
 }
 
@@ -272,12 +272,16 @@ impl FailoverRouter {
 
         // Generate backup routes using different DEXs
         if self.config.enable_dex_switching {
-            backup_routes = self.generate_backup_routes(input_token, output_token, amount).await?;
+            backup_routes = self
+                .generate_backup_routes(input_token, output_token, amount)
+                .await?;
         }
 
         // Generate emergency routes with higher slippage tolerance
         if self.config.enable_emergency_execution {
-            emergency_routes = self.generate_emergency_routes(input_token, output_token, amount).await?;
+            emergency_routes = self
+                .generate_emergency_routes(input_token, output_token, amount)
+                .await?;
         }
 
         let strategy = self.determine_failover_strategy(&primary_route).await;
@@ -302,12 +306,16 @@ impl FailoverRouter {
         let _execution_start = SystemTime::now();
 
         // Try primary route first
-        if let Ok(attempt) = self.try_execute_route(&plan.primary_route, attempt_number).await {
+        if let Ok(attempt) = self
+            .try_execute_route(&plan.primary_route, attempt_number)
+            .await
+        {
             if matches!(attempt.result, ExecutionResult::Success) {
                 self.record_execution_success(&plan.primary_route).await;
                 return Ok(attempt);
             } else {
-                self.record_execution_failure(&plan.primary_route, &attempt).await;
+                self.record_execution_failure(&plan.primary_route, &attempt)
+                    .await;
                 attempt_number += 1;
             }
         }
@@ -316,27 +324,28 @@ impl FailoverRouter {
         match plan.strategy {
             FailoverStrategy::ImmediateFailover => {
                 self.execute_immediate_failover(plan, attempt_number).await
-            },
+            }
             FailoverStrategy::RetryWithBackoff => {
                 self.execute_retry_with_backoff(plan, attempt_number).await
-            },
+            }
             FailoverStrategy::DexSwitching => {
                 self.execute_dex_switching(plan, attempt_number).await
-            },
+            }
             FailoverStrategy::EmergencyExecution => {
                 self.execute_emergency_mode(plan, attempt_number).await
-            },
+            }
             FailoverStrategy::AbortAndWait => {
                 Err("Execution aborted due to failover conditions".into())
-            },
+            }
         }
     }
 
     /// Update DEX health status
     pub async fn update_dex_health(&self, dex_name: &str, result: &ExecutionAttempt) {
         let mut health_map = self.dex_health.write().await;
-        let health = health_map.entry(dex_name.to_string()).or_insert_with(|| {
-            DexHealthStatus {
+        let health = health_map
+            .entry(dex_name.to_string())
+            .or_insert_with(|| DexHealthStatus {
                 dex_name: dex_name.to_string(),
                 status: ExecutionStatus::Healthy,
                 last_success: None,
@@ -347,12 +356,12 @@ impl FailoverRouter {
                 error_rate: 0.0,
                 circuit_breaker_open: false,
                 next_retry_time: None,
-            }
-        });
+            });
 
         // Update response time
         if let Some(response_time) = result.response_time_ms {
-            health.avg_response_time = (health.avg_response_time * 0.9) + (response_time as f64 * 0.1);
+            health.avg_response_time =
+                (health.avg_response_time * 0.9) + (response_time as f64 * 0.1);
         }
 
         // Update success/failure tracking
@@ -361,39 +370,45 @@ impl FailoverRouter {
                 health.last_success = Some(SystemTime::now());
                 health.consecutive_failures = 0;
                 health.status = ExecutionStatus::Healthy;
-                
+
                 // Update circuit breaker
                 let mut circuit_breakers = self.circuit_breakers.write().await;
                 if let Some(cb) = circuit_breakers.get_mut(dex_name) {
                     cb.record_success();
                 }
                 health.circuit_breaker_open = false;
-            },
+            }
             ExecutionResult::RetryableFailure | ExecutionResult::Timeout => {
                 health.last_failure = Some(SystemTime::now());
                 health.consecutive_failures += 1;
-                
+
                 if health.consecutive_failures >= self.config.circuit_breaker_threshold {
                     health.status = ExecutionStatus::Failed;
                     health.circuit_breaker_open = true;
-                    health.next_retry_time = Some(SystemTime::now() + self.config.circuit_breaker_timeout);
+                    health.next_retry_time =
+                        Some(SystemTime::now() + self.config.circuit_breaker_timeout);
                 } else {
                     health.status = ExecutionStatus::Degraded;
                 }
-                
+
                 // Update circuit breaker
                 let mut circuit_breakers = self.circuit_breakers.write().await;
-                let cb = circuit_breakers.entry(dex_name.to_string()).or_insert_with(CircuitBreaker::new);
-                cb.record_failure(self.config.circuit_breaker_threshold, self.config.circuit_breaker_timeout);
-            },
+                let cb = circuit_breakers
+                    .entry(dex_name.to_string())
+                    .or_insert_with(CircuitBreaker::new);
+                cb.record_failure(
+                    self.config.circuit_breaker_threshold,
+                    self.config.circuit_breaker_timeout,
+                );
+            }
             ExecutionResult::PermanentFailure => {
                 health.last_failure = Some(SystemTime::now());
                 health.status = ExecutionStatus::Unavailable;
                 health.consecutive_failures += 1;
-            },
+            }
             ExecutionResult::Cancelled => {
                 // Don't update health for cancelled executions
-            },
+            }
         }
 
         // Calculate success rate over recent executions
@@ -401,13 +416,18 @@ impl FailoverRouter {
         let recent_attempts: Vec<&ExecutionAttempt> = history
             .iter()
             .filter(|attempt| {
-                attempt.route.steps.iter().any(|step| step.dex_type.to_string() == dex_name)
+                attempt
+                    .route
+                    .steps
+                    .iter()
+                    .any(|step| step.dex_type.to_string() == dex_name)
             })
             .take(100)
             .collect();
 
         if !recent_attempts.is_empty() {
-            let successes = recent_attempts.iter()
+            let successes = recent_attempts
+                .iter()
                 .filter(|attempt| matches!(attempt.result, ExecutionResult::Success))
                 .count();
             health.success_rate = successes as f64 / recent_attempts.len() as f64;
@@ -419,8 +439,10 @@ impl FailoverRouter {
     pub async fn is_dex_available(&self, dex_name: &str) -> bool {
         // Check circuit breaker
         let mut circuit_breakers = self.circuit_breakers.write().await;
-        let cb = circuit_breakers.entry(dex_name.to_string()).or_insert_with(CircuitBreaker::new);
-        
+        let cb = circuit_breakers
+            .entry(dex_name.to_string())
+            .or_insert_with(CircuitBreaker::new);
+
         if !cb.can_execute() {
             return false;
         }
@@ -428,8 +450,10 @@ impl FailoverRouter {
         // Check health status
         let health_map = self.dex_health.read().await;
         if let Some(health) = health_map.get(dex_name) {
-            !matches!(health.status, ExecutionStatus::Unavailable | ExecutionStatus::Maintenance)
-                && health.success_rate >= self.config.min_success_rate
+            !matches!(
+                health.status,
+                ExecutionStatus::Unavailable | ExecutionStatus::Maintenance
+            ) && health.success_rate >= self.config.min_success_rate
         } else {
             true // Unknown DEX, assume available
         }
@@ -448,7 +472,7 @@ impl FailoverRouter {
         attempt_number: u32,
     ) -> Result<ExecutionAttempt, Box<dyn std::error::Error>> {
         let start_time = SystemTime::now();
-        
+
         // Check if all DEXs in route are available
         for step in &route.steps {
             if !self.is_dex_available(&step.dex_type.to_string()).await {
@@ -458,27 +482,29 @@ impl FailoverRouter {
                     start_time,
                     end_time: Some(SystemTime::now()),
                     result: ExecutionResult::RetryableFailure,
-                    error_details: Some(format!("DEX {} is unavailable", step.dex_type.to_string())),
+                    error_details: Some(format!(
+                        "DEX {} is unavailable",
+                        step.dex_type.to_string()
+                    )),
                     response_time_ms: Some(0),
                 });
             }
         }
 
         // Simulate execution (in real implementation, this would call actual DEX clients)
-        let execution_duration = Duration::from_millis(
-            500 + (route.steps.len() as u64 * 100)
-        );
+        let execution_duration = Duration::from_millis(500 + (route.steps.len() as u64 * 100));
         tokio::time::sleep(execution_duration).await;
 
         let end_time = SystemTime::now();
-        let response_time_ms = end_time.duration_since(start_time)
+        let response_time_ms = end_time
+            .duration_since(start_time)
             .unwrap_or_default()
             .as_millis() as u64;
 
         // Simulate success/failure based on DEX health
         let success_probability = self.calculate_route_success_probability(route).await;
         let random_value = (response_time_ms % 100) as f64 / 100.0;
-        
+
         let result = if random_value < success_probability {
             ExecutionResult::Success
         } else if response_time_ms > self.config.max_response_time {
@@ -522,13 +548,19 @@ impl FailoverRouter {
         amount: u64,
     ) -> Result<Vec<RoutePath>, Box<dyn std::error::Error>> {
         // Use pathfinder to generate alternative routes
-        let routes = self.pathfinder.write().await.find_k_shortest_paths(
-            &self.routing_graph,
-            input_token,
-            output_token,
-            amount as f64,
-            3, // Find up to 3 backup routes
-        ).await.map_err(|e| format!("Failed to generate backup routes: {}", e))?;
+        let routes = self
+            .pathfinder
+            .write()
+            .await
+            .find_k_shortest_paths(
+                &self.routing_graph,
+                input_token,
+                output_token,
+                amount as f64,
+                3, // Find up to 3 backup routes
+            )
+            .await
+            .map_err(|e| format!("Failed to generate backup routes: {}", e))?;
 
         Ok(routes)
     }
@@ -549,14 +581,20 @@ impl FailoverRouter {
             forbidden_dexs: None,
             max_price_impact: Some(self.config.emergency_price_impact_tolerance),
         };
-        
-        let routes = self.pathfinder.write().await.find_paths_with_constraints(
-            &self.routing_graph,
-            input_token,
-            output_token,
-            amount as f64,
-            &constraints,
-        ).await.map_err(|e| format!("Failed to generate emergency routes: {}", e))?;
+
+        let routes = self
+            .pathfinder
+            .write()
+            .await
+            .find_paths_with_constraints(
+                &self.routing_graph,
+                input_token,
+                output_token,
+                amount as f64,
+                &constraints,
+            )
+            .await
+            .map_err(|e| format!("Failed to generate emergency routes: {}", e))?;
 
         Ok(routes)
     }
@@ -585,7 +623,10 @@ impl FailoverRouter {
         // Try emergency routes if all else fails
         for emergency_route in &plan.emergency_routes {
             attempt_number += 1;
-            if let Ok(attempt) = self.try_execute_route(emergency_route, attempt_number).await {
+            if let Ok(attempt) = self
+                .try_execute_route(emergency_route, attempt_number)
+                .await
+            {
                 if matches!(attempt.result, ExecutionResult::Success) {
                     return Ok(attempt);
                 }
@@ -606,7 +647,10 @@ impl FailoverRouter {
             tokio::time::sleep(delay).await;
             attempt_number += 1;
 
-            if let Ok(attempt) = self.try_execute_route(&plan.primary_route, attempt_number).await {
+            if let Ok(attempt) = self
+                .try_execute_route(&plan.primary_route, attempt_number)
+                .await
+            {
                 if matches!(attempt.result, ExecutionResult::Success) {
                     return Ok(attempt);
                 }
@@ -637,7 +681,10 @@ impl FailoverRouter {
         // Try emergency routes with higher slippage tolerance
         for emergency_route in &plan.emergency_routes {
             attempt_number += 1;
-            if let Ok(attempt) = self.try_execute_route(emergency_route, attempt_number).await {
+            if let Ok(attempt) = self
+                .try_execute_route(emergency_route, attempt_number)
+                .await
+            {
                 if matches!(attempt.result, ExecutionResult::Success) {
                     return Ok(attempt);
                 }
@@ -658,13 +705,15 @@ impl FailoverRouter {
                 error_details: None,
                 response_time_ms: Some(500),
             };
-            self.update_dex_health(&step.dex_type.to_string(), &attempt).await;
+            self.update_dex_health(&step.dex_type.to_string(), &attempt)
+                .await;
         }
     }
 
     async fn record_execution_failure(&self, route: &RoutePath, attempt: &ExecutionAttempt) {
         for step in &route.steps {
-            self.update_dex_health(&step.dex_type.to_string(), attempt).await;
+            self.update_dex_health(&step.dex_type.to_string(), attempt)
+                .await;
         }
     }
 }
@@ -672,29 +721,31 @@ impl FailoverRouter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::arbitrage::routing::{RoutePath, RouteStep, PathFinder, RoutingGraph, PathfinderConfig};
+    use crate::arbitrage::routing::{
+        PathFinder, PathfinderConfig, RoutePath, RouteStep, RoutingGraph,
+    };
 
     fn create_test_route() -> RoutePath {
-        use solana_sdk::pubkey::Pubkey;
         use crate::utils::DexType;
+        use solana_sdk::pubkey::Pubkey;
         use std::str::FromStr;
-        
+
         RoutePath {
-            steps: vec![
-                RouteStep {
-                    pool_address: Pubkey::from_str("test_pool_1").unwrap_or_default(),
-                    dex_type: DexType::Orca,
-                    from_token: Pubkey::from_str("So11111111111111111111111111111111111111112").unwrap_or_default(),
-                    to_token: Pubkey::from_str("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v").unwrap_or_default(),
-                    amount_in: 1_000_000_000.0,
-                    amount_out: 999_000_000.0,
-                    fee_bps: 30,
-                    pool_liquidity: 10_000_000_000.0,
-                    price_impact: 0.001,
-                    execution_order: 0,
-                    slippage_tolerance: Some(0.005),
-                },
-            ],
+            steps: vec![RouteStep {
+                pool_address: Pubkey::from_str("test_pool_1").unwrap_or_default(),
+                dex_type: DexType::Orca,
+                from_token: Pubkey::from_str("So11111111111111111111111111111111111111112")
+                    .unwrap_or_default(),
+                to_token: Pubkey::from_str("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v")
+                    .unwrap_or_default(),
+                amount_in: 1_000_000_000.0,
+                amount_out: 999_000_000.0,
+                fee_bps: 30,
+                pool_liquidity: 10_000_000_000.0,
+                price_impact: 0.001,
+                execution_order: 0,
+                slippage_tolerance: Some(0.005),
+            }],
             total_fees: 0.0003,
             total_weight: 1.0,
             expected_output: 999_000_000.0,
@@ -713,7 +764,7 @@ mod tests {
         let pathfinder_config = PathfinderConfig::default();
         let pathfinder = Arc::new(RwLock::new(PathFinder::new(pathfinder_config)));
         let routing_graph = RoutingGraph::new();
-        
+
         FailoverRouter::new(config, pathfinder, routing_graph)
     }
 
@@ -722,12 +773,15 @@ mod tests {
         let mut router = create_test_failover_router();
         let primary_route = create_test_route();
 
-        let plan = router.create_failover_plan(
-            primary_route.clone(),
-            "So11111111111111111111111111111111111111112",
-            "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
-            1_000_000_000,
-        ).await.unwrap();
+        let plan = router
+            .create_failover_plan(
+                primary_route.clone(),
+                "So11111111111111111111111111111111111111112",
+                "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+                1_000_000_000,
+            )
+            .await
+            .unwrap();
 
         assert_eq!(plan.primary_route.steps.len(), primary_route.steps.len());
         assert!(plan.created_at <= SystemTime::now());
@@ -772,7 +826,7 @@ mod tests {
     #[test]
     fn test_circuit_breaker() {
         let mut cb = CircuitBreaker::new();
-        
+
         // Initially closed
         assert!(cb.can_execute());
         assert_eq!(cb.state, CircuitBreakerState::Closed);
@@ -780,7 +834,7 @@ mod tests {
         // Record failures
         let threshold = 3;
         let timeout = Duration::from_secs(10);
-        
+
         for _ in 0..threshold {
             cb.record_failure(threshold, timeout);
         }
@@ -818,7 +872,10 @@ mod tests {
     fn test_execution_status_ordering() {
         // Test that status ordering makes sense
         assert!(matches!(ExecutionStatus::Healthy, ExecutionStatus::Healthy));
-        assert!(matches!(ExecutionStatus::Degraded, ExecutionStatus::Degraded));
+        assert!(matches!(
+            ExecutionStatus::Degraded,
+            ExecutionStatus::Degraded
+        ));
         assert!(matches!(ExecutionStatus::Failed, ExecutionStatus::Failed));
     }
 

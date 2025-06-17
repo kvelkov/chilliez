@@ -1,29 +1,31 @@
 // src/dex/clients/lifinity.rs
 //! Lifinity DEX integration with proactive market making support.
 
-use crate::dex::api::{DexClient, Quote, SwapInfo, PoolDiscoverable, CommonSwapInfo, DexHealthStatus};
+use crate::dex::api::{
+    CommonSwapInfo, DexClient, DexHealthStatus, PoolDiscoverable, Quote, SwapInfo,
+};
 use crate::solana::rpc::SolanaRpcClient;
 use crate::utils::{DexType, PoolInfo, PoolParser as UtilsPoolParser, PoolToken};
 use anyhow::{anyhow, Result as AnyhowResult};
 use async_trait::async_trait;
 use bytemuck::{Pod, Zeroable};
+use futures;
 use log::{debug, info, warn};
 use solana_sdk::{
-    instruction::{Instruction, AccountMeta},
+    instruction::{AccountMeta, Instruction},
     program_pack::Pack,
     pubkey::Pubkey,
-    system_program,
-    sysvar,
+    system_program, sysvar,
 };
 use spl_token::state::{Account as TokenAccount, Mint};
 use std::sync::Arc;
-use futures;
 
 // Import our math functions for Lifinity calculations
 use crate::dex::math::lifinity::calculate_lifinity_output;
 
 // --- Constants ---
-pub const LIFINITY_PROGRAM_ID: Pubkey = solana_sdk::pubkey!("EewxydAPCCVuNEyrVN68PuSYdQ7wKn27V9Gjeoi8dy3S");
+pub const LIFINITY_PROGRAM_ID: Pubkey =
+    solana_sdk::pubkey!("EewxydAPCCVuNEyrVN68PuSYdQ7wKn27V9Gjeoi8dy3S");
 pub const LIFINITY_POOL_STATE_SIZE: usize = 1024; // Estimated size
 
 // Instruction discriminators
@@ -69,14 +71,23 @@ impl UtilsPoolParser for LifinityPoolParser {
         rpc_client: &Arc<SolanaRpcClient>,
     ) -> AnyhowResult<PoolInfo> {
         if data.len() < LIFINITY_POOL_STATE_SIZE {
-            return Err(anyhow!("Invalid Lifinity pool data size: expected {}, got {}", 
-                              LIFINITY_POOL_STATE_SIZE, data.len()));
+            return Err(anyhow!(
+                "Invalid Lifinity pool data size: expected {}, got {}",
+                LIFINITY_POOL_STATE_SIZE,
+                data.len()
+            ));
         }
 
-        let pool_state = bytemuck::from_bytes::<LifinityPoolState>(&data[..LIFINITY_POOL_STATE_SIZE]);
+        let pool_state =
+            bytemuck::from_bytes::<LifinityPoolState>(&data[..LIFINITY_POOL_STATE_SIZE]);
 
         // Fetch token account data concurrently
-        let (token_a_account_result, token_b_account_result, token_a_mint_result, token_b_mint_result) = tokio::join!(
+        let (
+            token_a_account_result,
+            token_b_account_result,
+            token_a_mint_result,
+            token_b_mint_result,
+        ) = tokio::join!(
             rpc_client.get_account_data(&pool_state.token_a_vault),
             rpc_client.get_account_data(&pool_state.token_b_vault),
             rpc_client.get_account_data(&pool_state.token_a_mint),
@@ -166,19 +177,19 @@ impl LifinityClient {
     ) -> Result<Instruction, crate::error::ArbError> {
         // Determine swap direction
         let swap_a_to_b = swap_info.source_token_mint == pool_info.token_a.mint;
-        
+
         let accounts = vec![
             AccountMeta::new_readonly(LIFINITY_PROGRAM_ID, false),
             AccountMeta::new_readonly(swap_info.user_wallet_pubkey, true), // Signer
-            AccountMeta::new(pool_info.address, false), // Pool state
-            AccountMeta::new(swap_info.user_source_token_account, false), // User source
+            AccountMeta::new(pool_info.address, false),                    // Pool state
+            AccountMeta::new(swap_info.user_source_token_account, false),  // User source
             AccountMeta::new(swap_info.user_destination_token_account, false), // User destination
-            AccountMeta::new(pool_info.token_a_vault, false), // Pool token A vault
-            AccountMeta::new(pool_info.token_b_vault, false), // Pool token B vault
-            AccountMeta::new_readonly(pool_info.token_a.mint, false), // Token A mint
-            AccountMeta::new_readonly(pool_info.token_b.mint, false), // Token B mint
-            AccountMeta::new_readonly(spl_token::id(), false), // Token program
-            AccountMeta::new_readonly(system_program::id(), false), // System program
+            AccountMeta::new(pool_info.token_a_vault, false),              // Pool token A vault
+            AccountMeta::new(pool_info.token_b_vault, false),              // Pool token B vault
+            AccountMeta::new_readonly(pool_info.token_a.mint, false),      // Token A mint
+            AccountMeta::new_readonly(pool_info.token_b.mint, false),      // Token B mint
+            AccountMeta::new_readonly(spl_token::id(), false),             // Token program
+            AccountMeta::new_readonly(system_program::id(), false),        // System program
             AccountMeta::new_readonly(sysvar::clock::id(), false), // Clock sysvar for oracle
         ];
 
@@ -232,8 +243,9 @@ impl DexClient for LifinityClient {
             pool.token_b.reserve,
             pool.fee_rate_bips.unwrap_or(25) as u32,
             oracle_price,
-        ).map_err(|e| anyhow!("Lifinity calculation failed: {}", e))?;
-        
+        )
+        .map_err(|e| anyhow!("Lifinity calculation failed: {}", e))?;
+
         // Calculate slippage estimate (higher for Lifinity due to proactive market making)
         let slippage_estimate = if input_amount > 0 && pool.token_a.reserve > 0 {
             let price_impact = (input_amount as f64) / (pool.token_a.reserve as f64);
@@ -241,7 +253,7 @@ impl DexClient for LifinityClient {
         } else {
             Some(0.1) // Default 0.1%
         };
-        
+
         Ok(Quote {
             input_token: pool.token_a.symbol.clone(),
             output_token: pool.token_b.symbol.clone(),
@@ -264,16 +276,18 @@ impl DexClient for LifinityClient {
             input_amount: swap_info.amount_in,
             minimum_output_amount: swap_info.min_output_amount,
             priority_fee_lamports: None, // Set as needed
-            slippage_bps: None, // Set as needed
+            slippage_bps: None,          // Set as needed
         };
-        
+
         // Create a pool_info Arc for the enhanced method
         let pool_info = Arc::new(swap_info.pool.clone());
-        
+
         // Use async runtime to call the enhanced method
         futures::executor::block_on(async {
-            self.get_swap_instruction_enhanced(&common_swap_info, pool_info).await
-        }).map_err(|e| anyhow!("Enhanced swap instruction failed: {}", e))
+            self.get_swap_instruction_enhanced(&common_swap_info, pool_info)
+                .await
+        })
+        .map_err(|e| anyhow!("Enhanced swap instruction failed: {}", e))
     }
 
     async fn get_swap_instruction_enhanced(
@@ -286,7 +300,7 @@ impl DexClient for LifinityClient {
 
     async fn discover_pools(&self) -> AnyhowResult<Vec<PoolInfo>> {
         info!("LifinityClient: Starting pool discovery...");
-        
+
         // Create enhanced sample pools with oracle integration
         let mut pools = Vec::new();
 
@@ -322,14 +336,20 @@ impl DexClient for LifinityClient {
             tick_array_2: None,
             oracle: Some(Pubkey::new_unique()),
         };
-        
+
         // Test oracle price calculation
         let oracle_price = self.calculate_oracle_price(&usdc_sol_pool);
-        debug!("Calculated oracle price for {}: {:?}", usdc_sol_pool.name, oracle_price);
-        
+        debug!(
+            "Calculated oracle price for {}: {:?}",
+            usdc_sol_pool.name, oracle_price
+        );
+
         pools.push(usdc_sol_pool);
 
-        info!("LifinityClient: Discovered {} pools with oracle integration", pools.len());
+        info!(
+            "LifinityClient: Discovered {} pools with oracle integration",
+            pools.len()
+        );
         Ok(pools)
     }
 
@@ -355,8 +375,11 @@ impl PoolDiscoverable for LifinityClient {
     async fn fetch_pool_data(&self, pool_address: Pubkey) -> AnyhowResult<PoolInfo> {
         // In production, this would fetch actual pool data using RPC client
         // For now, create a sample pool to demonstrate functionality
-        warn!("Lifinity: Fetching pool data for {} (using sample data)", pool_address);
-        
+        warn!(
+            "Lifinity: Fetching pool data for {} (using sample data)",
+            pool_address
+        );
+
         let sample_pool = PoolInfo {
             address: pool_address,
             name: "Lifinity Sample Pool".to_string(),
@@ -459,7 +482,7 @@ mod tests {
     #[test]
     fn test_oracle_price_zero_reserves() {
         let client = LifinityClient::new();
-        
+
         let mut pool_info = create_test_pool_info();
         pool_info.token_a.reserve = 0; // Fix: Use u64 instead of f64
 
@@ -471,9 +494,9 @@ mod tests {
     fn test_lifinity_quote_calculation() {
         let client = LifinityClient::new();
         let pool_info = create_test_pool_info();
-        
+
         let quote = client.calculate_onchain_quote(&pool_info, 100_000).unwrap();
-        
+
         assert_eq!(quote.input_amount, 100_000);
         assert!(quote.output_amount > 0);
         assert_eq!(quote.dex, "Lifinity");
@@ -484,12 +507,14 @@ mod tests {
     #[tokio::test]
     async fn test_pool_discovery() {
         let client = LifinityClient::new();
-        let pools = <LifinityClient as crate::dex::api::DexClient>::discover_pools(&client).await.unwrap();
-        
+        let pools = <LifinityClient as crate::dex::api::DexClient>::discover_pools(&client)
+            .await
+            .unwrap();
+
         // Should discover at least one pool
         assert!(!pools.is_empty());
         assert_eq!(pools[0].dex_type, DexType::Lifinity);
-        
+
         // Oracle price should be calculated for pools
         let oracle_price = client.calculate_oracle_price(&pools[0]);
         assert!(oracle_price.is_some());

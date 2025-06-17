@@ -1,6 +1,6 @@
 // examples/advanced_routing_demo.rs
 //! Advanced Multi-Hop and Smart Order Routing Demo
-//! 
+//!
 //! Demonstrates the comprehensive routing capabilities:
 //! - Cross-DEX multi-hop routing optimization
 //! - Path finding with multiple algorithms
@@ -10,20 +10,18 @@
 //! - Automatic failover and recovery
 //! - Performance monitoring and analytics
 
-use std::time::{Duration, SystemTime};
-use std::sync::Arc;
 use solana_sdk::pubkey::Pubkey;
 use std::str::FromStr;
+use std::sync::Arc;
+use std::time::{Duration, SystemTime};
 
-use solana_arb_bot::arbitrage::routing::{
-    SmartRouter, SmartRouterConfig, RouteRequest, RoutingPriority,
-    RoutingGraph, LiquidityPool,
-    PathfinderConfig, PathfinderAlgorithm, MevProtectionConfig, FailoverConfig,
-    OptimizationGoal, SplitStrategy, MevRisk, PoolMetrics, PoolHealth,
-    RouteConstraints,
-};
 use solana_arb_bot::arbitrage::analysis::fee::FeeEstimator;
-use solana_arb_bot::utils::{PoolInfo, PoolToken, DexType};
+use solana_arb_bot::arbitrage::routing::{
+    FailoverConfig, LiquidityPool, MevProtectionConfig, MevRisk, OptimizationGoal,
+    PathfinderAlgorithm, PathfinderConfig, PoolHealth, PoolMetrics, RouteConstraints, RouteRequest,
+    RoutingGraph, RoutingPriority, SmartRouter, SmartRouterConfig, SplitStrategy,
+};
+use solana_arb_bot::utils::{DexType, PoolInfo, PoolToken};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -63,11 +61,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("\n✅ Advanced Routing Demo Complete!");
     println!("All multi-hop and smart order routing features demonstrated successfully.");
-    
+
     Ok(())
 }
 
-async fn setup_routing_infrastructure() -> Result<(SmartRouter, RoutingGraph), Box<dyn std::error::Error>> {
+async fn setup_routing_infrastructure(
+) -> Result<(SmartRouter, RoutingGraph), Box<dyn std::error::Error>> {
     println!("🔧 Setting up routing infrastructure...");
 
     // Create comprehensive routing configuration
@@ -128,7 +127,9 @@ async fn setup_routing_infrastructure() -> Result<(SmartRouter, RoutingGraph), B
     Ok((smart_router, routing_graph))
 }
 
-async fn setup_realistic_routing_graph(graph: &mut RoutingGraph) -> Result<(), Box<dyn std::error::Error>> {
+async fn setup_realistic_routing_graph(
+    graph: &mut RoutingGraph,
+) -> Result<(), Box<dyn std::error::Error>> {
     // SOL token
     let sol_token = Pubkey::from_str("So11111111111111111111111111111111111111112")?;
     // USDC token
@@ -165,7 +166,10 @@ async fn setup_realistic_routing_graph(graph: &mut RoutingGraph) -> Result<(), B
         fee_numerator: Some(3),
         fee_denominator: Some(1000),
         fee_rate_bips: Some(30),
-        last_update_timestamp: SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap().as_secs(),
+        last_update_timestamp: SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_secs(),
         dex_type: DexType::Orca,
         liquidity: Some(50_000_000_000_000),
         sqrt_price: None,
@@ -176,7 +180,7 @@ async fn setup_realistic_routing_graph(graph: &mut RoutingGraph) -> Result<(), B
         tick_array_2: None,
         oracle: None,
     });
-    
+
     let orca_sol_usdc = LiquidityPool {
         info: orca_sol_usdc_info,
         metrics: PoolMetrics {
@@ -217,7 +221,10 @@ async fn setup_realistic_routing_graph(graph: &mut RoutingGraph) -> Result<(), B
         fee_numerator: Some(3),
         fee_denominator: Some(1000),
         fee_rate_bips: Some(30),
-        last_update_timestamp: SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap().as_secs(),
+        last_update_timestamp: SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_secs(),
         dex_type: DexType::Orca,
         liquidity: Some(30_000_000_000_000),
         sqrt_price: None,
@@ -228,7 +235,7 @@ async fn setup_realistic_routing_graph(graph: &mut RoutingGraph) -> Result<(), B
         tick_array_2: None,
         oracle: None,
     });
-    
+
     let orca_eth_usdc = LiquidityPool {
         info: orca_eth_usdc_info,
         metrics: PoolMetrics {
@@ -270,7 +277,10 @@ async fn setup_realistic_routing_graph(graph: &mut RoutingGraph) -> Result<(), B
         fee_numerator: Some(25),
         fee_denominator: Some(10000),
         fee_rate_bips: Some(25),
-        last_update_timestamp: SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap().as_secs(),
+        last_update_timestamp: SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_secs(),
         dex_type: DexType::Raydium,
         liquidity: Some(40_000_000_000_000),
         sqrt_price: None,
@@ -281,7 +291,7 @@ async fn setup_realistic_routing_graph(graph: &mut RoutingGraph) -> Result<(), B
         tick_array_2: None,
         oracle: None,
     });
-    
+
     let raydium_sol_usdc = LiquidityPool {
         info: raydium_sol_usdc_info,
         metrics: PoolMetrics {
@@ -322,7 +332,10 @@ async fn setup_realistic_routing_graph(graph: &mut RoutingGraph) -> Result<(), B
         fee_numerator: Some(25),
         fee_denominator: Some(10000),
         fee_rate_bips: Some(25),
-        last_update_timestamp: SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap().as_secs(),
+        last_update_timestamp: SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_secs(),
         dex_type: DexType::Raydium,
         liquidity: Some(25_000_000_000_000),
         sqrt_price: None,
@@ -333,7 +346,7 @@ async fn setup_realistic_routing_graph(graph: &mut RoutingGraph) -> Result<(), B
         tick_array_2: None,
         oracle: None,
     });
-    
+
     let raydium_btc_sol = LiquidityPool {
         info: raydium_btc_sol_info,
         metrics: PoolMetrics {
@@ -375,7 +388,10 @@ async fn setup_realistic_routing_graph(graph: &mut RoutingGraph) -> Result<(), B
         fee_numerator: Some(2),
         fee_denominator: Some(1000),
         fee_rate_bips: Some(20),
-        last_update_timestamp: SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap().as_secs(),
+        last_update_timestamp: SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_secs(),
         dex_type: DexType::Meteora,
         liquidity: Some(20_000_000_000_000),
         sqrt_price: None,
@@ -386,7 +402,7 @@ async fn setup_realistic_routing_graph(graph: &mut RoutingGraph) -> Result<(), B
         tick_array_2: None,
         oracle: None,
     });
-    
+
     let meteora_sol_eth = LiquidityPool {
         info: meteora_sol_eth_info,
         metrics: PoolMetrics {
@@ -428,7 +444,10 @@ async fn setup_realistic_routing_graph(graph: &mut RoutingGraph) -> Result<(), B
         fee_numerator: Some(15),
         fee_denominator: Some(10000),
         fee_rate_bips: Some(15),
-        last_update_timestamp: SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap().as_secs(),
+        last_update_timestamp: SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_secs(),
         dex_type: DexType::Jupiter,
         liquidity: Some(35_000_000_000_000),
         sqrt_price: None,
@@ -439,7 +458,7 @@ async fn setup_realistic_routing_graph(graph: &mut RoutingGraph) -> Result<(), B
         tick_array_2: None,
         oracle: None,
     });
-    
+
     let jupiter_btc_usdc = LiquidityPool {
         info: jupiter_btc_usdc_info,
         metrics: PoolMetrics {
@@ -468,21 +487,26 @@ async fn setup_realistic_routing_graph(graph: &mut RoutingGraph) -> Result<(), B
     graph.add_pool(meteora_sol_eth.info)?;
     graph.add_pool(jupiter_btc_usdc.info)?;
 
-    println!("  📊 Added {} tokens and {} pools to routing graph", 
-             graph.token_count(), graph.pool_count());
+    println!(
+        "  📊 Added {} tokens and {} pools to routing graph",
+        graph.token_count(),
+        graph.pool_count()
+    );
 
     Ok(())
 }
 
-async fn basic_multi_hop_demo(smart_router: &mut SmartRouter) -> Result<(), Box<dyn std::error::Error>> {
+async fn basic_multi_hop_demo(
+    smart_router: &mut SmartRouter,
+) -> Result<(), Box<dyn std::error::Error>> {
     println!("  🔄 Finding multi-hop route: SOL → ETH → USDC");
 
     let request = RouteRequest {
         input_token: "So11111111111111111111111111111111111111112".to_string(), // SOL
         output_token: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v".to_string(), // USDC
-        amount: 1_000_000_000, // 1 SOL
-        max_slippage: Some(0.01), // 1%
-        max_price_impact: Some(0.02), // 2%
+        amount: 1_000_000_000,                                                  // 1 SOL
+        max_slippage: Some(0.01),                                               // 1%
+        max_price_impact: Some(0.02),                                           // 2%
         preferred_dexs: None,
         excluded_dexs: None,
         max_hops: Some(3),
@@ -500,34 +524,45 @@ async fn basic_multi_hop_demo(smart_router: &mut SmartRouter) -> Result<(), Box<
 
     let result = smart_router.find_optimal_route(request).await?;
 
-    println!("  ✅ Found optimal route with {} steps:", result.best_route.steps.len());
+    println!(
+        "  ✅ Found optimal route with {} steps:",
+        result.best_route.steps.len()
+    );
     for (i, step) in result.best_route.steps.iter().enumerate() {
-        println!("    Step {}: {} → {} via {} ({})", 
-                i + 1, 
-                format_token(&step.from_token.to_string()),
-                format_token(&step.to_token.to_string()),
-                step.dex_type.to_string(),
-                step.pool_address);
+        println!(
+            "    Step {}: {} → {} via {} ({})",
+            i + 1,
+            format_token(&step.from_token.to_string()),
+            format_token(&step.to_token.to_string()),
+            step.dex_type.to_string(),
+            step.pool_address
+        );
     }
 
-    println!("  💰 Expected output: {} USDC", 
-             result.best_route.expected_output / 1_000_000.0);
-    println!("  🎯 Price impact: {:.3}%", 
-             result.quality_metrics.price_impact);
+    println!(
+        "  💰 Expected output: {} USDC",
+        result.best_route.expected_output / 1_000_000.0
+    );
+    println!(
+        "  🎯 Price impact: {:.3}%",
+        result.quality_metrics.price_impact
+    );
     println!("  ⚡ Computation time: {:?}", result.computation_time);
 
     Ok(())
 }
 
-async fn cross_dex_routing_demo(smart_router: &mut SmartRouter) -> Result<(), Box<dyn std::error::Error>> {
+async fn cross_dex_routing_demo(
+    smart_router: &mut SmartRouter,
+) -> Result<(), Box<dyn std::error::Error>> {
     println!("  🌐 Optimizing cross-DEX routing for best prices");
 
     let request = RouteRequest {
         input_token: "So11111111111111111111111111111111111111112".to_string(), // SOL
         output_token: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v".to_string(), // USDC
-        amount: 5_000_000_000, // 5 SOL
-        max_slippage: Some(0.015), // 1.5%
-        max_price_impact: Some(0.03), // 3%
+        amount: 5_000_000_000,                                                  // 5 SOL
+        max_slippage: Some(0.015),                                              // 1.5%
+        max_price_impact: Some(0.03),                                           // 3%
         preferred_dexs: None,
         excluded_dexs: None,
         max_hops: Some(2),
@@ -547,34 +582,48 @@ async fn cross_dex_routing_demo(smart_router: &mut SmartRouter) -> Result<(), Bo
 
     println!("  ✅ Primary route optimization:");
     println!("    Route Score: {:.3}", result.route_score.total_score);
-    println!("    DEXs used: {}", 
-             result.best_route.steps.iter()
-                 .map(|s| s.dex_type.to_string())
-                 .collect::<Vec<_>>()
-                 .join(" → "));
+    println!(
+        "    DEXs used: {}",
+        result
+            .best_route
+            .steps
+            .iter()
+            .map(|s| s.dex_type.to_string())
+            .collect::<Vec<_>>()
+            .join(" → ")
+    );
 
-    println!("  🔄 Alternative routes found: {}", result.alternative_routes.len());
+    println!(
+        "  🔄 Alternative routes found: {}",
+        result.alternative_routes.len()
+    );
     for (i, alt_route) in result.alternative_routes.iter().take(3).enumerate() {
-        println!("    Alt {}: Expected output = {} USDC, DEXs = {}", 
-                i + 1,
-                alt_route.expected_output / 1_000_000.0,
-                alt_route.steps.iter()
-                    .map(|s| s.dex_type.to_string())
-                    .collect::<Vec<_>>()
-                    .join(" → "));
+        println!(
+            "    Alt {}: Expected output = {} USDC, DEXs = {}",
+            i + 1,
+            alt_route.expected_output / 1_000_000.0,
+            alt_route
+                .steps
+                .iter()
+                .map(|s| s.dex_type.to_string())
+                .collect::<Vec<_>>()
+                .join(" → ")
+        );
     }
 
     Ok(())
 }
 
-async fn route_splitting_demo(smart_router: &mut SmartRouter) -> Result<(), Box<dyn std::error::Error>> {
+async fn route_splitting_demo(
+    smart_router: &mut SmartRouter,
+) -> Result<(), Box<dyn std::error::Error>> {
     println!("  ✂️ Demonstrating route splitting for large orders");
 
     let request = RouteRequest {
         input_token: "So11111111111111111111111111111111111111112".to_string(), // SOL
         output_token: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v".to_string(), // USDC
-        amount: 50_000_000_000, // 50 SOL (large order)
-        max_slippage: Some(0.02), // 2%
+        amount: 50_000_000_000,       // 50 SOL (large order)
+        max_slippage: Some(0.02),     // 2%
         max_price_impact: Some(0.05), // 5%
         preferred_dexs: None,
         excluded_dexs: None,
@@ -594,25 +643,40 @@ async fn route_splitting_demo(smart_router: &mut SmartRouter) -> Result<(), Box<
     let result = smart_router.find_optimal_route(request).await?;
 
     if let Some(splits) = &result.split_routes {
-        println!("  ✅ Order split into {} sub-routes:", splits.split_routes.len());
-        
+        println!(
+            "  ✅ Order split into {} sub-routes:",
+            splits.split_routes.len()
+        );
+
         for (i, split_route) in splits.split_routes.iter().enumerate() {
-            println!("    Split {}: {} SOL via {} → {} USDC expected", 
-                    i + 1,
-                    split_route.amount_in / 1_000_000_000.0,
-                    split_route.route_path.steps.iter()
-                        .map(|s| s.dex_type.to_string())
-                        .collect::<Vec<_>>()
-                        .join(" → "),
-                    split_route.expected_amount_out / 1_000_000.0);
+            println!(
+                "    Split {}: {} SOL via {} → {} USDC expected",
+                i + 1,
+                split_route.amount_in / 1_000_000_000.0,
+                split_route
+                    .route_path
+                    .steps
+                    .iter()
+                    .map(|s| s.dex_type.to_string())
+                    .collect::<Vec<_>>()
+                    .join(" → "),
+                split_route.expected_amount_out / 1_000_000.0
+            );
         }
 
         println!("  💡 Splitting benefits:");
-        println!("    Reduced price impact: {:.3}% vs single route",
-                 result.quality_metrics.price_impact);
-        println!("    Total expected output: {} USDC",
-                 splits.total_expected_output);
-        println!("    Improvement over single route: {:.2}%", splits.improvement_over_single);
+        println!(
+            "    Reduced price impact: {:.3}% vs single route",
+            result.quality_metrics.price_impact
+        );
+        println!(
+            "    Total expected output: {} USDC",
+            splits.total_expected_output
+        );
+        println!(
+            "    Improvement over single route: {:.2}%",
+            splits.improvement_over_single
+        );
         println!("    Confidence score: {:.3}", splits.confidence_score);
     } else {
         println!("  ℹ️ No splitting recommended for this order");
@@ -621,15 +685,17 @@ async fn route_splitting_demo(smart_router: &mut SmartRouter) -> Result<(), Box<
     Ok(())
 }
 
-async fn mev_aware_routing_demo(smart_router: &mut SmartRouter) -> Result<(), Box<dyn std::error::Error>> {
+async fn mev_aware_routing_demo(
+    smart_router: &mut SmartRouter,
+) -> Result<(), Box<dyn std::error::Error>> {
     println!("  🛡️ Analyzing MEV risks and applying protection");
 
     let request = RouteRequest {
         input_token: "So11111111111111111111111111111111111111112".to_string(), // SOL
         output_token: "9n4nbM75f5Ui33ZbPYXn59EwSgE8CGsHtAeTH5YFeJ9E".to_string(), // BTC
-        amount: 10_000_000_000, // 10 SOL
-        max_slippage: Some(0.03), // 3%
-        max_price_impact: Some(0.04), // 4%
+        amount: 10_000_000_000,                                                 // 10 SOL
+        max_slippage: Some(0.03),                                               // 3%
+        max_price_impact: Some(0.04),                                           // 4%
         preferred_dexs: None,
         excluded_dexs: None,
         max_hops: Some(3),
@@ -650,7 +716,10 @@ async fn mev_aware_routing_demo(smart_router: &mut SmartRouter) -> Result<(), Bo
     println!("  🔍 MEV Threat Analysis:");
     println!("    Risk Level: {:?}", result.mev_analysis.risk_level);
     println!("    Risk Score: {:.3}", result.mev_analysis.risk_score);
-    println!("    Detected Attacks: {:?}", result.mev_analysis.detected_attacks);
+    println!(
+        "    Detected Attacks: {:?}",
+        result.mev_analysis.detected_attacks
+    );
 
     println!("  🛡️ Applied Protection Measures:");
     for measure in &result.protected_route.protection_measures {
@@ -658,8 +727,14 @@ async fn mev_aware_routing_demo(smart_router: &mut SmartRouter) -> Result<(), Bo
     }
 
     println!("  ⏱️ Execution Timing:");
-    println!("    Random Delay: {}ms", result.protected_route.execution_timing.random_delay_ms);
-    println!("    Use Burst Execution: {}", result.protected_route.execution_timing.use_burst_execution);
+    println!(
+        "    Random Delay: {}ms",
+        result.protected_route.execution_timing.random_delay_ms
+    );
+    println!(
+        "    Use Burst Execution: {}",
+        result.protected_route.execution_timing.use_burst_execution
+    );
 
     if let Some(jito_config) = &result.protected_route.jito_config {
         println!("  💰 Jito Bundle Configuration:");
@@ -670,15 +745,17 @@ async fn mev_aware_routing_demo(smart_router: &mut SmartRouter) -> Result<(), Bo
     Ok(())
 }
 
-async fn failover_recovery_demo(smart_router: &mut SmartRouter) -> Result<(), Box<dyn std::error::Error>> {
+async fn failover_recovery_demo(
+    smart_router: &mut SmartRouter,
+) -> Result<(), Box<dyn std::error::Error>> {
     println!("  🔄 Testing failover and recovery mechanisms");
 
     let request = RouteRequest {
         input_token: "So11111111111111111111111111111111111111112".to_string(), // SOL
         output_token: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v".to_string(), // USDC
-        amount: 2_000_000_000, // 2 SOL
-        max_slippage: Some(0.015), // 1.5%
-        max_price_impact: Some(0.025), // 2.5%
+        amount: 2_000_000_000,                                                  // 2 SOL
+        max_slippage: Some(0.015),                                              // 1.5%
+        max_price_impact: Some(0.025),                                          // 2.5%
         preferred_dexs: None,
         excluded_dexs: Some(vec!["Orca".to_string()]), // Simulate Orca being down
         max_hops: Some(3),
@@ -697,39 +774,83 @@ async fn failover_recovery_demo(smart_router: &mut SmartRouter) -> Result<(), Bo
     let result = smart_router.find_optimal_route(request).await?;
 
     println!("  ✅ Failover Plan Generated:");
-    println!("    Primary Route: {} → {} via {}", 
-             format_token(&result.failover_plan.primary_route.steps.first().map(|s| s.from_token.to_string()).unwrap_or_default()),
-             format_token(&result.failover_plan.primary_route.steps.last().map(|s| s.to_token.to_string()).unwrap_or_default()),
-             result.failover_plan.primary_route.steps.iter()
-                 .map(|s| s.dex_type.to_string())
-                 .collect::<Vec<_>>()
-                 .join(" → "));
+    println!(
+        "    Primary Route: {} → {} via {}",
+        format_token(
+            &result
+                .failover_plan
+                .primary_route
+                .steps
+                .first()
+                .map(|s| s.from_token.to_string())
+                .unwrap_or_default()
+        ),
+        format_token(
+            &result
+                .failover_plan
+                .primary_route
+                .steps
+                .last()
+                .map(|s| s.to_token.to_string())
+                .unwrap_or_default()
+        ),
+        result
+            .failover_plan
+            .primary_route
+            .steps
+            .iter()
+            .map(|s| s.dex_type.to_string())
+            .collect::<Vec<_>>()
+            .join(" → ")
+    );
 
-    println!("    Backup Routes: {}", result.failover_plan.backup_routes.len());
-    for (i, backup) in result.failover_plan.backup_routes.iter().take(2).enumerate() {
-        println!("      Backup {}: via {}", 
-                i + 1,
-                backup.steps.iter()
-                    .map(|s| s.dex_type.to_string())
-                    .collect::<Vec<_>>()
-                    .join(" → "));
+    println!(
+        "    Backup Routes: {}",
+        result.failover_plan.backup_routes.len()
+    );
+    for (i, backup) in result
+        .failover_plan
+        .backup_routes
+        .iter()
+        .take(2)
+        .enumerate()
+    {
+        println!(
+            "      Backup {}: via {}",
+            i + 1,
+            backup
+                .steps
+                .iter()
+                .map(|s| s.dex_type.to_string())
+                .collect::<Vec<_>>()
+                .join(" → ")
+        );
     }
 
-    println!("    Emergency Routes: {}", result.failover_plan.emergency_routes.len());
+    println!(
+        "    Emergency Routes: {}",
+        result.failover_plan.emergency_routes.len()
+    );
     println!("    Strategy: {:?}", result.failover_plan.strategy);
 
     // Get DEX health status
     let health_status = smart_router.get_dex_health_status().await;
     println!("  🏥 DEX Health Status:");
     for (dex_name, health) in health_status.iter().take(4) {
-        println!("    {}: {:?} (Success Rate: {:.1}%)", 
-                dex_name, health.status, health.success_rate * 100.0);
+        println!(
+            "    {}: {:?} (Success Rate: {:.1}%)",
+            dex_name,
+            health.status,
+            health.success_rate * 100.0
+        );
     }
 
     Ok(())
 }
 
-async fn performance_monitoring_demo(smart_router: &mut SmartRouter) -> Result<(), Box<dyn std::error::Error>> {
+async fn performance_monitoring_demo(
+    smart_router: &mut SmartRouter,
+) -> Result<(), Box<dyn std::error::Error>> {
     println!("  📊 Performance monitoring and analytics");
 
     // Perform several routing requests to generate metrics
@@ -772,7 +893,9 @@ async fn performance_monitoring_demo(smart_router: &mut SmartRouter) -> Result<(
     Ok(())
 }
 
-async fn real_time_optimization_demo(smart_router: &mut SmartRouter) -> Result<(), Box<dyn std::error::Error>> {
+async fn real_time_optimization_demo(
+    smart_router: &mut SmartRouter,
+) -> Result<(), Box<dyn std::error::Error>> {
     println!("  ⚡ Real-time route optimization and updates");
 
     // Simulate market data updates
@@ -796,7 +919,10 @@ async fn real_time_optimization_demo(smart_router: &mut SmartRouter) -> Result<(
         fee_numerator: Some(25),
         fee_denominator: Some(10000),
         fee_rate_bips: Some(25),
-        last_update_timestamp: SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap().as_secs(),
+        last_update_timestamp: SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_secs(),
         dex_type: DexType::Orca,
         liquidity: Some(55_000_000_000_000),
         sqrt_price: None,
@@ -807,9 +933,10 @@ async fn real_time_optimization_demo(smart_router: &mut SmartRouter) -> Result<(
         tick_array_2: None,
         oracle: None,
     });
-    
-    let pool_updates = vec![
-        ("orca_sol_usdc".to_string(), LiquidityPool {
+
+    let pool_updates = vec![(
+        "orca_sol_usdc".to_string(),
+        LiquidityPool {
             info: orca_sol_usdc_update_info,
             metrics: PoolMetrics {
                 volume_24h: 12_000_000.0,
@@ -827,8 +954,8 @@ async fn real_time_optimization_demo(smart_router: &mut SmartRouter) -> Result<(
                 spread_quality_score: 0.96,
                 overall_score: 0.98,
             },
-        }),
-    ];
+        },
+    )];
 
     println!("  📡 Updating routing graph with latest pool data...");
     smart_router.update_routing_graph(pool_updates).await?;
@@ -857,16 +984,33 @@ async fn real_time_optimization_demo(smart_router: &mut SmartRouter) -> Result<(
     let result = smart_router.find_optimal_route(request).await?;
 
     println!("  ✅ Optimized route after updates:");
-    println!("    Expected Return: {:.3}%", result.quality_metrics.expected_return);
-    println!("    Liquidity Score: {:.3}", result.quality_metrics.liquidity_score);
-    println!("    Reliability Score: {:.3}", result.quality_metrics.reliability_score);
-    println!("    Success Probability: {:.1}%", 
-             result.quality_metrics.success_probability * 100.0);
+    println!(
+        "    Expected Return: {:.3}%",
+        result.quality_metrics.expected_return
+    );
+    println!(
+        "    Liquidity Score: {:.3}",
+        result.quality_metrics.liquidity_score
+    );
+    println!(
+        "    Reliability Score: {:.3}",
+        result.quality_metrics.reliability_score
+    );
+    println!(
+        "    Success Probability: {:.1}%",
+        result.quality_metrics.success_probability * 100.0
+    );
 
     println!("  🤖 Execution Recommendation:");
     println!("    Action: {:?}", result.execution_recommendation.action);
-    println!("    Confidence: {:.1}%", result.execution_recommendation.confidence * 100.0);
-    println!("    Reasoning: {}", result.execution_recommendation.reasoning);
+    println!(
+        "    Confidence: {:.1}%",
+        result.execution_recommendation.confidence * 100.0
+    );
+    println!(
+        "    Reasoning: {}",
+        result.execution_recommendation.reasoning
+    );
 
     // Clear cache to demonstrate cache management
     smart_router.clear_cache().await;

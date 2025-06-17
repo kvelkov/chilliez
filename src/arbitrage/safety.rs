@@ -1,5 +1,5 @@
 //! Arbitrage Transaction Safety Module
-//! 
+//!
 //! This module provides comprehensive safety checks, retry logic, and recovery mechanisms
 //! specifically for arbitrage transaction execution. It includes:
 //! - Safe transaction execution with retry policies
@@ -10,15 +10,15 @@
 use anyhow::{anyhow, Result};
 use log::{debug, info, warn};
 use serde::{Deserialize, Serialize};
+use solana_sdk::{instruction::Instruction, transaction::Transaction};
 use std::{
     sync::{Arc, RwLock},
     time::{Duration, Instant},
 };
 use tokio::time::sleep;
-use solana_sdk::{transaction::Transaction, instruction::Instruction};
 
-use crate::arbitrage::analysis::{FeeBreakdown};
 use crate::arbitrage::analysis::math::EnhancedSlippageModel;
+use crate::arbitrage::analysis::FeeBreakdown;
 use crate::{
     solana::rpc::SolanaRpcClient,
     utils::{PoolInfo, TokenAmount},
@@ -249,16 +249,18 @@ impl SafeTransactionHandler {
     ) -> Result<TransactionResult> {
         let start_time = Instant::now();
         let mut attempt = 0;
-        
-        info!("🛡️ Executing transaction with safety checks: input={}, expected_output={}", 
-              input_amount, expected_output);
-        
+
+        info!(
+            "🛡️ Executing transaction with safety checks: input={}, expected_output={}",
+            input_amount, expected_output
+        );
+
         // Convert parameters for internal use
         let input_token_amount = TokenAmount {
             amount: input_amount,
             decimals: 9, // Assume SOL decimals
         };
-        
+
         // Validate pre-execution conditions
         if self.config.balance_validation.enabled {
             if let Err(e) = self.validate_sufficient_balance(&input_token_amount).await {
@@ -272,41 +274,46 @@ impl SafeTransactionHandler {
                     confirmation_slots: None,
                     retry_count: 0,
                     failure_reason: Some(format!("Balance validation failed: {}", e)),
-                    safety_violations: vec![SafetyViolation::InsufficientBalance { 
-                        required: input_amount, 
-                        available: 0 
+                    safety_violations: vec![SafetyViolation::InsufficientBalance {
+                        required: input_amount,
+                        available: 0,
                     }],
                 });
             }
         }
-        
+
         // Attempt execution with retries
         while attempt < self.config.retry_policy.max_attempts {
             attempt += 1;
-            
-            match self.execute_transaction_attempt(&transaction, attempt).await {
+
+            match self
+                .execute_transaction_attempt(&transaction, attempt)
+                .await
+            {
                 Ok(signature) => {
                     let execution_time = start_time.elapsed().as_millis() as u64;
-                    
+
                     // Estimate actual output and slippage (simplified)
                     let actual_output = self.estimate_actual_output(expected_output, pools).await;
-                    let slippage = self.calculate_slippage_experienced(expected_output, actual_output);
-                    
+                    let slippage =
+                        self.calculate_slippage_experienced(expected_output, actual_output);
+
                     // Check for slippage violations
                     let mut violations = Vec::new();
-                    if self.config.slippage_protection.enabled && 
-                       slippage > self.config.slippage_protection.max_slippage_percent / 100.0 {
+                    if self.config.slippage_protection.enabled
+                        && slippage > self.config.slippage_protection.max_slippage_percent / 100.0
+                    {
                         violations.push(SafetyViolation::ExcessiveSlippage {
                             expected: 0.0,
                             actual: slippage,
                         });
                     }
-                    
+
                     let success = violations.is_empty();
-                    
+
                     info!("✅ Transaction executed successfully: signature={}, slippage={:.2}%, violations={}", 
                           signature, slippage * 100.0, violations.len());
-                    
+
                     return Ok(TransactionResult {
                         signature: Some(signature.to_string()),
                         success,
@@ -316,13 +323,17 @@ impl SafeTransactionHandler {
                         execution_time_ms: execution_time,
                         confirmation_slots: Some(1), // Simplified
                         retry_count: attempt,
-                        failure_reason: if success { None } else { Some("Slippage violation".to_string()) },
+                        failure_reason: if success {
+                            None
+                        } else {
+                            Some("Slippage violation".to_string())
+                        },
                         safety_violations: violations,
                     });
                 }
                 Err(e) => {
                     warn!("❌ Transaction attempt {} failed: {}", attempt, e);
-                    
+
                     if attempt < self.config.retry_policy.max_attempts {
                         // Apply retry delay
                         let delay = if self.config.retry_policy.exponential_backoff {
@@ -330,11 +341,11 @@ impl SafeTransactionHandler {
                         } else {
                             self.config.retry_policy.base_delay_ms
                         };
-                        
+
                         sleep(Duration::from_millis(delay)).await;
                         continue;
                     }
-                    
+
                     // All attempts failed
                     return Ok(TransactionResult {
                         signature: None,
@@ -345,13 +356,16 @@ impl SafeTransactionHandler {
                         execution_time_ms: start_time.elapsed().as_millis() as u64,
                         confirmation_slots: None,
                         retry_count: attempt,
-                        failure_reason: Some(format!("All {} attempts failed. Last error: {}", attempt, e)),
+                        failure_reason: Some(format!(
+                            "All {} attempts failed. Last error: {}",
+                            attempt, e
+                        )),
                         safety_violations: vec![],
                     });
                 }
             }
         }
-        
+
         // Should not reach here
         Err(anyhow!("Unexpected execution flow"))
     }
@@ -363,13 +377,13 @@ impl SafeTransactionHandler {
         attempt: u32,
     ) -> Result<solana_sdk::signature::Signature> {
         debug!("🚀 Executing transaction attempt {}", attempt);
-        
+
         // For now, use a simplified approach since we don't have direct access to the RPC client
         // In a real implementation, this would use the SolanaRpcClient properly
-        
+
         // Simulate transaction execution (replace with actual RPC call)
         tokio::time::sleep(Duration::from_millis(100)).await; // Simulate network delay
-        
+
         // For demonstration, randomly succeed or fail based on attempt
         if attempt <= 2 {
             let dummy_signature = solana_sdk::signature::Signature::new_unique();
@@ -383,12 +397,12 @@ impl SafeTransactionHandler {
     async fn estimate_actual_output(&self, expected_output: u64, _pools: &[&PoolInfo]) -> u64 {
         use rust_decimal::Decimal;
         use rust_decimal_macros::dec;
-        
+
         // Simulate some slippage using precise decimal arithmetic
         let expected_decimal = Decimal::from(expected_output);
         let slippage_factor = dec!(0.98); // 2% slippage
         let actual_decimal = expected_decimal * slippage_factor;
-        
+
         // Convert back to u64 via string parsing to avoid precision loss
         if let Ok(actual_str) = actual_decimal.round().to_string().parse::<u64>() {
             actual_str
@@ -399,19 +413,19 @@ impl SafeTransactionHandler {
 
     /// Calculate slippage experienced with precise decimal arithmetic
     fn calculate_slippage_experienced(&self, expected: u64, actual: u64) -> f64 {
-        use rust_decimal::Decimal;
         use num_traits::ToPrimitive;
-        
+        use rust_decimal::Decimal;
+
         if expected == 0 {
             return 0.0;
         }
-        
+
         // Use precise decimal arithmetic for slippage calculation
         let expected_decimal = Decimal::from(expected);
         let actual_decimal = Decimal::from(actual);
-        
+
         let slippage_decimal = (expected_decimal - actual_decimal) / expected_decimal;
-        
+
         // Convert back to f64 only for API compatibility
         slippage_decimal.to_f64().unwrap_or(0.0)
     }
@@ -426,15 +440,19 @@ impl SafeTransactionHandler {
     async fn validate_sufficient_balance(&self, input_amount: &TokenAmount) -> Result<()> {
         // Simplified balance validation
         // In a real implementation, this would check actual wallet balances
-        
-        let required_balance = input_amount.amount + self.config.balance_validation.minimum_sol_balance;
+
+        let required_balance =
+            input_amount.amount + self.config.balance_validation.minimum_sol_balance;
         let available_balance = 1_000_000_000; // Assume 1 SOL available (simplified)
-        
+
         if available_balance < required_balance {
-            return Err(anyhow!("Insufficient balance: required {} lamports, available {} lamports", 
-                              required_balance, available_balance));
+            return Err(anyhow!(
+                "Insufficient balance: required {} lamports, available {} lamports",
+                required_balance,
+                available_balance
+            ));
         }
-        
+
         Ok(())
     }
 
@@ -450,23 +468,30 @@ impl SafeTransactionHandler {
         let mut attempt = 0;
         let last_violation: Option<SafetyViolation> = None;
 
-        info!("🛡️ Starting safe arbitrage execution: input={}, pools={}", 
-              input_amount.amount, pools.len());
+        info!(
+            "🛡️ Starting safe arbitrage execution: input={}, pools={}",
+            input_amount.amount,
+            pools.len()
+        );
 
         // Pre-execution safety checks
-        self.validate_pre_execution(&pools, &input_amount, &expected_fee_breakdown).await?;
+        self.validate_pre_execution(&pools, &input_amount, &expected_fee_breakdown)
+            .await?;
 
         while attempt < self.config.retry_policy.max_attempts {
             attempt += 1;
-            
+
             match self.attempt_execution(&pools, &input_amount, attempt).await {
                 Ok(mut result) => {
                     // Post-execution validation
-                    if let Err(violations) = self.validate_post_execution(&result, expected_output).await {
+                    if let Err(violations) =
+                        self.validate_post_execution(&result, expected_output).await
+                    {
                         result.safety_violations.extend(violations);
-                        
+
                         if attempt < self.config.retry_policy.max_attempts {
-                            let recovery_strategy = self.determine_recovery_strategy(&result, attempt);
+                            let recovery_strategy =
+                                self.determine_recovery_strategy(&result, attempt);
                             if self.should_retry(&recovery_strategy) {
                                 self.apply_recovery_strategy(recovery_strategy).await?;
                                 continue;
@@ -476,19 +501,19 @@ impl SafeTransactionHandler {
 
                     // Record successful execution
                     self.record_execution(&pools, &input_amount, &result).await;
-                    
+
                     result.execution_time_ms = start_time.elapsed().as_millis() as u64;
                     result.retry_count = attempt;
-                    
+
                     return Ok(result);
                 }
                 Err(e) => {
                     warn!("Execution attempt {} failed: {}", attempt, e);
-                    
+
                     if attempt >= self.config.retry_policy.max_attempts {
                         break;
                     }
-                    
+
                     // Apply retry delay
                     let delay = self.calculate_retry_delay(attempt);
                     sleep(delay).await;
@@ -533,28 +558,39 @@ impl SafeTransactionHandler {
         let start_time = Instant::now();
         let mut attempt = 0;
         let mut recovery_strategies: Vec<FailureRecoveryStrategy> = Vec::new();
-        
-        info!("🛡️ Advanced execution starting: opportunity={}, input={}, expected={}", 
-              opportunity_id, input_amount, expected_output);
-        
+
+        info!(
+            "🛡️ Advanced execution starting: opportunity={}, input={}, expected={}",
+            opportunity_id, input_amount, expected_output
+        );
+
         // Pre-execution safety checks
-        self.perform_pre_execution_checks(input_amount, pools).await?;
-        
+        self.perform_pre_execution_checks(input_amount, pools)
+            .await?;
+
         while attempt < self.config.retry_policy.max_attempts {
             attempt += 1;
-            
+
             // Apply MEV protection before each attempt
             let protected_transaction = self.apply_mev_protection(transaction, attempt).await?;
-            
-            match self.execute_transaction_with_monitoring(&protected_transaction, attempt).await {
+
+            match self
+                .execute_transaction_with_monitoring(&protected_transaction, attempt)
+                .await
+            {
                 Ok(result) => {
                     // Validate post-execution state
-                    if let Err(safety_violations) = self.validate_post_execution(&result, expected_output).await {
+                    if let Err(safety_violations) =
+                        self.validate_post_execution(&result, expected_output).await
+                    {
                         if attempt < self.config.retry_policy.max_attempts {
-                            warn!("Post-execution validation failed, retrying: {:?}", safety_violations);
+                            warn!(
+                                "Post-execution validation failed, retrying: {:?}",
+                                safety_violations
+                            );
                             continue;
                         }
-                        
+
                         return Ok(TransactionResult {
                             success: false,
                             safety_violations,
@@ -563,18 +599,21 @@ impl SafeTransactionHandler {
                             ..result
                         });
                     }
-                    
+
                     // Success - record transaction
-                    self.record_successful_transaction(&opportunity_id, &result).await;
+                    self.record_successful_transaction(&opportunity_id, &result)
+                        .await;
                     return Ok(result);
                 }
                 Err(e) => {
                     warn!("Transaction attempt {} failed: {}", attempt, e);
-                    
+
                     // Analyze failure and determine recovery strategy
-                    let recovery_strategy = self.analyze_failure_and_recover(&e, attempt, input_amount).await;
+                    let recovery_strategy = self
+                        .analyze_failure_and_recover(&e, attempt, input_amount)
+                        .await;
                     recovery_strategies.push(recovery_strategy.clone());
-                    
+
                     match recovery_strategy {
                         FailureRecoveryStrategy::Retry { delay_ms } => {
                             if attempt < self.config.retry_policy.max_attempts {
@@ -594,8 +633,8 @@ impl SafeTransactionHandler {
                                 confirmation_slots: None,
                                 retry_count: attempt,
                                 failure_reason: Some(reason),
-                                safety_violations: vec![SafetyViolation::UnexpectedFailure { 
-                                    error_code: e.to_string() 
+                                safety_violations: vec![SafetyViolation::UnexpectedFailure {
+                                    error_code: e.to_string(),
                                 }],
                             });
                         }
@@ -607,7 +646,7 @@ impl SafeTransactionHandler {
                 }
             }
         }
-        
+
         // All retries exhausted
         Ok(TransactionResult {
             signature: None,
@@ -619,40 +658,45 @@ impl SafeTransactionHandler {
             confirmation_slots: None,
             retry_count: attempt,
             failure_reason: Some("Max retries exhausted".to_string()),
-            safety_violations: vec![SafetyViolation::UnexpectedFailure { 
-                error_code: "MAX_RETRIES_EXCEEDED".to_string() 
+            safety_violations: vec![SafetyViolation::UnexpectedFailure {
+                error_code: "MAX_RETRIES_EXCEEDED".to_string(),
             }],
         })
     }
 
     /// Apply MEV protection strategies
-    async fn apply_mev_protection(&self, transaction: &Transaction, attempt: u32) -> Result<Transaction> {
-        if !self.config.mev_protection.enabled { // not in use - Path only taken if MEV protection is disabled.
+    async fn apply_mev_protection(
+        &self,
+        transaction: &Transaction,
+        attempt: u32,
+    ) -> Result<Transaction> {
+        if !self.config.mev_protection.enabled {
+            // not in use - Path only taken if MEV protection is disabled.
             return Ok(transaction.clone());
         }
-        
+
         let protected_tx = transaction.clone();
-        
+
         // 1. Add Jito tips for MEV protection
         if self.config.mev_protection.jito_tips_enabled {
             let tip_amount = self.calculate_jito_tip(attempt).await?; // not in use - Jito tip instruction addition is a TODO.
-            // TODO: Add Jito tip instruction to transaction
+                                                                      // TODO: Add Jito tip instruction to transaction
             debug!("Applied Jito tip: {} lamports", tip_amount);
         }
-        
+
         // 2. Add priority fees to compete with MEV bots
         if let Some(_compute_budget_ix) = self.create_priority_fee_instruction(attempt).await? {
             // Insert priority fee instruction at the beginning // not in use - Priority fee instruction addition is a TODO.
             // TODO: Modify transaction to include priority fee instruction
             debug!("Applied priority fee for MEV protection");
         }
-        
+
         // 3. Apply transaction timing randomization
         if self.config.mev_protection.front_running_protection {
             let random_delay = self.calculate_anti_mev_delay();
             sleep(Duration::from_millis(random_delay)).await;
         }
-        
+
         Ok(protected_tx)
     }
 
@@ -664,82 +708,92 @@ impl SafeTransactionHandler {
         input_amount: u64,
     ) -> FailureRecoveryStrategy {
         let error_string = error.to_string().to_lowercase();
-        
+
         // Analyze common failure patterns
         if error_string.contains("insufficient") || error_string.contains("balance") {
-            return FailureRecoveryStrategy::Abort { 
-                reason: "Insufficient balance detected".to_string() 
+            return FailureRecoveryStrategy::Abort {
+                reason: "Insufficient balance detected".to_string(),
             };
         }
-        
+
         if error_string.contains("slippage") || error_string.contains("price") {
             // Try with increased slippage tolerance
             let new_tolerance = 0.02 + (attempt as f64 * 0.005); // Increase by 0.5% per attempt
             return FailureRecoveryStrategy::IncreaseSlippage { new_tolerance };
         }
-        
+
         if error_string.contains("timeout") || error_string.contains("congestion") {
             // Network congestion - wait longer and retry
             let delay = self.config.retry_policy.base_delay_ms * (2_u64.pow(attempt - 1));
             return FailureRecoveryStrategy::Retry { delay_ms: delay };
         }
-        
+
         if error_string.contains("partial") || error_string.contains("fill") {
             // Partial fill - reduce amount and retry
             let new_amount = (input_amount as f64 * 0.8) as u64; // Reduce by 20%
             return FailureRecoveryStrategy::ReduceAmount { new_amount };
         }
-        
+
         if error_string.contains("frontrun") || error_string.contains("mev") {
             // MEV attack detected - abort this opportunity
-            return FailureRecoveryStrategy::Abort { 
-                reason: "MEV attack detected".to_string() 
+            return FailureRecoveryStrategy::Abort {
+                reason: "MEV attack detected".to_string(),
             };
         }
-        
+
         // Default retry strategy
         let delay = if self.config.retry_policy.exponential_backoff {
             self.config.retry_policy.base_delay_ms * (2_u64.pow(attempt - 1))
         } else {
             self.config.retry_policy.base_delay_ms
         };
-        
+
         FailureRecoveryStrategy::Retry { delay_ms: delay }
     }
 
     /// Perform comprehensive pre-execution safety checks
-    async fn perform_pre_execution_checks(&self, input_amount: u64, pools: &[&PoolInfo]) -> Result<()> {
+    async fn perform_pre_execution_checks(
+        &self,
+        input_amount: u64,
+        pools: &[&PoolInfo],
+    ) -> Result<()> {
         // 1. Balance validation
         if self.config.balance_validation.enabled {
             let balance_snapshot = self.get_current_balance_snapshot().await?;
-            if balance_snapshot.sol_balance < input_amount + self.config.balance_validation.minimum_sol_balance {
-                return Err(anyhow!("Insufficient SOL balance: {} < {}", 
-                    balance_snapshot.sol_balance, 
-                    input_amount + self.config.balance_validation.minimum_sol_balance));
+            if balance_snapshot.sol_balance
+                < input_amount + self.config.balance_validation.minimum_sol_balance
+            {
+                return Err(anyhow!(
+                    "Insufficient SOL balance: {} < {}",
+                    balance_snapshot.sol_balance,
+                    input_amount + self.config.balance_validation.minimum_sol_balance
+                ));
             }
         }
-        
+
         // 2. Network congestion check
         let network_status = self.check_network_congestion().await?;
-        if network_status.tps < 500.0 { // Minimum TPS threshold
+        if network_status.tps < 500.0 {
+            // Minimum TPS threshold
             warn!("Network congestion detected: {} TPS", network_status.tps); // not in use - This is a warning, not direct functional use of the check result beyond logging.
         }
-        
+
         // 3. Pool liquidity validation
         for pool in pools {
             if let Err(e) = self.validate_pool_liquidity(pool, input_amount).await {
                 return Err(anyhow!("Pool liquidity validation failed: {}", e));
             }
         }
-        
+
         // 4. MEV risk assessment
         if self.config.mev_protection.sandwich_detection {
             let mev_risk = self.assess_mev_risk(pools, input_amount).await?;
-            if mev_risk > 0.7 { // High MEV risk threshold
+            if mev_risk > 0.7 {
+                // High MEV risk threshold
                 warn!("High MEV risk detected: {:.2}%", mev_risk * 100.0); // not in use - This is a warning.
             }
         }
-        
+
         Ok(())
     }
 
@@ -748,7 +802,7 @@ impl SafeTransactionHandler {
         let base_tip = 10_000; // 0.00001 SOL base tip
         let attempt_multiplier = 1.5_f64.powi(attempt as i32);
         let network_factor = self.get_network_congestion_factor().await?;
-        
+
         let tip = (base_tip as f64 * attempt_multiplier * network_factor) as u64;
         Ok(tip.min(self.config.mev_protection.max_priority_fee_lamports))
     }
@@ -756,7 +810,8 @@ impl SafeTransactionHandler {
     /// Create priority fee instruction for MEV protection
     async fn create_priority_fee_instruction(&self, attempt: u32) -> Result<Option<Instruction>> {
         let priority_fee = self.calculate_priority_fee(attempt).await?;
-        if priority_fee > 0 { // not in use - Instruction creation is a TODO placeholder.
+        if priority_fee > 0 {
+            // not in use - Instruction creation is a TODO placeholder.
             // TODO: Create actual compute budget instruction
             debug!("Priority fee calculated: {} lamports", priority_fee);
         }
@@ -777,7 +832,7 @@ impl SafeTransactionHandler {
         expected_output: u64,
     ) -> Result<(), Vec<SafetyViolation>> {
         let mut violations = Vec::new();
-        
+
         // 1. Slippage validation
         if let Some(actual_output) = result.actual_output {
             let slippage = 1.0 - (actual_output as f64 / expected_output as f64);
@@ -788,22 +843,22 @@ impl SafeTransactionHandler {
                 });
             }
         }
-        
+
         // 2. Balance consistency check
         if self.config.balance_validation.real_time_validation {
             if let Ok(_balance_snapshot) = self.get_current_balance_snapshot().await { // not in use - Balance comparison logic is commented out/missing.
-                // Compare with expected balance changes
-                // This would need more sophisticated tracking
+                 // Compare with expected balance changes
+                 // This would need more sophisticated tracking
             }
         }
-        
+
         // 3. Transaction confirmation validation
         if result.execution_time_ms > (self.config.confirmation_settings.timeout_seconds * 1000) {
             violations.push(SafetyViolation::TransactionTimeout {
                 timeout_seconds: self.config.confirmation_settings.timeout_seconds,
             });
         }
-        
+
         if violations.is_empty() {
             Ok(())
         } else {
@@ -812,7 +867,11 @@ impl SafeTransactionHandler {
     }
 
     /// Record successful transaction for analytics
-    async fn record_successful_transaction(&self, opportunity_id: &str, result: &TransactionResult) {
+    async fn record_successful_transaction(
+        &self,
+        opportunity_id: &str,
+        result: &TransactionResult,
+    ) {
         let record = TransactionRecord {
             timestamp: std::time::SystemTime::now(),
             opportunity_id: opportunity_id.to_string(),
@@ -821,25 +880,25 @@ impl SafeTransactionHandler {
             result: result.clone(),
             pools_involved: Vec::new(),
         };
-        
+
         // Store in execution history
         {
             let mut history = self.execution_history.write().unwrap();
             history.push(record);
-            
+
             // Keep only recent history (last 1000 transactions)
             if history.len() > 1000 {
                 history.drain(0..500);
             }
         }
-        
+
         info!("✅ Transaction recorded successfully: {}", opportunity_id);
     }
 
     /// Get network congestion factor for fee calculation
     async fn get_network_congestion_factor(&self) -> Result<f64> {
         let network_status = self.check_network_congestion().await?;
-        
+
         // Convert TPS to congestion factor (1.0 = normal, >1.0 = congested)
         let congestion_factor = if network_status.tps > 2000.0 {
             1.0 // Normal network conditions
@@ -850,37 +909,41 @@ impl SafeTransactionHandler {
         } else {
             3.0 // Critical congestion
         };
-        
+
         Ok(congestion_factor)
     }
 
     /// Assess MEV risk for given pools and trade size
     async fn assess_mev_risk(&self, pools: &[&PoolInfo], input_amount: u64) -> Result<f64> {
         let mut risk_score = 0.0;
-        
+
         // Factor 1: Trade size relative to pool liquidity
         for pool in pools {
             let pool_liquidity = pool.token_a.reserve + pool.token_b.reserve;
             let size_ratio = input_amount as f64 / pool_liquidity as f64;
-            if size_ratio > 0.01 { // >1% of pool liquidity
+            if size_ratio > 0.01 {
+                // >1% of pool liquidity
                 risk_score += size_ratio * 0.5;
             }
         }
-        
+
         // Factor 2: Pool popularity (more popular = higher MEV risk)
         let popular_pools = ["ORCAPool", "RaydiumPool"]; // Popular pool identifiers
         for pool in pools {
-            if popular_pools.iter().any(|&popular| pool.name.contains(popular)) {
+            if popular_pools
+                .iter()
+                .any(|&popular| pool.name.contains(popular))
+            {
                 risk_score += 0.2;
             }
         }
-        
+
         // Factor 3: Network congestion (higher congestion = higher MEV competition)
         let network_status = self.check_network_congestion().await?;
         if network_status.tps < 1000.0 {
             risk_score += 0.3;
         }
-        
+
         Ok(risk_score.min(1.0)) // Cap at 100%
     }
 
@@ -917,20 +980,24 @@ impl SafeTransactionHandler {
         input_amount: &TokenAmount,
         attempt: u32,
     ) -> Result<TransactionResult> {
-        debug!("Executing transaction attempt {} for {} pools", attempt, pools.len());
-        
+        debug!(
+            "Executing transaction attempt {} for {} pools",
+            attempt,
+            pools.len()
+        );
+
         // Simulate transaction execution
         let start_time = std::time::Instant::now();
-        
+
         // For now, simulate a successful transaction
         let execution_time = start_time.elapsed().as_millis() as u64;
-        
+
         Ok(TransactionResult {
             signature: Some(format!("sim_tx_{}", attempt)),
             success: true,
             actual_output: Some(input_amount.amount * 99 / 100), // Simulate 1% loss
-            fee_paid: 5000, // 5k lamports
-            slippage_experienced: 0.01, // 1%
+            fee_paid: 5000,                                      // 5k lamports
+            slippage_experienced: 0.01,                          // 1%
             execution_time_ms: execution_time,
             confirmation_slots: Some(32),
             retry_count: attempt,
@@ -940,20 +1007,24 @@ impl SafeTransactionHandler {
     }
 
     /// Determine recovery strategy for failed transaction
-    fn determine_recovery_strategy(&self, result: &TransactionResult, attempt: u32) -> FailureRecoveryStrategy {
+    fn determine_recovery_strategy(
+        &self,
+        result: &TransactionResult,
+        attempt: u32,
+    ) -> FailureRecoveryStrategy {
         // Analyze the failure and determine strategy
         if let Some(ref reason) = result.failure_reason {
             let reason_lower = reason.to_lowercase();
-            
+
             if reason_lower.contains("slippage") {
-                return FailureRecoveryStrategy::IncreaseSlippage { 
-                    new_tolerance: 0.02 + (attempt as f64 * 0.005) 
+                return FailureRecoveryStrategy::IncreaseSlippage {
+                    new_tolerance: 0.02 + (attempt as f64 * 0.005),
                 };
             }
-            
+
             if reason_lower.contains("balance") {
-                return FailureRecoveryStrategy::Abort { 
-                    reason: "Insufficient balance".to_string() 
+                return FailureRecoveryStrategy::Abort {
+                    reason: "Insufficient balance".to_string(),
                 };
             }
         }
@@ -987,16 +1058,25 @@ impl SafeTransactionHandler {
                 sleep(Duration::from_millis(delay_ms)).await;
             } // not in use - Placeholder for actual recovery application.
             FailureRecoveryStrategy::ReduceAmount { new_amount } => {
-                info!("Applying reduce amount strategy: new amount = {}", new_amount);
+                info!(
+                    "Applying reduce amount strategy: new amount = {}",
+                    new_amount
+                );
                 // This would require modifying the transaction, which is complex
                 // For now, just log the strategy
             }
             FailureRecoveryStrategy::IncreaseSlippage { new_tolerance } => {
-                info!("Applying increased slippage strategy: new tolerance = {:.2}%", new_tolerance * 100.0);
+                info!(
+                    "Applying increased slippage strategy: new tolerance = {:.2}%",
+                    new_tolerance * 100.0
+                );
                 // This would require modifying slippage parameters
             }
             FailureRecoveryStrategy::SwitchRoute { alternative_pools } => {
-                info!("Applying route switch strategy: {} alternative pools", alternative_pools.len());
+                info!(
+                    "Applying route switch strategy: {} alternative pools",
+                    alternative_pools.len()
+                );
                 // This would require finding alternative routes
             }
             FailureRecoveryStrategy::Abort { reason } => {
@@ -1008,10 +1088,21 @@ impl SafeTransactionHandler {
     }
 
     /// Record transaction execution for analytics
-    async fn record_execution(&self, pools: &[PoolInfo], input_amount: &TokenAmount, result: &TransactionResult) {
+    async fn record_execution(
+        &self,
+        pools: &[PoolInfo],
+        input_amount: &TokenAmount,
+        result: &TransactionResult,
+    ) {
         let record = TransactionRecord {
             timestamp: std::time::SystemTime::now(),
-            opportunity_id: format!("opp_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs()),
+            opportunity_id: format!(
+                "opp_{}",
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs()
+            ),
             input_amount: input_amount.amount,
             expected_output: input_amount.amount, // Simplified
             result: result.clone(),
@@ -1022,7 +1113,7 @@ impl SafeTransactionHandler {
         {
             let mut history = self.execution_history.write().unwrap();
             history.push(record);
-            
+
             // Keep only recent history
             if history.len() > 1000 {
                 history.drain(0..500);
@@ -1055,7 +1146,7 @@ impl SafeTransactionHandler {
                     signature: Some(signature.to_string()),
                     success: true,
                     actual_output: None, // Would need to be calculated
-                    fee_paid: 5000, // Estimate
+                    fee_paid: 5000,      // Estimate
                     slippage_experienced: 0.0,
                     execution_time_ms: 0, // Would need timing
                     confirmation_slots: None,
@@ -1064,20 +1155,18 @@ impl SafeTransactionHandler {
                     safety_violations: Vec::new(),
                 })
             }
-            Err(e) => {
-                Ok(TransactionResult {
-                    signature: None,
-                    success: false,
-                    actual_output: None,
-                    fee_paid: 0,
-                    slippage_experienced: 0.0,
-                    execution_time_ms: 0,
-                    confirmation_slots: None,
-                    retry_count: attempt,
-                    failure_reason: Some(e.to_string()),
-                    safety_violations: Vec::new(),
-                })
-            }
+            Err(e) => Ok(TransactionResult {
+                signature: None,
+                success: false,
+                actual_output: None,
+                fee_paid: 0,
+                slippage_experienced: 0.0,
+                execution_time_ms: 0,
+                confirmation_slots: None,
+                retry_count: attempt,
+                failure_reason: Some(e.to_string()),
+                safety_violations: Vec::new(),
+            }),
         }
     }
 
@@ -1086,7 +1175,7 @@ impl SafeTransactionHandler {
         // Simplified implementation - in production this would query actual balances
         let mut token_balances = std::collections::HashMap::new();
         token_balances.insert("SOL".to_string(), 1_000_000_000); // 1 SOL
-        
+
         Ok(BalanceSnapshot {
             sol_balance: 1_000_000_000, // 1 SOL
             token_balances,
@@ -1108,15 +1197,15 @@ impl SafeTransactionHandler {
     async fn validate_pool_liquidity(&self, pool: &PoolInfo, input_amount: u64) -> Result<()> {
         let total_liquidity = pool.token_a.reserve + pool.token_b.reserve;
         let min_liquidity = input_amount * 10; // Require 10x liquidity
-        
+
         if total_liquidity < min_liquidity {
             return Err(anyhow!(
-                "Insufficient pool liquidity: {} < {} required", 
-                total_liquidity, 
+                "Insufficient pool liquidity: {} < {} required",
+                total_liquidity,
                 min_liquidity
             ));
         }
-        
+
         Ok(())
     }
 
@@ -1143,7 +1232,8 @@ pub struct NetworkStatus {
 
 /// Legacy safety configuration for backward compatibility
 #[derive(Debug, Clone)]
-pub struct SafetyConfig { // not in use - Defined but not instantiated or used elsewhere in the provided codebase.
+pub struct SafetyConfig {
+    // not in use - Defined but not instantiated or used elsewhere in the provided codebase.
     /// Maximum number of retry attempts
     pub max_retries: u32,
     /// Timeout for transaction confirmation (seconds)

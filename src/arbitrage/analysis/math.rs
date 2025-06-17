@@ -1,17 +1,17 @@
 //! Advanced arbitrage mathematics and intelligent slippage models
-//! 
+//!
 //! This module provides sophisticated slippage calculation based on:
 //! - Pool depth and liquidity analysis
 //! - Trade size impact calculations
 //! - Token volatility adjustments
 //! - Dynamic slippage tolerance based on market conditions
 
-use crate::utils::{PoolInfo, DexType};
+use crate::utils::{DexType, PoolInfo};
+use num_traits::{FromPrimitive, ToPrimitive};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
-use num_traits::{ToPrimitive, FromPrimitive};
 
 // =============================================================================
 // Slippage Models & Traits
@@ -19,7 +19,12 @@ use num_traits::{ToPrimitive, FromPrimitive};
 
 pub trait SlippageModel: Send {
     fn calculate_slippage(&self, amount: Decimal, pool_info: &PoolInfo) -> Decimal;
-    fn calculate_dynamic_slippage(&self, amount: Decimal, pool_info: &PoolInfo, market_conditions: &MarketConditions) -> SlippageCalculation;
+    fn calculate_dynamic_slippage(
+        &self,
+        amount: Decimal,
+        pool_info: &PoolInfo,
+        market_conditions: &MarketConditions,
+    ) -> SlippageCalculation;
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -35,13 +40,13 @@ pub struct SlippageCalculation {
 
 #[derive(Debug, Clone)]
 pub struct MarketConditions {
-    pub volatility_index: f64,      // 0.0 to 1.0, higher = more volatile
-    pub liquidity_depth: f64,       // Pool liquidity in USD
-    pub recent_volume: f64,         // 24h volume
-    pub spread_percentage: f64,     // Current bid-ask spread
-    pub network_congestion: f64,    // 0.0 to 1.0
+    pub volatility_index: f64,   // 0.0 to 1.0, higher = more volatile
+    pub liquidity_depth: f64,    // Pool liquidity in USD
+    pub recent_volume: f64,      // 24h volume
+    pub spread_percentage: f64,  // Current bid-ask spread
+    pub network_congestion: f64, // 0.0 to 1.0
     #[allow(dead_code)]
-    pub last_updated: Instant,      // not in use - Field is marked dead_code
+    pub last_updated: Instant, // not in use - Field is marked dead_code
 }
 
 impl Default for MarketConditions {
@@ -72,7 +77,7 @@ pub struct EnhancedSlippageModel {
 pub struct SlippageConfig {
     pub base_slippage_bps: u16,           // Base slippage in basis points
     pub max_slippage_bps: u16,            // Maximum allowed slippage
-    pub size_impact_threshold: Decimal,    // Trade size that triggers impact calculation
+    pub size_impact_threshold: Decimal,   // Trade size that triggers impact calculation
     pub volatility_multiplier: f64,       // How much volatility affects slippage
     pub liquidity_adjustment_factor: f64, // How liquidity depth affects slippage
 }
@@ -80,8 +85,8 @@ pub struct SlippageConfig {
 impl Default for SlippageConfig {
     fn default() -> Self {
         Self {
-            base_slippage_bps: 50,    // 0.5% base slippage
-            max_slippage_bps: 500,    // 5% maximum slippage
+            base_slippage_bps: 50,                         // 0.5% base slippage
+            max_slippage_bps: 500,                         // 5% maximum slippage
             size_impact_threshold: Decimal::new(10000, 0), // $10k threshold
             volatility_multiplier: 2.0,
             liquidity_adjustment_factor: 0.8,
@@ -133,34 +138,33 @@ impl EnhancedSlippageModel {
     ) -> SlippageCalculation {
         // 1. Calculate base slippage from pool type
         let base_slippage = self.calculate_base_slippage_for_dex(&pool_info.dex_type);
-        
+
         // 2. Calculate size impact
         let size_impact = self.calculate_size_impact(trade_amount, pool_info);
-        
+
         // 3. Apply volatility adjustment
         let volatility_adjustment = self.calculate_volatility_adjustment(
             market_conditions.volatility_index,
-            &pool_info.dex_type
+            &pool_info.dex_type,
         );
-        
+
         // 4. Apply liquidity factor
-        let liquidity_factor = self.calculate_liquidity_factor(
-            trade_amount,
-            market_conditions.liquidity_depth
-        );
-        
+        let liquidity_factor =
+            self.calculate_liquidity_factor(trade_amount, market_conditions.liquidity_depth);
+
         // 5. Combine all factors
         let combined_slippage = base_slippage + size_impact + volatility_adjustment;
         let final_slippage = combined_slippage * liquidity_factor;
-        
+
         // 6. Apply bounds checking
-        let bounded_slippage = final_slippage.min(
-            Decimal::new(self.slippage_config.max_slippage_bps as i64, 4)
-        );
-        
+        let bounded_slippage = final_slippage.min(Decimal::new(
+            self.slippage_config.max_slippage_bps as i64,
+            4,
+        ));
+
         // 7. Calculate confidence level
         let confidence_level = self.calculate_confidence_level(market_conditions);
-        
+
         let explanation = format!(
             "Base: {}%, Size: {}%, Vol: {}%, Liq: {:.2}x, Final: {}%",
             base_slippage * Decimal::new(100, 0),
@@ -183,23 +187,25 @@ impl EnhancedSlippageModel {
 
     fn calculate_base_slippage_for_dex(&self, dex_type: &DexType) -> Decimal {
         let base_bps = match dex_type {
-            DexType::Orca => 30,      // Concentrated liquidity = lower slippage
-            DexType::Raydium => 50,   // Standard AMM
-            DexType::Meteora => 40,   // Dynamic AMM, variable
-            DexType::Jupiter => 25,   // Aggregator optimizes routes
-            DexType::Lifinity => 35,  // Proactive market making
-            DexType::Phoenix => 20,   // Order book = tight spreads
-            DexType::Whirlpool => 30, // Same as Orca
+            DexType::Orca => 30,       // Concentrated liquidity = lower slippage
+            DexType::Raydium => 50,    // Standard AMM
+            DexType::Meteora => 40,    // Dynamic AMM, variable
+            DexType::Jupiter => 25,    // Aggregator optimizes routes
+            DexType::Lifinity => 35,   // Proactive market making
+            DexType::Phoenix => 20,    // Order book = tight spreads
+            DexType::Whirlpool => 30,  // Same as Orca
             DexType::Unknown(_) => 75, // Conservative for unknown
         };
-        
+
         Decimal::new(base_bps as i64, 4) // Convert basis points to decimal
     }
 
     fn calculate_size_impact(&self, trade_amount: Decimal, pool_info: &PoolInfo) -> Decimal {
         // Estimate pool size based on reserves
-        let pool_liquidity = if let (Some(token_a_reserve), Some(token_b_reserve)) = 
-            (pool_info.token_a.reserve.checked_add(0), pool_info.token_b.reserve.checked_add(0)) {
+        let pool_liquidity = if let (Some(token_a_reserve), Some(token_b_reserve)) = (
+            pool_info.token_a.reserve.checked_add(0),
+            pool_info.token_b.reserve.checked_add(0),
+        ) {
             Decimal::new((token_a_reserve + token_b_reserve) as i64, 6) // Assume 6 decimals average
         } else {
             Decimal::new(1_000_000, 0) // Default 1M if reserves unknown
@@ -207,43 +213,53 @@ impl EnhancedSlippageModel {
 
         // Calculate trade size as percentage of pool
         let trade_percentage = trade_amount / pool_liquidity;
-        
+
         // Price impact formula: impact = (trade_size / pool_size)^1.5 for non-linear impact
-        let impact_factor = if trade_percentage > Decimal::new(1, 4) { // >0.01%
+        let impact_factor = if trade_percentage > Decimal::new(1, 4) {
+            // >0.01%
             // Use simple multiplication for power approximation since Decimal doesn't have complex math
             let squared = trade_percentage * trade_percentage;
             trade_percentage + (squared / Decimal::new(2, 0)) // Approximation of x^1.5
         } else {
             Decimal::new(0, 0) // Negligible impact for small trades
         };
-        
+
         // Scale to reasonable slippage range (0-2%)
         impact_factor.min(Decimal::new(200, 4)) // Cap at 2%
     }
 
-    fn calculate_volatility_adjustment(&self, volatility_index: f64, dex_type: &DexType) -> Decimal {
+    fn calculate_volatility_adjustment(
+        &self,
+        volatility_index: f64,
+        dex_type: &DexType,
+    ) -> Decimal {
         // Different DEX types handle volatility differently
         let volatility_sensitivity = match dex_type {
-            DexType::Phoenix => 0.5,  // Order books less sensitive to volatility
+            DexType::Phoenix => 0.5, // Order books less sensitive to volatility
             DexType::Orca | DexType::Whirlpool => 0.7, // Concentrated liquidity more sensitive
-            DexType::Jupiter => 0.6,  // Aggregator averages risk
-            _ => 1.0, // Standard sensitivity for AMMs
+            DexType::Jupiter => 0.6, // Aggregator averages risk
+            _ => 1.0,                // Standard sensitivity for AMMs
         };
-        
-        let adjustment = volatility_index * self.slippage_config.volatility_multiplier * volatility_sensitivity;
+
+        let adjustment =
+            volatility_index * self.slippage_config.volatility_multiplier * volatility_sensitivity;
         // Convert f64 to Decimal safely
-        Decimal::from_f64(adjustment / 100.0).unwrap_or_else(|| Decimal::new(0, 0)) // Convert to decimal percentage
+        Decimal::from_f64(adjustment / 100.0).unwrap_or_else(|| Decimal::new(0, 0))
+        // Convert to decimal percentage
     }
 
     fn calculate_liquidity_factor(&self, trade_amount: Decimal, liquidity_depth: f64) -> Decimal {
         // Higher liquidity = lower slippage multiplier
         let trade_to_liquidity_ratio = trade_amount.to_f64().unwrap_or(0.0) / liquidity_depth;
-        
-        if trade_to_liquidity_ratio < 0.001 { // <0.1% of liquidity
+
+        if trade_to_liquidity_ratio < 0.001 {
+            // <0.1% of liquidity
             Decimal::new(8, 1) // 0.8x multiplier (reduce slippage)
-        } else if trade_to_liquidity_ratio < 0.01 { // <1% of liquidity
+        } else if trade_to_liquidity_ratio < 0.01 {
+            // <1% of liquidity
             Decimal::new(9, 1) // 0.9x multiplier
-        } else if trade_to_liquidity_ratio < 0.05 { // <5% of liquidity
+        } else if trade_to_liquidity_ratio < 0.05 {
+            // <5% of liquidity
             Decimal::new(12, 1) // 1.2x multiplier
         } else {
             Decimal::new(15, 1) // 1.5x multiplier for large trades
@@ -255,8 +271,12 @@ impl EnhancedSlippageModel {
         let base_confidence = 0.8;
         let volatility_penalty = market_conditions.volatility_index * 0.3;
         let congestion_penalty = market_conditions.network_congestion * 0.2;
-        let liquidity_bonus = if market_conditions.liquidity_depth > 500_000.0 { 0.1 } else { 0.0 };
-        
+        let liquidity_bonus = if market_conditions.liquidity_depth > 500_000.0 {
+            0.1
+        } else {
+            0.0
+        };
+
         (base_confidence - volatility_penalty - congestion_penalty + liquidity_bonus)
             .max(0.2)
             .min(0.95)
@@ -270,7 +290,8 @@ impl EnhancedSlippageModel {
     /// Get recommended slippage for a specific pool and trade size
     pub fn get_recommended_slippage(&self, pool_info: &PoolInfo, trade_amount: Decimal) -> Decimal {
         let market_conditions = MarketConditions::default(); // Could be enhanced with real data
-        let calculation = self.calculate_intelligent_slippage(trade_amount, pool_info, &market_conditions);
+        let calculation =
+            self.calculate_intelligent_slippage(trade_amount, pool_info, &market_conditions);
         calculation.final_slippage
     }
 }
@@ -280,7 +301,12 @@ impl SlippageModel for EnhancedSlippageModel {
         self.get_recommended_slippage(pool_info, amount)
     }
 
-    fn calculate_dynamic_slippage(&self, amount: Decimal, pool_info: &PoolInfo, market_conditions: &MarketConditions) -> SlippageCalculation {
+    fn calculate_dynamic_slippage(
+        &self,
+        amount: Decimal,
+        pool_info: &PoolInfo,
+        market_conditions: &MarketConditions,
+    ) -> SlippageCalculation {
         self.calculate_intelligent_slippage(amount, pool_info, market_conditions)
     }
 }
@@ -292,8 +318,8 @@ impl SlippageModel for EnhancedSlippageModel {
 pub struct XYKSlippageModel;
 
 impl XYKSlippageModel {
-    pub fn default() -> Self { 
-        XYKSlippageModel 
+    pub fn default() -> Self {
+        XYKSlippageModel
     }
 }
 
@@ -302,7 +328,12 @@ impl SlippageModel for XYKSlippageModel {
         Decimal::new(50, 4) // Fixed 0.5% slippage for legacy compatibility
     }
 
-    fn calculate_dynamic_slippage(&self, amount: Decimal, pool_info: &PoolInfo, _market_conditions: &MarketConditions) -> SlippageCalculation {
+    fn calculate_dynamic_slippage(
+        &self,
+        amount: Decimal,
+        pool_info: &PoolInfo,
+        _market_conditions: &MarketConditions,
+    ) -> SlippageCalculation {
         let base_slippage = self.calculate_slippage(amount, pool_info);
         SlippageCalculation {
             base_slippage,
@@ -335,9 +366,12 @@ impl VolatilityTracker {
     }
 
     pub fn add_price_data(&mut self, token_symbol: String, price: f64) {
-        let entry = self.price_history.entry(token_symbol).or_insert_with(Vec::new);
+        let entry = self
+            .price_history
+            .entry(token_symbol)
+            .or_insert_with(Vec::new);
         entry.push((Instant::now(), price));
-        
+
         // Keep only last 24 hours of data
         let cutoff = Instant::now() - Duration::from_secs(24 * 60 * 60);
         entry.retain(|(timestamp, _)| *timestamp > cutoff);
@@ -370,7 +404,8 @@ impl VolatilityTracker {
         let variance: f64 = returns
             .iter()
             .map(|return_rate| (return_rate - mean_return).powi(2))
-            .sum::<f64>() / returns.len() as f64;
+            .sum::<f64>()
+            / returns.len() as f64;
 
         Some(variance.sqrt())
     }
@@ -391,7 +426,10 @@ impl AdvancedArbitrageMath {
 
 pub struct DynamicThresholdUpdater;
 impl DynamicThresholdUpdater {
-    pub fn new(_config: &crate::config::settings::Config, _metrics: std::sync::Arc<tokio::sync::Mutex<crate::local_metrics::Metrics>>) -> Self {
+    pub fn new(
+        _config: &crate::config::settings::Config,
+        _metrics: std::sync::Arc<tokio::sync::Mutex<crate::local_metrics::Metrics>>,
+    ) -> Self {
         DynamicThresholdUpdater
     }
 }

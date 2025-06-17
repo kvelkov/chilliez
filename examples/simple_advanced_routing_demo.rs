@@ -1,20 +1,20 @@
 // examples/simple_advanced_routing_demo.rs
 //! Simplified Advanced Multi-Hop and Smart Order Routing Demo
-//! 
+//!
 //! Demonstrates the core routing infrastructure and concepts without
 //! requiring all advanced features to be fully functional.
 
-use std::time::{Duration, SystemTime};
-use std::sync::Arc;
 use solana_sdk::pubkey::Pubkey;
 use std::str::FromStr;
+use std::sync::Arc;
+use std::time::{Duration, SystemTime};
 
 use solana_arb_bot::arbitrage::routing::{
-    RoutingGraph, LiquidityPool, PoolMetrics, PoolHealth,
-    PathfinderConfig, PathfinderAlgorithm, MevProtectionConfig, FailoverConfig,
-    OptimizationGoal, SplitStrategy, MevRisk, RouteConstraints,
+    FailoverConfig, LiquidityPool, MevProtectionConfig, MevRisk, OptimizationGoal,
+    PathfinderAlgorithm, PathfinderConfig, PoolHealth, PoolMetrics, RouteConstraints, RoutingGraph,
+    SplitStrategy,
 };
-use solana_arb_bot::utils::{PoolInfo, PoolToken, DexType};
+use solana_arb_bot::utils::{DexType, PoolInfo, PoolToken};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -35,7 +35,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("\n✅ Simplified Advanced Routing Demo Complete!");
     println!("Core routing infrastructure and concepts demonstrated successfully.");
-    
+
     Ok(())
 }
 
@@ -74,7 +74,9 @@ async fn setup_routing_infrastructure() -> Result<RoutingGraph, Box<dyn std::err
         fee_numerator: Some(3),
         fee_denominator: Some(1000),
         fee_rate_bips: Some(30),
-        last_update_timestamp: SystemTime::now().duration_since(SystemTime::UNIX_EPOCH)?.as_secs(),
+        last_update_timestamp: SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)?
+            .as_secs(),
         dex_type: DexType::Orca,
         liquidity: Some(50_000_000_000_000),
         sqrt_price: None,
@@ -107,13 +109,17 @@ async fn setup_routing_infrastructure() -> Result<RoutingGraph, Box<dyn std::err
     };
 
     // Add pool to graph (conceptually - the actual API might differ)
-    println!("  📊 Created sample pool: {} with {} TVL", 
-             orca_pool.info.name, 
-             format_currency(orca_pool.info.liquidity.unwrap_or(0) as f64 / 1_000_000_000_000.0));
+    println!(
+        "  📊 Created sample pool: {} with {} TVL",
+        orca_pool.info.name,
+        format_currency(orca_pool.info.liquidity.unwrap_or(0) as f64 / 1_000_000_000_000.0)
+    );
 
-    println!("  ✅ Routing infrastructure initialized with {} tokens", 
-             routing_graph.token_count());
-    
+    println!(
+        "  ✅ Routing infrastructure initialized with {} tokens",
+        routing_graph.token_count()
+    );
+
     Ok(routing_graph)
 }
 
@@ -135,7 +141,10 @@ async fn configuration_showcase() -> Result<(), Box<dyn std::error::Error>> {
     println!("  📈 Pathfinder Config:");
     println!("    Max Hops: {}", pathfinder_config.max_hops);
     println!("    Algorithm: {:?}", pathfinder_config.algorithm);
-    println!("    Parallel Search: {}", pathfinder_config.enable_parallel_search);
+    println!(
+        "    Parallel Search: {}",
+        pathfinder_config.enable_parallel_search
+    );
 
     // MEV Protection Configuration
     let mev_config = MevProtectionConfig {
@@ -151,7 +160,10 @@ async fn configuration_showcase() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("  🛡️ MEV Protection Config:");
     println!("    Max Risk Level: {:?}", mev_config.max_risk_level);
-    println!("    Timing Randomization: {}", mev_config.enable_timing_randomization);
+    println!(
+        "    Timing Randomization: {}",
+        mev_config.enable_timing_randomization
+    );
     println!("    Jito Tips: {}", mev_config.enable_jito_tips);
 
     // Failover Configuration
@@ -165,8 +177,14 @@ async fn configuration_showcase() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("  🔄 Failover Config:");
     println!("    Max Retries: {}", failover_config.max_retry_attempts);
-    println!("    Circuit Breaker: {}", failover_config.circuit_breaker_threshold);
-    println!("    DEX Switching: {}", failover_config.enable_dex_switching);
+    println!(
+        "    Circuit Breaker: {}",
+        failover_config.circuit_breaker_threshold
+    );
+    println!(
+        "    DEX Switching: {}",
+        failover_config.enable_dex_switching
+    );
 
     // Route Constraints
     let constraints = RouteConstraints {
@@ -177,7 +195,10 @@ async fn configuration_showcase() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     println!("  ⚙️ Route Constraints:");
-    println!("    Execution Deadline: {:?}", constraints.execution_deadline);
+    println!(
+        "    Execution Deadline: {:?}",
+        constraints.execution_deadline
+    );
     println!("    Max Gas Cost: {:?}", constraints.max_gas_cost);
     println!("    Allowed DEXs: {:?}", constraints.allowed_dexs);
 
@@ -214,11 +235,7 @@ async fn data_structures_showcase() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // MEV Risk Levels
-    let mev_risks = vec![
-        MevRisk::Low,
-        MevRisk::Medium,
-        MevRisk::High,
-    ];
+    let mev_risks = vec![MevRisk::Low, MevRisk::Medium, MevRisk::High];
 
     println!("  🛡️ MEV Risk Levels:");
     for risk in &mev_risks {
@@ -254,9 +271,18 @@ async fn data_structures_showcase() -> Result<(), Box<dyn std::error::Error>> {
     println!("    24h Volume: ${:.0}", pool_metrics.volume_24h);
     println!("    7d Volume: ${:.0}", pool_metrics.volume_7d);
     println!("    24h Fee Revenue: ${:.0}", pool_metrics.fee_revenue_24h);
-    println!("    Avg Price Impact: {:.3}%", pool_metrics.price_impact_avg * 100.0);
-    println!("    Success Rate: {:.1}%", pool_metrics.success_rate * 100.0);
-    println!("    Avg Trade Size: ${:.0}", pool_metrics.average_trade_size);
+    println!(
+        "    Avg Price Impact: {:.3}%",
+        pool_metrics.price_impact_avg * 100.0
+    );
+    println!(
+        "    Success Rate: {:.1}%",
+        pool_metrics.success_rate * 100.0
+    );
+    println!(
+        "    Avg Trade Size: ${:.0}",
+        pool_metrics.average_trade_size
+    );
 
     // Pool Health Analysis
     let pool_health = PoolHealth {
@@ -269,11 +295,27 @@ async fn data_structures_showcase() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     println!("  🏥 Pool Health Analysis:");
-    println!("    Status: {}", if pool_health.is_active { "Active" } else { "Inactive" });
+    println!(
+        "    Status: {}",
+        if pool_health.is_active {
+            "Active"
+        } else {
+            "Inactive"
+        }
+    );
     println!("    24h Errors: {}", pool_health.error_count_24h);
-    println!("    Liquidity Depth: {:.1}%", pool_health.liquidity_depth_score * 100.0);
-    println!("    Spread Quality: {:.1}%", pool_health.spread_quality_score * 100.0);
-    println!("    Overall Score: {:.1}%", pool_health.overall_score * 100.0);
+    println!(
+        "    Liquidity Depth: {:.1}%",
+        pool_health.liquidity_depth_score * 100.0
+    );
+    println!(
+        "    Spread Quality: {:.1}%",
+        pool_health.spread_quality_score * 100.0
+    );
+    println!(
+        "    Overall Score: {:.1}%",
+        pool_health.overall_score * 100.0
+    );
 
     // Algorithmic Concepts
     println!("  🧠 Key Algorithmic Concepts:");

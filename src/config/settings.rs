@@ -1,6 +1,6 @@
 use serde::Deserialize;
-use std::{collections::HashMap, env};
 use std::path::Path;
+use std::{collections::HashMap, env};
 #[derive(Debug, Deserialize, Clone)]
 #[serde(rename_all = "kebab-case")]
 pub struct Config {
@@ -47,28 +47,28 @@ pub struct Config {
     pub ws_update_channel_size: Option<usize>,
     pub congestion_update_interval_secs: Option<u64>,
     pub cycle_interval_seconds: Option<u64>,
-    
+
     // Jupiter fallback configuration
     pub jupiter_fallback_enabled: bool,
     pub jupiter_api_timeout_ms: u64,
     pub jupiter_max_retries: u32,
     pub jupiter_fallback_min_profit_pct: f64,
     pub jupiter_slippage_tolerance_bps: u16,
-    
+
     // Jupiter cache configuration
     pub jupiter_cache_enabled: bool,
     pub jupiter_cache_ttl_seconds: u64,
     pub jupiter_cache_max_entries: usize,
     pub jupiter_cache_amount_bucket_size: u64,
     pub jupiter_cache_volatility_threshold_pct: f64,
-    
+
     // Jupiter route optimization configuration
     pub jupiter_route_optimization_enabled: bool,
     pub jupiter_max_parallel_routes: usize,
     pub jupiter_max_alternative_routes: u8,
     pub jupiter_route_evaluation_timeout_ms: u64,
     pub jupiter_min_route_improvement_pct: f64,
-    
+
     // Webhook configuration
     pub webhook_port: Option<u16>,
     pub webhook_url: Option<String>,
@@ -106,7 +106,9 @@ impl Config {
                 .unwrap_or_else(|_| "0.001".to_string())
                 .parse()
                 .expect("MIN_PROFIT_PCT must be a float"),
-            min_profit_usd_threshold: env::var("MIN_PROFIT_USD_THRESHOLD").ok().and_then(|s| s.parse().ok()),
+            min_profit_usd_threshold: env::var("MIN_PROFIT_USD_THRESHOLD")
+                .ok()
+                .and_then(|s| s.parse().ok()),
             sol_price_usd: env::var("SOL_PRICE_USD").ok().and_then(|s| s.parse().ok()),
             max_slippage_pct: env::var("MAX_SLIPPAGE_PCT")
                 .unwrap_or_else(|_| "0.01".to_string())
@@ -124,64 +126,170 @@ impl Config {
                 .unwrap_or_else(|_| "10".to_string())
                 .parse()
                 .expect("POOL_REFRESH_INTERVAL_SECS must be an int"),
-            pool_read_timeout_ms: env::var("POOL_READ_TIMEOUT_MS").ok().and_then(|s| s.parse().ok()),
-            health_check_interval_secs: env::var("HEALTH_CHECK_INTERVAL_SECS").ok().and_then(|s| s.parse().ok()),
-            max_ws_reconnect_attempts: env::var("MAX_WS_RECONNECT_ATTEMPTS").ok().and_then(|s| s.parse().ok()),
+            pool_read_timeout_ms: env::var("POOL_READ_TIMEOUT_MS")
+                .ok()
+                .and_then(|s| s.parse().ok()),
+            health_check_interval_secs: env::var("HEALTH_CHECK_INTERVAL_SECS")
+                .ok()
+                .and_then(|s| s.parse().ok()),
+            max_ws_reconnect_attempts: env::var("MAX_WS_RECONNECT_ATTEMPTS")
+                .ok()
+                .and_then(|s| s.parse().ok()),
             log_level: env::var("LOG_LEVEL").ok(),
             redis_url: env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1/".to_string()),
-            redis_default_ttl_secs: env::var("REDIS_DEFAULT_TTL_SECS").unwrap_or_else(|_| "60".to_string()).parse().expect("REDIS_DEFAULT_TTL_SECS must be an int"),
-            dex_quote_cache_ttl_secs: env::var("DEX_QUOTE_CACHE_TTL_SECS").ok().and_then(|s| serde_json::from_str(&s).ok()),
-            volatility_tracker_window: env::var("VOLATILITY_TRACKER_WINDOW").ok().and_then(|s| s.parse().ok()),
-            volatility_threshold_factor: env::var("VOLATILITY_THRESHOLD_FACTOR").ok().and_then(|s| s.parse().ok()),
-            dynamic_threshold_update_interval_secs: env::var("DYNAMIC_THRESHOLD_UPDATE_INTERVAL_SECS").ok().and_then(|s| s.parse().ok()),
-            degradation_profit_factor: env::var("DEGRADATION_PROFIT_FACTOR").ok().and_then(|s| s.parse().ok()),
-            max_tx_fee_lamports_for_acceptance: env::var("MAX_TX_FEE_LAMPORTS_FOR_ACCEPTANCE").ok().and_then(|s| s.parse().ok()),
-            max_risk_score_for_acceptance: env::var("MAX_RISK_SCORE_FOR_ACCEPTANCE").ok().and_then(|s| s.parse().ok()),
+            redis_default_ttl_secs: env::var("REDIS_DEFAULT_TTL_SECS")
+                .unwrap_or_else(|_| "60".to_string())
+                .parse()
+                .expect("REDIS_DEFAULT_TTL_SECS must be an int"),
+            dex_quote_cache_ttl_secs: env::var("DEX_QUOTE_CACHE_TTL_SECS")
+                .ok()
+                .and_then(|s| serde_json::from_str(&s).ok()),
+            volatility_tracker_window: env::var("VOLATILITY_TRACKER_WINDOW")
+                .ok()
+                .and_then(|s| s.parse().ok()),
+            volatility_threshold_factor: env::var("VOLATILITY_THRESHOLD_FACTOR")
+                .ok()
+                .and_then(|s| s.parse().ok()),
+            dynamic_threshold_update_interval_secs: env::var(
+                "DYNAMIC_THRESHOLD_UPDATE_INTERVAL_SECS",
+            )
+            .ok()
+            .and_then(|s| s.parse().ok()),
+            degradation_profit_factor: env::var("DEGRADATION_PROFIT_FACTOR")
+                .ok()
+                .and_then(|s| s.parse().ok()),
+            max_tx_fee_lamports_for_acceptance: env::var("MAX_TX_FEE_LAMPORTS_FOR_ACCEPTANCE")
+                .ok()
+                .and_then(|s| s.parse().ok()),
+            max_risk_score_for_acceptance: env::var("MAX_RISK_SCORE_FOR_ACCEPTANCE")
+                .ok()
+                .and_then(|s| s.parse().ok()),
             max_hops: env::var("MAX_HOPS").ok().and_then(|s| s.parse().ok()),
-            max_pools_per_hop: env::var("MAX_POOLS_PER_HOP").ok().and_then(|s| s.parse().ok()),
-            max_concurrent_executions: env::var("MAX_CONCURRENT_EXECUTIONS").ok().and_then(|s| s.parse().ok()),
-            execution_timeout_secs: env::var("EXECUTION_TIMEOUT_SECS").ok().and_then(|s| s.parse().ok()),
-            transaction_cu_limit: env::var("TRANSACTION_CU_LIMIT").ok().and_then(|s| s.parse().ok()), // Load from env
-            simulation_mode: env::var("SIMULATION_MODE").unwrap_or_else(|_| "false".to_string()).parse().unwrap_or(false),
-            paper_trading: env::var("PAPER_TRADING").unwrap_or_else(|_| "false".to_string()).parse().unwrap_or(false),
+            max_pools_per_hop: env::var("MAX_POOLS_PER_HOP")
+                .ok()
+                .and_then(|s| s.parse().ok()),
+            max_concurrent_executions: env::var("MAX_CONCURRENT_EXECUTIONS")
+                .ok()
+                .and_then(|s| s.parse().ok()),
+            execution_timeout_secs: env::var("EXECUTION_TIMEOUT_SECS")
+                .ok()
+                .and_then(|s| s.parse().ok()),
+            transaction_cu_limit: env::var("TRANSACTION_CU_LIMIT")
+                .ok()
+                .and_then(|s| s.parse().ok()), // Load from env
+            simulation_mode: env::var("SIMULATION_MODE")
+                .unwrap_or_else(|_| "false".to_string())
+                .parse()
+                .unwrap_or(false),
+            paper_trading: env::var("PAPER_TRADING")
+                .unwrap_or_else(|_| "false".to_string())
+                .parse()
+                .unwrap_or(false),
             metrics_log_path: env::var("METRICS_LOG_PATH").ok(),
             health_check_token_symbol: env::var("HEALTH_CHECK_TOKEN_SYMBOL").ok(),
-            enable_fixed_input_arb_detection: env::var("ENABLE_FIXED_INPUT_ARB_DETECTION").unwrap_or_else(|_| "false".to_string()).parse().unwrap_or(false),
-            fixed_input_arb_amount: env::var("FIXED_INPUT_ARB_AMOUNT").ok().and_then(|s| s.parse().ok()),
+            enable_fixed_input_arb_detection: env::var("ENABLE_FIXED_INPUT_ARB_DETECTION")
+                .unwrap_or_else(|_| "false".to_string())
+                .parse()
+                .unwrap_or(false),
+            fixed_input_arb_amount: env::var("FIXED_INPUT_ARB_AMOUNT")
+                .ok()
+                .and_then(|s| s.parse().ok()),
             rpc_url_backup: env::var("RPC_URL_BACKUP").ok(),
-            rpc_max_retries: env::var("RPC_MAX_RETRIES").ok().and_then(|s| s.parse().ok()),
-            rpc_retry_delay_ms: env::var("RPC_RETRY_DELAY_MS").ok().and_then(|s| s.parse().ok()),
+            rpc_max_retries: env::var("RPC_MAX_RETRIES")
+                .ok()
+                .and_then(|s| s.parse().ok()),
+            rpc_retry_delay_ms: env::var("RPC_RETRY_DELAY_MS")
+                .ok()
+                .and_then(|s| s.parse().ok()),
             trader_wallet_keypair_path: env::var("TRADER_WALLET_KEYPAIR_PATH").ok(),
-            max_transaction_timeout_seconds: env::var("MAX_TRANSACTION_TIMEOUT_SECONDS").ok().and_then(|s| s.parse().ok()),
-            ws_update_channel_size: env::var("WS_UPDATE_CHANNEL_SIZE").ok().and_then(|s| s.parse().ok()),
-            congestion_update_interval_secs: env::var("CONGESTION_UPDATE_INTERVAL_SECS").ok().and_then(|s| s.parse().ok()),
-            cycle_interval_seconds: env::var("CYCLE_INTERVAL_SECONDS").ok().and_then(|s| s.parse().ok()),
-            
+            max_transaction_timeout_seconds: env::var("MAX_TRANSACTION_TIMEOUT_SECONDS")
+                .ok()
+                .and_then(|s| s.parse().ok()),
+            ws_update_channel_size: env::var("WS_UPDATE_CHANNEL_SIZE")
+                .ok()
+                .and_then(|s| s.parse().ok()),
+            congestion_update_interval_secs: env::var("CONGESTION_UPDATE_INTERVAL_SECS")
+                .ok()
+                .and_then(|s| s.parse().ok()),
+            cycle_interval_seconds: env::var("CYCLE_INTERVAL_SECONDS")
+                .ok()
+                .and_then(|s| s.parse().ok()),
+
             // Jupiter fallback configuration
-            jupiter_fallback_enabled: env::var("JUPITER_FALLBACK_ENABLED").unwrap_or_else(|_| "false".to_string()).parse().unwrap_or(false),
-            jupiter_api_timeout_ms: env::var("JUPITER_API_TIMEOUT_MS").unwrap_or_else(|_| "5000".to_string()).parse().unwrap_or(5000),
-            jupiter_max_retries: env::var("JUPITER_MAX_RETRIES").unwrap_or_else(|_| "3".to_string()).parse().unwrap_or(3),
-            jupiter_fallback_min_profit_pct: env::var("JUPITER_FALLBACK_MIN_PROFIT_PCT").unwrap_or_else(|_| "0.001".to_string()).parse().unwrap_or(0.001),
-            jupiter_slippage_tolerance_bps: env::var("JUPITER_SLIPPAGE_TOLERANCE_BPS").unwrap_or_else(|_| "50".to_string()).parse().unwrap_or(50),
-            
+            jupiter_fallback_enabled: env::var("JUPITER_FALLBACK_ENABLED")
+                .unwrap_or_else(|_| "false".to_string())
+                .parse()
+                .unwrap_or(false),
+            jupiter_api_timeout_ms: env::var("JUPITER_API_TIMEOUT_MS")
+                .unwrap_or_else(|_| "5000".to_string())
+                .parse()
+                .unwrap_or(5000),
+            jupiter_max_retries: env::var("JUPITER_MAX_RETRIES")
+                .unwrap_or_else(|_| "3".to_string())
+                .parse()
+                .unwrap_or(3),
+            jupiter_fallback_min_profit_pct: env::var("JUPITER_FALLBACK_MIN_PROFIT_PCT")
+                .unwrap_or_else(|_| "0.001".to_string())
+                .parse()
+                .unwrap_or(0.001),
+            jupiter_slippage_tolerance_bps: env::var("JUPITER_SLIPPAGE_TOLERANCE_BPS")
+                .unwrap_or_else(|_| "50".to_string())
+                .parse()
+                .unwrap_or(50),
+
             // Jupiter cache configuration
-            jupiter_cache_enabled: env::var("JUPITER_CACHE_ENABLED").unwrap_or_else(|_| "true".to_string()).parse().unwrap_or(true),
-            jupiter_cache_ttl_seconds: env::var("JUPITER_CACHE_TTL_SECONDS").unwrap_or_else(|_| "5".to_string()).parse().unwrap_or(5),
-            jupiter_cache_max_entries: env::var("JUPITER_CACHE_MAX_ENTRIES").unwrap_or_else(|_| "1000".to_string()).parse().unwrap_or(1000),
-            jupiter_cache_amount_bucket_size: env::var("JUPITER_CACHE_AMOUNT_BUCKET_SIZE").unwrap_or_else(|_| "1000000".to_string()).parse().unwrap_or(1_000_000),
-            jupiter_cache_volatility_threshold_pct: env::var("JUPITER_CACHE_VOLATILITY_THRESHOLD_PCT").unwrap_or_else(|_| "2.0".to_string()).parse().unwrap_or(2.0),
-            
+            jupiter_cache_enabled: env::var("JUPITER_CACHE_ENABLED")
+                .unwrap_or_else(|_| "true".to_string())
+                .parse()
+                .unwrap_or(true),
+            jupiter_cache_ttl_seconds: env::var("JUPITER_CACHE_TTL_SECONDS")
+                .unwrap_or_else(|_| "5".to_string())
+                .parse()
+                .unwrap_or(5),
+            jupiter_cache_max_entries: env::var("JUPITER_CACHE_MAX_ENTRIES")
+                .unwrap_or_else(|_| "1000".to_string())
+                .parse()
+                .unwrap_or(1000),
+            jupiter_cache_amount_bucket_size: env::var("JUPITER_CACHE_AMOUNT_BUCKET_SIZE")
+                .unwrap_or_else(|_| "1000000".to_string())
+                .parse()
+                .unwrap_or(1_000_000),
+            jupiter_cache_volatility_threshold_pct: env::var(
+                "JUPITER_CACHE_VOLATILITY_THRESHOLD_PCT",
+            )
+            .unwrap_or_else(|_| "2.0".to_string())
+            .parse()
+            .unwrap_or(2.0),
+
             // Jupiter route optimization configuration
-            jupiter_route_optimization_enabled: env::var("JUPITER_ROUTE_OPTIMIZATION_ENABLED").unwrap_or_else(|_| "true".to_string()).parse().unwrap_or(true),
-            jupiter_max_parallel_routes: env::var("JUPITER_MAX_PARALLEL_ROUTES").unwrap_or_else(|_| "5".to_string()).parse().unwrap_or(5),
-            jupiter_max_alternative_routes: env::var("JUPITER_MAX_ALTERNATIVE_ROUTES").unwrap_or_else(|_| "10".to_string()).parse().unwrap_or(10),
-            jupiter_route_evaluation_timeout_ms: env::var("JUPITER_ROUTE_EVALUATION_TIMEOUT_MS").unwrap_or_else(|_| "2000".to_string()).parse().unwrap_or(2000),
-            jupiter_min_route_improvement_pct: env::var("JUPITER_MIN_ROUTE_IMPROVEMENT_PCT").unwrap_or_else(|_| "0.1".to_string()).parse().unwrap_or(0.1),
-            
+            jupiter_route_optimization_enabled: env::var("JUPITER_ROUTE_OPTIMIZATION_ENABLED")
+                .unwrap_or_else(|_| "true".to_string())
+                .parse()
+                .unwrap_or(true),
+            jupiter_max_parallel_routes: env::var("JUPITER_MAX_PARALLEL_ROUTES")
+                .unwrap_or_else(|_| "5".to_string())
+                .parse()
+                .unwrap_or(5),
+            jupiter_max_alternative_routes: env::var("JUPITER_MAX_ALTERNATIVE_ROUTES")
+                .unwrap_or_else(|_| "10".to_string())
+                .parse()
+                .unwrap_or(10),
+            jupiter_route_evaluation_timeout_ms: env::var("JUPITER_ROUTE_EVALUATION_TIMEOUT_MS")
+                .unwrap_or_else(|_| "2000".to_string())
+                .parse()
+                .unwrap_or(2000),
+            jupiter_min_route_improvement_pct: env::var("JUPITER_MIN_ROUTE_IMPROVEMENT_PCT")
+                .unwrap_or_else(|_| "0.1".to_string())
+                .parse()
+                .unwrap_or(0.1),
+
             // Webhook configuration
             webhook_port: env::var("WEBHOOK_PORT").ok().and_then(|s| s.parse().ok()),
             webhook_url: env::var("WEBHOOK_URL").ok(),
-            enable_webhooks: env::var("ENABLE_WEBHOOKS").unwrap_or_else(|_| "false".to_string()).parse().unwrap_or(false),
+            enable_webhooks: env::var("ENABLE_WEBHOOKS")
+                .unwrap_or_else(|_| "false".to_string())
+                .parse()
+                .unwrap_or(false),
         }
     }
 
@@ -231,7 +339,7 @@ impl Config {
             cycle_interval_seconds: Some(5),
             pool_read_timeout_ms: Some(1000),
             log_level: Some("info".to_string()),
-            
+
             // Webhook Configuration (test defaults)
             webhook_port: Some(8080),
             webhook_url: Some("http://localhost:8080/webhook".to_string()),
@@ -243,14 +351,14 @@ impl Config {
             jupiter_max_retries: 3,
             jupiter_fallback_min_profit_pct: 0.001,
             jupiter_slippage_tolerance_bps: 50,
-            
+
             // Jupiter cache configuration (test defaults)
             jupiter_cache_enabled: true,
             jupiter_cache_ttl_seconds: 5,
             jupiter_cache_max_entries: 1000,
             jupiter_cache_amount_bucket_size: 1_000_000,
             jupiter_cache_volatility_threshold_pct: 2.0,
-            
+
             // Jupiter route optimization configuration (test defaults)
             jupiter_route_optimization_enabled: true,
             jupiter_max_parallel_routes: 5,
@@ -261,17 +369,23 @@ impl Config {
     }
 
     pub fn validate_and_log(&self) {
-        log::info!("╔════════════════════════════════════════════════════════════════════════════╗");
-        log::info!("║                      🤖 SOLANA ARBITRAGE BOT CONFIGURATION                   ║");
-        log::info!("╚════════════════════════════════════════════════════════════════════════════╝");
-        
+        log::info!(
+            "╔════════════════════════════════════════════════════════════════════════════╗"
+        );
+        log::info!(
+            "║                      🤖 SOLANA ARBITRAGE BOT CONFIGURATION                   ║"
+        );
+        log::info!(
+            "╚════════════════════════════════════════════════════════════════════════════╝"
+        );
+
         // Trading Mode
         if self.paper_trading {
             log::info!("🎯 TRADING MODE: 📄 Paper Trading (Virtual Funds)");
         } else {
             log::info!("🎯 TRADING MODE: 💰 Real Trading (Live Funds)");
         }
-        
+
         // Connection Configuration
         log::info!("🌐 NETWORK CONFIGURATION:");
         log::info!("   • Primary RPC: {}", self.rpc_url);
@@ -281,7 +395,7 @@ impl Config {
             log::info!("   • Secondary RPC: Not configured");
         }
         log::info!("   • WebSocket: {}", self.ws_url);
-        
+
         // Wallet Configuration
         log::info!("💼 WALLET CONFIGURATION:");
         if let Some(wallet_path) = &self.trader_wallet_keypair_path {
@@ -301,23 +415,34 @@ impl Config {
                 log::error!("   • Trader Wallet: ❌ MISSING - Required for real trading!");
             }
         }
-        
+
         // Trading Parameters
         log::info!("📊 TRADING PARAMETERS:");
-        log::info!("   • Min Profit Threshold: {:.4}% ({:.1} bps)", 
-                  self.min_profit_pct * 100.0, self.min_profit_pct * 10000.0);
+        log::info!(
+            "   • Min Profit Threshold: {:.4}% ({:.1} bps)",
+            self.min_profit_pct * 100.0,
+            self.min_profit_pct * 10000.0
+        );
         if let Some(usd_threshold) = self.min_profit_usd_threshold {
             log::info!("   • Min Profit (USD): ${:.4}", usd_threshold);
         }
-        log::info!("   • Max Slippage: {:.2}% ({:.0} bps)", 
-                  self.max_slippage_pct * 100.0, self.max_slippage_pct * 10000.0);
-        log::info!("   • Priority Fee: {} lamports ({:.6} SOL)", 
-                  self.transaction_priority_fee_lamports, 
-                  self.transaction_priority_fee_lamports as f64 / 1e9);
-        
+        log::info!(
+            "   • Max Slippage: {:.2}% ({:.0} bps)",
+            self.max_slippage_pct * 100.0,
+            self.max_slippage_pct * 10000.0
+        );
+        log::info!(
+            "   • Priority Fee: {} lamports ({:.6} SOL)",
+            self.transaction_priority_fee_lamports,
+            self.transaction_priority_fee_lamports as f64 / 1e9
+        );
+
         // Performance Settings
         log::info!("⚡ PERFORMANCE SETTINGS:");
-        log::info!("   • Pool Refresh: {} seconds", self.pool_refresh_interval_secs);
+        log::info!(
+            "   • Pool Refresh: {} seconds",
+            self.pool_refresh_interval_secs
+        );
         if let Some(concurrent) = self.max_concurrent_executions {
             log::info!("   • Max Concurrent: {} operations", concurrent);
         }
@@ -327,7 +452,7 @@ impl Config {
         if let Some(cu_limit) = self.transaction_cu_limit {
             log::info!("   • Compute Units: {} CU limit", cu_limit);
         }
-        
+
         // Webhook Configuration
         if self.enable_webhooks {
             log::info!("🔗 WEBHOOK INTEGRATION:");
@@ -342,32 +467,40 @@ impl Config {
         } else {
             log::info!("🔗 WEBHOOK INTEGRATION: ➖ Disabled");
         }
-        
+
         // Jupiter Integration
         if self.jupiter_fallback_enabled {
             log::info!("🪐 JUPITER INTEGRATION:");
             log::info!("   • Status: ✅ Enabled");
             log::info!("   • API Timeout: {}ms", self.jupiter_api_timeout_ms);
             log::info!("   • Max Retries: {}", self.jupiter_max_retries);
-            log::info!("   • Min Profit: {:.4}%", self.jupiter_fallback_min_profit_pct * 100.0);
+            log::info!(
+                "   • Min Profit: {:.4}%",
+                self.jupiter_fallback_min_profit_pct * 100.0
+            );
             if self.jupiter_cache_enabled {
-                log::info!("   • Cache: ✅ Enabled (TTL: {}s, Max: {} entries)", 
-                          self.jupiter_cache_ttl_seconds, self.jupiter_cache_max_entries);
+                log::info!(
+                    "   • Cache: ✅ Enabled (TTL: {}s, Max: {} entries)",
+                    self.jupiter_cache_ttl_seconds,
+                    self.jupiter_cache_max_entries
+                );
             }
         } else {
             log::info!("🪐 JUPITER INTEGRATION: ➖ Disabled");
         }
-        
+
         // Validation Warnings
         if self.min_profit_pct <= 0.0 || self.min_profit_pct >= 1.0 {
-            log::warn!("⚠️  MIN_PROFIT_PCT ({:.4}%) is outside typical range (0.001% - 99.999%)", 
-                      self.min_profit_pct * 100.0);
+            log::warn!(
+                "⚠️  MIN_PROFIT_PCT ({:.4}%) is outside typical range (0.001% - 99.999%)",
+                self.min_profit_pct * 100.0
+            );
         }
-        
+
         if self.transaction_priority_fee_lamports == 0 {
             log::warn!("⚠️  Priority fee is 0 - transactions may be slow");
         }
-        
+
         log::info!("════════════════════════════════════════════════════════════════════════════");
     }
 }
@@ -389,8 +522,17 @@ mod tests {
         let config = Config::test_default();
         // Add assertions here to check specific default values.
         // This not only uses the function but also verifies its behavior.
-        assert_eq!(config.min_profit_pct, 0.1, "Default min_profit_pct should be 0.1");
-        assert_eq!(config.rpc_url, "http://localhost:8899", "Default rpc_url should be http://localhost:8899");
-        assert!(!config.simulation_mode, "Default simulation_mode should be false");
+        assert_eq!(
+            config.min_profit_pct, 0.1,
+            "Default min_profit_pct should be 0.1"
+        );
+        assert_eq!(
+            config.rpc_url, "http://localhost:8899",
+            "Default rpc_url should be http://localhost:8899"
+        );
+        assert!(
+            !config.simulation_mode,
+            "Default simulation_mode should be false"
+        );
     }
 }

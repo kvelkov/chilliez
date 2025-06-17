@@ -3,8 +3,8 @@
 
 #[cfg(test)]
 mod meteora_tests {
-    use super::super::clients::meteora::*;
     use super::super::api::DexClient;
+    use super::super::clients::meteora::*;
     use crate::utils::{DexType, PoolInfo, PoolToken};
     use solana_sdk::pubkey::Pubkey;
 
@@ -72,7 +72,7 @@ mod meteora_tests {
             liquidity: None,
             sqrt_price: None,
             tick_current_index: Some(8388608), // 2^23 (neutral bin)
-            tick_spacing: Some(64), // DLMM bin step
+            tick_spacing: Some(64),            // DLMM bin step
             tick_array_0: None,
             tick_array_1: None,
             tick_array_2: None,
@@ -89,10 +89,13 @@ mod meteora_tests {
     #[test]
     fn test_meteora_pool_type_detection() {
         let client = create_test_meteora_client();
-        
+
         // Test Dynamic AMM pool (no tick_spacing)
         let dynamic_pool = create_mock_dynamic_amm_pool();
-        assert_eq!(client.get_pool_type(&dynamic_pool), MeteoraPoolType::DynamicAmm);
+        assert_eq!(
+            client.get_pool_type(&dynamic_pool),
+            MeteoraPoolType::DynamicAmm
+        );
 
         // Test DLMM pool (has tick_spacing)
         let dlmm_pool = create_mock_dlmm_pool();
@@ -107,7 +110,7 @@ mod meteora_tests {
 
         let result = client.calculate_onchain_quote(&pool, input_amount);
         assert!(result.is_ok());
-        
+
         let quote = result.unwrap();
         assert_eq!(quote.input_amount, input_amount);
         assert!(quote.output_amount > 0);
@@ -123,7 +126,7 @@ mod meteora_tests {
 
         let result = client.calculate_onchain_quote(&pool, input_amount);
         assert!(result.is_ok());
-        
+
         let quote = result.unwrap();
         assert_eq!(quote.input_amount, input_amount);
         assert!(quote.output_amount > 0);
@@ -152,7 +155,7 @@ mod meteora_tests {
         let client = create_test_meteora_client();
         let result = client.health_check().await;
         assert!(result.is_ok());
-        
+
         let health = result.unwrap();
         assert!(health.is_healthy);
         assert!(health.response_time_ms.is_some());
@@ -161,8 +164,8 @@ mod meteora_tests {
 
 #[cfg(test)]
 mod lifinity_tests {
-    use super::super::clients::lifinity::*;
     use super::super::api::DexClient;
+    use super::super::clients::lifinity::*;
     use crate::utils::{DexType, PoolInfo, PoolToken};
     use solana_sdk::pubkey::Pubkey;
 
@@ -193,7 +196,7 @@ mod lifinity_tests {
             fee_rate_bips: Some(25),
             last_update_timestamp: 1640995200,
             dex_type: DexType::Lifinity,
-            liquidity: Some(1000000000000), // 1M liquidity
+            liquidity: Some(1000000000000),         // 1M liquidity
             sqrt_price: Some(12247448713915890491), // sqrt(150)
             tick_current_index: Some(0),
             tick_spacing: Some(64),
@@ -218,7 +221,7 @@ mod lifinity_tests {
 
         let result = client.calculate_onchain_quote(&pool, input_amount);
         assert!(result.is_ok());
-        
+
         let quote = result.unwrap();
         assert_eq!(quote.input_amount, input_amount);
         assert!(quote.output_amount > 0);
@@ -252,7 +255,7 @@ mod lifinity_tests {
         let client = create_test_lifinity_client();
         let result = client.health_check().await;
         assert!(result.is_ok());
-        
+
         let health = result.unwrap();
         assert!(health.is_healthy);
         assert!(health.response_time_ms.is_some());
@@ -318,12 +321,12 @@ mod phoenix_tests {
     fn test_phoenix_order_side_enum() {
         let bid = OrderSide::Bid;
         let ask = OrderSide::Ask;
-        
+
         match bid {
             OrderSide::Bid => assert!(true),
             OrderSide::Ask => assert!(false),
         }
-        
+
         match ask {
             OrderSide::Bid => assert!(false),
             OrderSide::Ask => assert!(true),
@@ -336,13 +339,13 @@ mod phoenix_tests {
         let limit_order = OrderType::Limit;
         let _post_only = OrderType::PostOnly;
         let _ioc = OrderType::ImmediateOrCancel;
-        
+
         // Test that we can differentiate order types
         match market_order {
             OrderType::Market => assert!(true),
             _ => assert!(false),
         }
-        
+
         match limit_order {
             OrderType::Limit => assert!(true),
             _ => assert!(false),
@@ -357,7 +360,7 @@ mod phoenix_tests {
 
         let result = client.calculate_onchain_quote(&market, input_amount);
         assert!(result.is_ok());
-        
+
         let quote = result.unwrap();
         assert_eq!(quote.input_amount, input_amount);
         assert!(quote.output_amount > 0);
@@ -371,7 +374,7 @@ mod phoenix_tests {
         let client = create_test_phoenix_client();
         let result = client.health_check().await;
         assert!(result.is_ok());
-        
+
         let health = result.unwrap();
         assert!(health.is_healthy);
         assert!(health.response_time_ms.is_some());
@@ -382,8 +385,8 @@ mod phoenix_tests {
 
 #[cfg(test)]
 mod integration_tests {
-    use super::super::*;
     use super::super::clients; // Add direct import for clients module
+    use super::super::*;
     use crate::cache::Cache;
     use crate::config::settings::Config;
     use std::sync::Arc;
@@ -392,12 +395,12 @@ mod integration_tests {
     async fn test_get_all_clients_enhanced() {
         let cache = Arc::new(Cache::new("redis://localhost:6379", 300).await.unwrap());
         let config = Arc::new(Config::test_default()); // Fix: Use test_default() instead of default()
-        
+
         let clients = get_all_clients(cache, config);
-        
+
         // Should include all DEX clients including new ones
         assert_eq!(clients.len(), 5); // Orca, Raydium, Meteora, Lifinity, Jupiter
-        
+
         let client_names: Vec<&str> = clients.iter().map(|c| c.get_name()).collect();
         assert!(client_names.contains(&"Orca"));
         assert!(client_names.contains(&"Raydium"));
@@ -410,11 +413,11 @@ mod integration_tests {
     async fn test_get_all_discoverable_clients_enhanced() {
         let cache = Arc::new(Cache::new("redis://localhost:6379", 300).await.unwrap());
         let config = Arc::new(Config::test_default()); // Fix: Use test_default() instead of default()
-        
+
         let clients = get_all_discoverable_clients(cache, config);
-        
+
         assert_eq!(clients.len(), 5);
-        
+
         for client in &clients {
             assert!(!client.dex_name().is_empty());
         }
@@ -424,15 +427,23 @@ mod integration_tests {
     async fn test_all_clients_health_checks() {
         let cache = Arc::new(Cache::new("redis://localhost:6379", 300).await.unwrap());
         let config = Arc::new(Config::test_default()); // Fix: Use test_default() instead of default()
-        
+
         let clients = get_all_clients(cache, config);
-        
+
         for client in clients {
             let health_result = client.health_check().await;
-            assert!(health_result.is_ok(), "Health check failed for {}", client.get_name());
-            
+            assert!(
+                health_result.is_ok(),
+                "Health check failed for {}",
+                client.get_name()
+            );
+
             let health = health_result.unwrap();
-            assert!(health.is_healthy, "{} reported unhealthy", client.get_name());
+            assert!(
+                health.is_healthy,
+                "{} reported unhealthy",
+                client.get_name()
+            );
             assert!(health.response_time_ms.is_some());
         }
     }
@@ -487,28 +498,28 @@ mod integration_tests {
 
 #[cfg(test)]
 mod math_integration_tests {
-    use crate::dex::math::{meteora, lifinity};
+    use crate::dex::math::{lifinity, meteora};
 
     #[test]
     fn test_meteora_math_integration() {
         // Test Dynamic AMM calculation
         let result = meteora::calculate_dynamic_amm_output(
-            1_000_000,    // 1 token input
-            100_000_000,  // 100 tokens reserve
-            200_000_000,  // 200 tokens reserve
-            25,           // 0.25% fee
-            1000,         // Fix: Add missing 5th parameter (max_slippage_bps)
+            1_000_000,   // 1 token input
+            100_000_000, // 100 tokens reserve
+            200_000_000, // 200 tokens reserve
+            25,          // 0.25% fee
+            1000,        // Fix: Add missing 5th parameter (max_slippage_bps)
         );
         assert!(result.is_ok());
         assert!(result.unwrap() > 0);
 
         // Test DLMM calculation
         let dlmm_result = meteora::calculate_dlmm_output(
-            1_000_000,  // 1 token input
-            8388608,    // Neutral bin (2^23)
-            25,         // 0.25% bin step
-            25,         // 0.25% fee
-            64,         // Fix: Add missing 5th parameter (bin_step)
+            1_000_000, // 1 token input
+            8388608,   // Neutral bin (2^23)
+            25,        // 0.25% bin step
+            25,        // 0.25% fee
+            64,        // Fix: Add missing 5th parameter (bin_step)
         );
         assert!(dlmm_result.is_ok());
         assert!(dlmm_result.unwrap() > 0);
@@ -518,11 +529,11 @@ mod math_integration_tests {
     fn test_lifinity_math_integration() {
         // Test without oracle
         let result = lifinity::calculate_lifinity_output(
-            1_000_000,    // 1 token input
-            100_000_000,  // 100 tokens reserve
-            200_000_000,  // 200 tokens reserve
-            25,           // 0.25% fee
-            None,         // No oracle price
+            1_000_000,   // 1 token input
+            100_000_000, // 100 tokens reserve
+            200_000_000, // 200 tokens reserve
+            25,          // 0.25% fee
+            None,        // No oracle price
         );
         assert!(result.is_ok());
         assert!(result.unwrap() > 0);
@@ -548,7 +559,7 @@ mod math_integration_tests {
     //         Some(1.0), // Normal liquidity
     //     );
     //     assert!(result.is_ok());
-    //     
+    //
     //     let dynamic_fee = result.unwrap();
     //     assert!(dynamic_fee >= 25); // Should be at least base fee
     //     assert!(dynamic_fee <= 100); // Should not exceed 1%

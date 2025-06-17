@@ -6,8 +6,8 @@ pub mod price_feeds; // Real-time WebSocket price feed infrastructure
 // Re-export relevant items
 pub use market_data::CryptoDataProvider;
 pub use price_feeds::{
-    PriceFeedManager, PriceUpdate, WebSocketFeed, WebSocketConfig, 
-    WebSocketMetrics, ConnectionStatus
+    ConnectionStatus, PriceFeedManager, PriceUpdate, WebSocketConfig, WebSocketFeed,
+    WebSocketMetrics,
 };
 
 // DEX-specific WebSocket feeds
@@ -15,8 +15,5 @@ pub mod feeds;
 
 // Re-export all WebSocket feed implementations
 pub use feeds::{
-    OrcaWebSocketFeed,
-    MeteoraWebSocketFeed,
-    RaydiumWebSocketFeed,
-    PhoenixWebSocketFeed,
+    MeteoraWebSocketFeed, OrcaWebSocketFeed, PhoenixWebSocketFeed, RaydiumWebSocketFeed,
 };

@@ -139,7 +139,7 @@ impl PriceFeedManager {
     /// Create a new price feed manager
     pub fn new() -> Self {
         let (update_sender, update_receiver) = mpsc::unbounded_channel();
-        
+
         Self {
             feeds: HashMap::new(),
             price_cache: Arc::new(RwLock::new(HashMap::new())),
@@ -155,7 +155,7 @@ impl PriceFeedManager {
     pub fn add_feed(&mut self, feed: Box<dyn WebSocketFeed>) {
         let dex_type = feed.dex_type();
         self.feeds.insert(dex_type.clone(), feed);
-        
+
         // Initialize status and metrics
         if let Ok(mut status) = self.status.write() {
             status.insert(dex_type.clone(), ConnectionStatus::Disconnected);
@@ -168,14 +168,14 @@ impl PriceFeedManager {
     /// Start all WebSocket connections and price monitoring
     pub async fn start(&mut self) -> Result<mpsc::UnboundedReceiver<PriceUpdate>> {
         info!("🚀 Starting WebSocket price feed manager...");
-        
+
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
         self.shutdown_sender = Some(shutdown_tx);
 
         // Connect all feeds
         for (dex_type, feed) in &mut self.feeds {
             info!("📡 Connecting to {} WebSocket feed...", dex_type);
-            
+
             // Update status to connecting
             if let Ok(mut status) = self.status.write() {
                 status.insert(dex_type.clone(), ConnectionStatus::Connecting);
@@ -205,7 +205,9 @@ impl PriceFeedManager {
         });
 
         // Return the receiver for price updates
-        self.update_receiver.take().ok_or_else(|| anyhow!("Update receiver already taken"))
+        self.update_receiver
+            .take()
+            .ok_or_else(|| anyhow!("Update receiver already taken"))
     }
 
     /// Stop all WebSocket connections
@@ -236,7 +238,10 @@ impl PriceFeedManager {
 
     /// Get all latest prices
     pub fn get_all_prices(&self) -> HashMap<String, PriceUpdate> {
-        self.price_cache.read().map(|cache| cache.clone()).unwrap_or_default()
+        self.price_cache
+            .read()
+            .map(|cache| cache.clone())
+            .unwrap_or_default()
     }
 
     /// Get fresh prices only (within latency threshold)
@@ -255,19 +260,25 @@ impl PriceFeedManager {
 
     /// Get connection status for all DEXs
     pub fn get_connection_status(&self) -> HashMap<DexType, ConnectionStatus> {
-        self.status.read().map(|status| status.clone()).unwrap_or_default()
+        self.status
+            .read()
+            .map(|status| status.clone())
+            .unwrap_or_default()
     }
 
     /// Get metrics for all feeds
     pub fn get_metrics(&self) -> HashMap<DexType, WebSocketMetrics> {
-        self.metrics.read().map(|metrics| metrics.clone()).unwrap_or_default()
+        self.metrics
+            .read()
+            .map(|metrics| metrics.clone())
+            .unwrap_or_default()
     }
 
     /// Subscribe to specific pools across all DEXs
     pub async fn subscribe_to_pools(&mut self, pools: Vec<PoolInfo>) -> Result<()> {
         // Group pools by DEX type
         let mut pools_by_dex: HashMap<DexType, Vec<String>> = HashMap::new();
-        
+
         for pool in pools {
             pools_by_dex
                 .entry(pool.dex_type)
@@ -278,7 +289,11 @@ impl PriceFeedManager {
         // Subscribe each DEX to its pools
         for (dex_type, pool_addresses) in pools_by_dex {
             if let Some(feed) = self.feeds.get_mut(&dex_type) {
-                info!("📋 Subscribing {} to {} pools", dex_type, pool_addresses.len());
+                info!(
+                    "📋 Subscribing {} to {} pools",
+                    dex_type,
+                    pool_addresses.len()
+                );
                 if let Err(e) = feed.subscribe_to_pools(pool_addresses).await {
                     warn!("⚠️ Failed to subscribe {} to pools: {}", dex_type, e);
                 }
@@ -295,7 +310,7 @@ impl PriceFeedManager {
         mut shutdown_rx: oneshot::Receiver<()>,
     ) {
         let mut cleanup_interval = interval(Duration::from_secs(60)); // Clean up stale data every minute
-        
+
         loop {
             tokio::select! {
                 _ = cleanup_interval.tick() => {
@@ -304,7 +319,7 @@ impl PriceFeedManager {
                         let before_count = cache.len();
                         cache.retain(|_, update| update.is_fresh());
                         let after_count = cache.len();
-                        
+
                         if before_count != after_count {
                             debug!("🧹 Cleaned up {} stale price entries", before_count - after_count);
                         }
@@ -322,13 +337,16 @@ impl PriceFeedManager {
     pub fn validate_price_quality(&self) -> HashMap<DexType, f64> {
         let mut quality_scores = HashMap::new();
         let prices = self.get_all_prices();
-        
-        for dex_type in [DexType::Orca, DexType::Raydium, DexType::Meteora, DexType::Lifinity, DexType::Phoenix] {
-            let dex_prices: Vec<_> = prices
-                .values()
-                .filter(|p| p.dex_type == dex_type)
-                .collect();
-            
+
+        for dex_type in [
+            DexType::Orca,
+            DexType::Raydium,
+            DexType::Meteora,
+            DexType::Lifinity,
+            DexType::Phoenix,
+        ] {
+            let dex_prices: Vec<_> = prices.values().filter(|p| p.dex_type == dex_type).collect();
+
             if dex_prices.is_empty() {
                 quality_scores.insert(dex_type, 0.0);
                 continue;
@@ -338,7 +356,7 @@ impl PriceFeedManager {
             let quality = (fresh_count as f64) / (dex_prices.len() as f64);
             quality_scores.insert(dex_type, quality);
         }
-        
+
         quality_scores
     }
 }
@@ -356,7 +374,7 @@ mod tests {
     #[test]
     fn test_price_update_freshness() {
         let now = chrono::Utc::now().timestamp_millis() as u64;
-        
+
         // Fresh price update
         let fresh_update = PriceUpdate {
             pool_address: "test_pool".to_string(),

@@ -1,27 +1,30 @@
 // src/dex/clients/phoenix.rs
 //! Phoenix DEX integration with order book support.
-//! 
+//!
 //! Phoenix uses an order book model rather than AMM, requiring different
 //! interaction patterns compared to other DEXes. This implementation provides
 //! production-ready order book math, market order execution, and swap instruction building.
 
-use crate::dex::api::{DexClient, Quote, SwapInfo, PoolDiscoverable, CommonSwapInfo, DexHealthStatus};
+use crate::dex::api::{
+    CommonSwapInfo, DexClient, DexHealthStatus, PoolDiscoverable, Quote, SwapInfo,
+};
 use crate::dex::math::phoenix;
 use crate::solana::rpc::SolanaRpcClient;
 use crate::utils::{DexType, PoolInfo, PoolParser as UtilsPoolParser, PoolToken};
 use anyhow::{anyhow, Result as AnyhowResult};
 use async_trait::async_trait;
 use log::{info, warn};
+use serde::{Deserialize, Serialize};
 use solana_sdk::{
-    instruction::{Instruction, AccountMeta},
+    instruction::{AccountMeta, Instruction},
     pubkey::Pubkey,
     system_program,
 };
 use std::sync::Arc;
-use serde::{Deserialize, Serialize};
 
 // --- Constants ---
-pub const PHOENIX_PROGRAM_ID: Pubkey = solana_sdk::pubkey!("PhoeNiXZ8ByJGLkxNfZRnkUfjvmuYqLR89jjFHGqdXY");
+pub const PHOENIX_PROGRAM_ID: Pubkey =
+    solana_sdk::pubkey!("PhoeNiXZ8ByJGLkxNfZRnkUfjvmuYqLR89jjFHGqdXY");
 
 // Instruction discriminators for Phoenix
 const PHOENIX_PLACE_ORDER_DISCRIMINATOR: [u8; 8] = [0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08]; // Placeholder
@@ -55,29 +58,47 @@ impl OrderBook {
     pub fn create_sample() -> Self {
         Self {
             bids: vec![
-                phoenix::OrderBookLevel { price: 199_500_000, size: 1_000_000 }, // $199.50
-                phoenix::OrderBookLevel { price: 199_000_000, size: 2_000_000 }, // $199.00
-                phoenix::OrderBookLevel { price: 198_500_000, size: 1_500_000 }, // $198.50
+                phoenix::OrderBookLevel {
+                    price: 199_500_000,
+                    size: 1_000_000,
+                }, // $199.50
+                phoenix::OrderBookLevel {
+                    price: 199_000_000,
+                    size: 2_000_000,
+                }, // $199.00
+                phoenix::OrderBookLevel {
+                    price: 198_500_000,
+                    size: 1_500_000,
+                }, // $198.50
             ],
             asks: vec![
-                phoenix::OrderBookLevel { price: 200_500_000, size: 1_000_000 }, // $200.50
-                phoenix::OrderBookLevel { price: 201_000_000, size: 2_000_000 }, // $201.00
-                phoenix::OrderBookLevel { price: 201_500_000, size: 1_500_000 }, // $201.50
+                phoenix::OrderBookLevel {
+                    price: 200_500_000,
+                    size: 1_000_000,
+                }, // $200.50
+                phoenix::OrderBookLevel {
+                    price: 201_000_000,
+                    size: 2_000_000,
+                }, // $201.00
+                phoenix::OrderBookLevel {
+                    price: 201_500_000,
+                    size: 1_500_000,
+                }, // $201.50
             ],
             last_update: chrono::Utc::now().timestamp_millis() as u64,
         }
     }
-    
+
     /// Get best bid price
     pub fn best_bid(&self) -> Option<u64> {
         self.bids.first().map(|level| level.price)
     }
-    
+
     /// Get best ask price
     pub fn best_ask(&self) -> Option<u64> {
         self.asks.first().map(|level| level.price)
     }
-    
+
     /// Get mid price
     pub fn mid_price(&self) -> Option<u64> {
         match (self.best_bid(), self.best_ask()) {
@@ -85,7 +106,7 @@ impl OrderBook {
             _ => None,
         }
     }
-    
+
     /// Calculate market order execution using production Phoenix math
     #[allow(dead_code)] // Used in Phoenix integration tests
     pub fn calculate_market_execution(&self, amount: u64, side: OrderSide) -> (u64, u64) {
@@ -93,14 +114,14 @@ impl OrderBook {
             OrderSide::Bid => &self.asks, // Buying, so we consume asks
             OrderSide::Ask => &self.bids, // Selling, so we consume bids
         };
-        
+
         // Use production Phoenix math for market order execution
         match phoenix::calculate_market_order_execution(amount, levels, side == OrderSide::Bid) {
             Ok((filled_amount, total_cost, _weighted_avg_price)) => (filled_amount, total_cost),
             Err(_) => (0, 0), // Fallback on error
         }
     }
-    
+
     /// Calculate price impact for a given trade size using production Phoenix math
     #[allow(dead_code)] // Used in Phoenix integration tests
     pub fn calculate_price_impact(&self, amount: u64, side: OrderSide) -> f64 {
@@ -108,12 +129,12 @@ impl OrderBook {
             Some(price) => price,
             None => return 0.0,
         };
-        
+
         let levels = match side {
             OrderSide::Bid => &self.asks, // Buying, so we consume asks
             OrderSide::Ask => &self.bids, // Selling, so we consume bids
         };
-        
+
         // Use production Phoenix math for price impact calculation
         match phoenix::calculate_order_book_price_impact(amount, levels, mid_price) {
             Ok(impact_decimal) => {
@@ -139,7 +160,7 @@ impl UtilsPoolParser for PhoenixPoolParser {
         // Phoenix markets are more complex than AMM pools
         // This is a simplified implementation
         warn!("PhoenixPoolParser: Simplified market parsing - full implementation requires Phoenix SDK integration");
-        
+
         // For now, create a basic PoolInfo structure
         // In production, this would parse the actual Phoenix market state
         let pool_info = PoolInfo {
@@ -159,7 +180,7 @@ impl UtilsPoolParser for PhoenixPoolParser {
             },
             token_a_vault: Pubkey::default(), // Would be base vault
             token_b_vault: Pubkey::default(), // Would be quote vault
-            fee_numerator: Some(25), // Typical Phoenix fee
+            fee_numerator: Some(25),          // Typical Phoenix fee
             fee_denominator: Some(10000),
             fee_rate_bips: Some(25),
             last_update_timestamp: chrono::Utc::now().timestamp() as u64,
@@ -203,24 +224,28 @@ impl PhoenixClient {
         input_amount: u64,
         side: OrderSide,
     ) -> AnyhowResult<u64> {
-        info!("Calculating Phoenix market order quote for {} with side {:?}", input_amount, side);
-        
+        info!(
+            "Calculating Phoenix market order quote for {} with side {:?}",
+            input_amount, side
+        );
+
         // For now, create a sample order book since we don't have live data
         // In production, this would fetch real order book from on-chain data
         let sample_order_book = OrderBook::create_sample();
-        
+
         let levels = match side {
             OrderSide::Bid => &sample_order_book.asks, // Buying, consume asks
             OrderSide::Ask => &sample_order_book.bids, // Selling, consume bids
         };
-        
+
         // Use production Phoenix math for market order execution
-        let (filled_amount, total_cost, _weighted_avg_price) = phoenix::calculate_market_order_execution(
-            input_amount,
-            levels,
-            side == OrderSide::Bid
-        )?;
-        
+        let (filled_amount, total_cost, _weighted_avg_price) =
+            phoenix::calculate_market_order_execution(
+                input_amount,
+                levels,
+                side == OrderSide::Bid,
+            )?;
+
         // Apply fees
         let fee_rate = market.fee_rate_bips.unwrap_or(25) as f64 / 10000.0;
         let output_after_fees = if side == OrderSide::Bid {
@@ -232,7 +257,7 @@ impl PhoenixClient {
         };
 
         warn!("PhoenixClient: Using sample order book data - production requires live market data");
-        
+
         Ok(output_after_fees)
     }
 
@@ -242,11 +267,18 @@ impl PhoenixClient {
         swap_info: &CommonSwapInfo,
         market_info: &PoolInfo,
     ) -> Result<Instruction, crate::error::ArbError> {
-        info!("Building Phoenix swap instruction for market {}", market_info.address);
-        
+        info!(
+            "Building Phoenix swap instruction for market {}",
+            market_info.address
+        );
+
         // Determine order side based on token mints
         let is_buying_base = swap_info.destination_token_mint == market_info.token_a.mint;
-        let side = if is_buying_base { OrderSide::Bid } else { OrderSide::Ask };
+        let side = if is_buying_base {
+            OrderSide::Bid
+        } else {
+            OrderSide::Ask
+        };
 
         // Calculate optimal order size considering price impact
         let sample_order_book = OrderBook::create_sample();
@@ -254,34 +286,39 @@ impl PhoenixClient {
             OrderSide::Bid => &sample_order_book.asks,
             OrderSide::Ask => &sample_order_book.bids,
         };
-        
+
         let mid_price = sample_order_book.mid_price().unwrap_or(200_000_000);
         let max_price_impact_bps = 500; // 5% max price impact
-        
-        let optimal_size = phoenix::calculate_optimal_order_size(
-            levels,
-            mid_price,
-            max_price_impact_bps
-        ).map_err(|e| crate::error::ArbError::DexError(format!("Phoenix order size calculation failed: {}", e)))?;
-        
+
+        let optimal_size =
+            phoenix::calculate_optimal_order_size(levels, mid_price, max_price_impact_bps)
+                .map_err(|e| {
+                    crate::error::ArbError::DexError(format!(
+                        "Phoenix order size calculation failed: {}",
+                        e
+                    ))
+                })?;
+
         // Use the smaller of requested amount or optimal size to prevent excessive slippage
         let actual_order_size = swap_info.input_amount.min(optimal_size);
-        
-        info!("Phoenix order: requested={}, optimal={}, actual={}",
-              swap_info.input_amount, optimal_size, actual_order_size);
+
+        info!(
+            "Phoenix order: requested={}, optimal={}, actual={}",
+            swap_info.input_amount, optimal_size, actual_order_size
+        );
 
         // Phoenix requires more complex account setup for order placement
         let accounts = vec![
             AccountMeta::new_readonly(PHOENIX_PROGRAM_ID, false),
             AccountMeta::new_readonly(swap_info.user_wallet_pubkey, true), // Signer
-            AccountMeta::new(market_info.address, false), // Market
-            AccountMeta::new(swap_info.user_source_token_account, false), // User source
+            AccountMeta::new(market_info.address, false),                  // Market
+            AccountMeta::new(swap_info.user_source_token_account, false),  // User source
             AccountMeta::new(swap_info.user_destination_token_account, false), // User destination
-            AccountMeta::new(market_info.token_a_vault, false), // Base vault
-            AccountMeta::new(market_info.token_b_vault, false), // Quote vault
+            AccountMeta::new(market_info.token_a_vault, false),            // Base vault
+            AccountMeta::new(market_info.token_b_vault, false),            // Quote vault
             // Phoenix-specific accounts (would be resolved from market state in production):
             // - Bids account (market_info.address + seed)
-            // - Asks account (market_info.address + seed) 
+            // - Asks account (market_info.address + seed)
             // - Event queue (market_info.address + seed)
             // - Market authority (derived from market)
             AccountMeta::new_readonly(spl_token::id(), false), // Token program
@@ -291,13 +328,13 @@ impl PhoenixClient {
         // Build instruction data for market order with production parameters
         let mut instruction_data = Vec::new();
         instruction_data.extend_from_slice(&PHOENIX_PLACE_ORDER_DISCRIMINATOR);
-        
+
         // Order parameters (production format)
         instruction_data.extend_from_slice(&actual_order_size.to_le_bytes()); // Size
         instruction_data.extend_from_slice(&swap_info.minimum_output_amount.to_le_bytes()); // Min output
         instruction_data.push(side as u8); // Order side
         instruction_data.push(OrderType::Market as u8); // Order type
-        
+
         // Additional Phoenix-specific parameters
         instruction_data.extend_from_slice(&0u64.to_le_bytes()); // Order ID (0 for market orders)
         instruction_data.extend_from_slice(&u64::MAX.to_le_bytes()); // Max price (no limit for market orders)
@@ -319,26 +356,30 @@ impl DexClient for PhoenixClient {
     }
 
     fn calculate_onchain_quote(&self, market: &PoolInfo, input_amount: u64) -> AnyhowResult<Quote> {
-        info!("Calculating Phoenix onchain quote for {} tokens", input_amount);
-        
+        info!(
+            "Calculating Phoenix onchain quote for {} tokens",
+            input_amount
+        );
+
         // For Phoenix, determine direction based on market structure
         // This is a simplified assumption - production would need more context
         let side = OrderSide::Bid; // Assume buying base token
-        
+
         let output_amount = self.calculate_market_order_quote(market, input_amount, side)?;
-        
+
         // Calculate slippage estimate using production Phoenix math
         let sample_order_book = OrderBook::create_sample();
         let mid_price = sample_order_book.mid_price().unwrap_or(200_000_000);
         let levels = &sample_order_book.asks; // For buying
-        
-        let slippage_estimate = match phoenix::calculate_order_book_price_impact(input_amount, levels, mid_price) {
-            Ok(impact_decimal) => {
-                let impact_f64 = impact_decimal.to_string().parse::<f64>().unwrap_or(0.2);
-                Some(impact_f64.min(1.0)) // Cap at 100%
-            }
-            Err(_) => Some(0.2), // Default 20% slippage estimate on error
-        };
+
+        let slippage_estimate =
+            match phoenix::calculate_order_book_price_impact(input_amount, levels, mid_price) {
+                Ok(impact_decimal) => {
+                    let impact_f64 = impact_decimal.to_string().parse::<f64>().unwrap_or(0.2);
+                    Some(impact_f64.min(1.0)) // Cap at 100%
+                }
+                Err(_) => Some(0.2), // Default 20% slippage estimate on error
+            };
 
         warn!("PhoenixClient: Quote calculation using sample order book - production requires live market data");
 
@@ -355,7 +396,7 @@ impl DexClient for PhoenixClient {
 
     fn get_swap_instruction(&self, swap_info: &SwapInfo) -> AnyhowResult<Instruction> {
         warn!("get_swap_instruction for Phoenix is a basic implementation. Use get_swap_instruction_enhanced for production.");
-        
+
         // Create a basic instruction for legacy compatibility
         Ok(Instruction {
             program_id: PHOENIX_PROGRAM_ID,
@@ -386,28 +427,28 @@ impl DexClient for PhoenixClient {
 
     async fn discover_pools(&self) -> AnyhowResult<Vec<PoolInfo>> {
         info!("PhoenixClient: Starting market discovery...");
-        
+
         // Phoenix market discovery would require:
         // 1. Scanning for Phoenix market accounts
         // 2. Parsing market state for each discovered market
         // 3. Converting market data to PoolInfo format
-        
+
         warn!("PhoenixClient: Market discovery not yet implemented - requires Phoenix market scanning");
-        
+
         Ok(Vec::new())
     }
 
     async fn health_check(&self) -> Result<DexHealthStatus, crate::error::ArbError> {
         let start_time = std::time::Instant::now();
-        
+
         // Phoenix health check could involve:
         // 1. Checking if we can fetch a known market account
         // 2. Verifying order book data is accessible
         // 3. Testing order placement (in simulation mode)
-        
+
         let is_healthy = true; // Placeholder
         let response_time = start_time.elapsed().as_millis() as u64;
-        
+
         Ok(DexHealthStatus {
             is_healthy,
             last_successful_request: Some(start_time),
@@ -427,7 +468,9 @@ impl PoolDiscoverable for PhoenixClient {
 
     async fn fetch_pool_data(&self, _market_address: Pubkey) -> AnyhowResult<PoolInfo> {
         // This would fetch specific market data from on-chain
-        Err(anyhow!("PhoenixClient: fetch_pool_data not yet implemented"))
+        Err(anyhow!(
+            "PhoenixClient: fetch_pool_data not yet implemented"
+        ))
     }
 
     fn dex_name(&self) -> &str {
@@ -449,13 +492,13 @@ mod tests {
     fn test_order_side_enum() {
         let bid = OrderSide::Bid;
         let ask = OrderSide::Ask;
-        
+
         // Test that we can match on order sides
         match bid {
             OrderSide::Bid => assert!(true),
             OrderSide::Ask => assert!(false),
         }
-        
+
         match ask {
             OrderSide::Bid => assert!(false),
             OrderSide::Ask => assert!(true),
@@ -466,13 +509,13 @@ mod tests {
     fn test_order_type_enum() {
         let market_order = OrderType::Market;
         let limit_order = OrderType::Limit;
-        
+
         // Test that we can differentiate order types
         match market_order {
             OrderType::Market => assert!(true),
             _ => assert!(false),
         }
-        
+
         match limit_order {
             OrderType::Limit => assert!(true),
             _ => assert!(false),

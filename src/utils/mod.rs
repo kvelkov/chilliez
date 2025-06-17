@@ -2,17 +2,17 @@
 
 pub mod timing; // Add timing module
 
-use solana_sdk::{pubkey::Pubkey, signature::Keypair};
-use solana_sdk::signature::read_keypair_file;
-use serde::{Deserialize, Serialize};
-use log::{error, info};
-use std::error::Error as StdError;
-use async_trait::async_trait;
 use crate::solana::rpc::SolanaRpcClient;
 use anyhow::Result;
+use async_trait::async_trait;
 use chrono;
-use std::sync::Arc;
+use log::{error, info};
+use serde::{Deserialize, Serialize};
+use solana_sdk::signature::read_keypair_file;
+use solana_sdk::{pubkey::Pubkey, signature::Keypair};
+use std::error::Error as StdError;
 use std::fmt;
+use std::sync::Arc;
 
 /// Represents information about a liquidity pool on a DEX.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -225,11 +225,7 @@ pub trait PoolParser: Send + Sync {
 
 /// Calculate output amount for a swap given pool information
 #[allow(dead_code)] // Utility function for quote calculations
-pub fn calculate_output_amount(
-    pool: &PoolInfo,
-    input_amount: u64,
-    is_a_to_b: bool,
-) -> Result<u64> {
+pub fn calculate_output_amount(pool: &PoolInfo, input_amount: u64, is_a_to_b: bool) -> Result<u64> {
     let (input_reserve, output_reserve) = if is_a_to_b {
         (pool.token_a.reserve, pool.token_b.reserve)
     } else {
@@ -244,9 +240,9 @@ pub fn calculate_output_amount(
     // output = (output_reserve * input_amount) / (input_reserve + input_amount)
     let fee_rate = pool.fee_rate_bips.unwrap_or(25) as f64 / 10000.0;
     let input_after_fee = (input_amount as f64) * (1.0 - fee_rate);
-    
-    let output_amount = (output_reserve as f64 * input_after_fee) 
-        / (input_reserve as f64 + input_after_fee);
+
+    let output_amount =
+        (output_reserve as f64 * input_after_fee) / (input_reserve as f64 + input_after_fee);
 
     Ok(output_amount as u64)
 }
@@ -283,7 +279,10 @@ mod tests {
 
     #[test]
     fn test_token_amount_conversion() {
-        let amount = TokenAmount { amount: 1000000, decimals: 6 };
+        let amount = TokenAmount {
+            amount: 1000000,
+            decimals: 6,
+        };
         assert_eq!(amount.to_float(), 1.0);
 
         let from_float = TokenAmount::from_float(1.5, 6);
@@ -295,7 +294,10 @@ mod tests {
     fn test_dex_type_equality() {
         assert_eq!(DexType::Orca, DexType::Orca);
         assert_ne!(DexType::Orca, DexType::Raydium);
-        assert_eq!(DexType::Unknown("Test".to_string()), DexType::Unknown("Test".to_string()));
+        assert_eq!(
+            DexType::Unknown("Test".to_string()),
+            DexType::Unknown("Test".to_string())
+        );
     }
 
     #[test]

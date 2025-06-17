@@ -1,15 +1,12 @@
 //! Execution Manager Module
-//! 
+//!
 //! This module handles all execution-related logic including strategy selection,
 //! execution coordination, and execution monitoring.
 
 use super::core::ArbitrageOrchestrator;
-use crate::{
-    arbitrage::opportunity::MultiHopArbOpportunity,
-    error::ArbError,
-};
+use crate::{arbitrage::opportunity::MultiHopArbOpportunity, error::ArbError};
 
-use log::{info, warn, debug, error};
+use log::{debug, error, info, warn};
 use rust_decimal::Decimal;
 use std::sync::atomic::Ordering;
 
@@ -47,25 +44,36 @@ enum ExecutionRecommendation {
 
 impl ArbitrageOrchestrator {
     /// Execute a single arbitrage opportunity
-    pub async fn execute_single_opportunity(&self, opportunity: &MultiHopArbOpportunity) -> Result<(), ArbError> {
+    pub async fn execute_single_opportunity(
+        &self,
+        opportunity: &MultiHopArbOpportunity,
+    ) -> Result<(), ArbError> {
         if !self.execution_enabled.load(Ordering::Relaxed) {
-            return Err(ArbError::ExecutionDisabled("Execution is currently disabled".to_string()));
+            return Err(ArbError::ExecutionDisabled(
+                "Execution is currently disabled".to_string(),
+            ));
         }
 
-        info!("🚀 Executing single arbitrage opportunity: {} -> {}", 
-              opportunity.input_token, opportunity.output_token);
+        info!(
+            "🚀 Executing single arbitrage opportunity: {} -> {}",
+            opportunity.input_token, opportunity.output_token
+        );
 
         // Validate opportunity quotes using price aggregator
         if let Ok(is_valid) = self.validate_opportunity_quotes(opportunity).await {
             if !is_valid {
                 warn!("⚠️ Skipping opportunity due to quote validation failure");
-                return Err(ArbError::InvalidPoolState("Quote validation failed".to_string()));
+                return Err(ArbError::InvalidPoolState(
+                    "Quote validation failed".to_string(),
+                ));
             }
         }
 
         // Check if paper trading mode
         if let Some(ref paper_engine) = self.paper_trading_engine {
-            return self.execute_paper_trading_opportunity(opportunity, paper_engine).await;
+            return self
+                .execute_paper_trading_opportunity(opportunity, paper_engine)
+                .await;
         }
 
         // Live execution
@@ -84,43 +92,59 @@ impl ArbitrageOrchestrator {
                 }
             }
         } else {
-            Err(ArbError::ExecutionError("No executor available".to_string()))
+            Err(ArbError::ExecutionError(
+                "No executor available".to_string(),
+            ))
         }
     }
 
     /// Execute multiple opportunities using the optimal strategy
-    pub async fn execute_opportunities_managed(&self, opportunities: Vec<MultiHopArbOpportunity>) -> Result<(), ArbError> {
+    pub async fn execute_opportunities_managed(
+        &self,
+        opportunities: Vec<MultiHopArbOpportunity>,
+    ) -> Result<(), ArbError> {
         if opportunities.is_empty() {
             debug!("No opportunities to execute");
             return Ok(());
         }
 
-        info!("🎯 Executing {} arbitrage opportunities", opportunities.len());
+        info!(
+            "🎯 Executing {} arbitrage opportunities",
+            opportunities.len()
+        );
 
         // Analyze competitiveness and determine execution strategy
         let strategy = self.determine_execution_strategy(&opportunities).await?;
-        
+
         match strategy {
             ExecutionStrategy::SingleExecution(ops) => {
                 self.execute_opportunities_sequentially(ops).await
             }
             ExecutionStrategy::BatchExecution(batchable, immediate) => {
-                self.execute_opportunities_in_batch(batchable, immediate).await
+                self.execute_opportunities_in_batch(batchable, immediate)
+                    .await
             }
-            ExecutionStrategy::HybridExecution { immediate, batchable } => {
-                self.execute_opportunities_hybrid(immediate, batchable).await
+            ExecutionStrategy::HybridExecution {
+                immediate,
+                batchable,
+            } => {
+                self.execute_opportunities_hybrid(immediate, batchable)
+                    .await
             }
         }
     }
 
     /// Determine the optimal execution strategy for a set of opportunities
-    async fn determine_execution_strategy(&self, opportunities: &[MultiHopArbOpportunity]) -> Result<ExecutionStrategy, ArbError> {
+    async fn determine_execution_strategy(
+        &self,
+        opportunities: &[MultiHopArbOpportunity],
+    ) -> Result<ExecutionStrategy, ArbError> {
         let mut immediate_ops = Vec::new();
         let mut batchable_ops = Vec::new();
 
         for opportunity in opportunities {
             let analysis = self.analyze_competitiveness(opportunity).await?;
-            
+
             match analysis.execution_recommendation {
                 ExecutionRecommendation::ImmediateSingle => {
                     immediate_ops.push(opportunity.clone());
@@ -137,7 +161,10 @@ impl ArbitrageOrchestrator {
         } else if !immediate_ops.is_empty() && batchable_ops.is_empty() {
             ExecutionStrategy::SingleExecution(immediate_ops)
         } else if !immediate_ops.is_empty() && !batchable_ops.is_empty() {
-            ExecutionStrategy::HybridExecution { immediate: immediate_ops, batchable: batchable_ops }
+            ExecutionStrategy::HybridExecution {
+                immediate: immediate_ops,
+                batchable: batchable_ops,
+            }
         } else {
             ExecutionStrategy::SingleExecution(Vec::new()) // No opportunities
         };
@@ -147,7 +174,10 @@ impl ArbitrageOrchestrator {
     }
 
     /// Analyze the competitiveness of an opportunity
-    async fn analyze_competitiveness(&self, opportunity: &MultiHopArbOpportunity) -> Result<CompetitivenessAnalysis, ArbError> {
+    async fn analyze_competitiveness(
+        &self,
+        opportunity: &MultiHopArbOpportunity,
+    ) -> Result<CompetitivenessAnalysis, ArbError> {
         let mut risk_factors = Vec::new();
         let mut competitive_score = Decimal::from(100); // Start with 100% competitiveness
 
@@ -184,8 +214,11 @@ impl ArbitrageOrchestrator {
             ExecutionRecommendation::SafeToBatch
         };
 
-        let reason = format!("Competitive score: {}, Risk factors: {}", 
-                           competitive_score, risk_factors.len());
+        let reason = format!(
+            "Competitive score: {}, Risk factors: {}",
+            competitive_score,
+            risk_factors.len()
+        );
 
         Ok(CompetitivenessAnalysis {
             _competitive_score: competitive_score,
@@ -196,9 +229,15 @@ impl ArbitrageOrchestrator {
     }
 
     /// Execute opportunities sequentially
-    async fn execute_opportunities_sequentially(&self, opportunities: Vec<MultiHopArbOpportunity>) -> Result<(), ArbError> {
-        info!("🔄 Executing {} opportunities sequentially", opportunities.len());
-        
+    async fn execute_opportunities_sequentially(
+        &self,
+        opportunities: Vec<MultiHopArbOpportunity>,
+    ) -> Result<(), ArbError> {
+        info!(
+            "🔄 Executing {} opportunities sequentially",
+            opportunities.len()
+        );
+
         let mut successful = 0;
         let mut failed = 0;
 
@@ -212,13 +251,24 @@ impl ArbitrageOrchestrator {
             }
         }
 
-        info!("📊 Sequential execution completed: {} successful, {} failed", successful, failed);
+        info!(
+            "📊 Sequential execution completed: {} successful, {} failed",
+            successful, failed
+        );
         Ok(())
     }
 
     /// Execute opportunities in batch
-    async fn execute_opportunities_in_batch(&self, batchable: Vec<MultiHopArbOpportunity>, immediate: Vec<MultiHopArbOpportunity>) -> Result<(), ArbError> {
-        info!("📦 Executing {} batchable + {} immediate opportunities", batchable.len(), immediate.len());
+    async fn execute_opportunities_in_batch(
+        &self,
+        batchable: Vec<MultiHopArbOpportunity>,
+        immediate: Vec<MultiHopArbOpportunity>,
+    ) -> Result<(), ArbError> {
+        info!(
+            "📦 Executing {} batchable + {} immediate opportunities",
+            batchable.len(),
+            immediate.len()
+        );
 
         // Execute immediate opportunities first
         if !immediate.is_empty() {
@@ -236,8 +286,16 @@ impl ArbitrageOrchestrator {
     }
 
     /// Execute opportunities using hybrid strategy
-    async fn execute_opportunities_hybrid(&self, immediate: Vec<MultiHopArbOpportunity>, batchable: Vec<MultiHopArbOpportunity>) -> Result<(), ArbError> {
-        info!("🔀 Executing hybrid strategy: {} immediate, {} batchable", immediate.len(), batchable.len());
+    async fn execute_opportunities_hybrid(
+        &self,
+        immediate: Vec<MultiHopArbOpportunity>,
+        batchable: Vec<MultiHopArbOpportunity>,
+    ) -> Result<(), ArbError> {
+        info!(
+            "🔀 Executing hybrid strategy: {} immediate, {} batchable",
+            immediate.len(),
+            batchable.len()
+        );
 
         // Execute immediate and batchable concurrently
         let immediate_task = async {
@@ -250,7 +308,8 @@ impl ArbitrageOrchestrator {
 
         let batch_task = async {
             if !batchable.is_empty() {
-                self.execute_opportunities_in_batch(batchable, Vec::new()).await
+                self.execute_opportunities_in_batch(batchable, Vec::new())
+                    .await
             } else {
                 Ok(())
             }
@@ -268,21 +327,31 @@ impl ArbitrageOrchestrator {
     }
 
     /// Execute opportunity in paper trading mode
-    async fn execute_paper_trading_opportunity(&self, opportunity: &MultiHopArbOpportunity, _paper_engine: &crate::paper_trading::SimulatedExecutionEngine) -> Result<(), ArbError> {
+    async fn execute_paper_trading_opportunity(
+        &self,
+        opportunity: &MultiHopArbOpportunity,
+        _paper_engine: &crate::paper_trading::SimulatedExecutionEngine,
+    ) -> Result<(), ArbError> {
         debug!("📄 Executing opportunity in paper trading mode");
-        
+
         // Simplified paper trading execution for now
-        info!("📄 Paper trade executed: estimated profit ${:.2}", opportunity.total_profit);
-        
+        info!(
+            "📄 Paper trade executed: estimated profit ${:.2}",
+            opportunity.total_profit
+        );
+
         Ok(())
     }
 
     /// Estimate execution cost for an opportunity
-    async fn estimate_execution_cost(&self, opportunity: &MultiHopArbOpportunity) -> Result<f64, ArbError> {
+    async fn estimate_execution_cost(
+        &self,
+        opportunity: &MultiHopArbOpportunity,
+    ) -> Result<f64, ArbError> {
         // Simplified cost estimation
         let base_cost = 0.0001; // Base transaction cost in SOL
         let hop_cost = opportunity.hops.len() as f64 * 0.00005; // Additional cost per hop
-        
+
         Ok(base_cost + hop_cost)
     }
 
@@ -290,43 +359,59 @@ impl ArbitrageOrchestrator {
     async fn record_successful_execution(&self, opportunity: &MultiHopArbOpportunity) {
         let _metrics = self.metrics.lock().await;
         // Simplified metrics recording for now
-        debug!("✅ Recorded successful execution: profit {:.2}", opportunity.total_profit);
+        debug!(
+            "✅ Recorded successful execution: profit {:.2}",
+            opportunity.total_profit
+        );
     }
 
     /// Record failed execution
-    async fn record_failed_execution(&self, _opportunity: &MultiHopArbOpportunity, error: &ArbError) {
+    async fn record_failed_execution(
+        &self,
+        _opportunity: &MultiHopArbOpportunity,
+        error: &ArbError,
+    ) {
         let _metrics = self.metrics.lock().await;
         // Simplified metrics recording for now
         debug!("❌ Recorded failed execution: {}", error);
     }
 
     /// Validate opportunity quotes using price aggregator before execution
-    async fn validate_opportunity_quotes(&self, opportunity: &MultiHopArbOpportunity) -> Result<bool, ArbError> {
+    async fn validate_opportunity_quotes(
+        &self,
+        opportunity: &MultiHopArbOpportunity,
+    ) -> Result<bool, ArbError> {
         debug!("🔍 Validating opportunity quotes using price aggregator");
-        
+
         // For each hop in the opportunity, validate the quote
         for hop in &opportunity.hops {
             // Get the pool information for this hop
             if let Some(pool_info) = self.hot_cache.get(&hop.pool) {
                 // Get aggregated quote for validation
-                match self.get_aggregated_quote(&pool_info, hop.input_amount as u64).await {
+                match self
+                    .get_aggregated_quote(&pool_info, hop.input_amount as u64)
+                    .await
+                {
                     Ok(aggregated_quote) => {
                         let expected_output = hop.expected_output;
                         let actual_output = aggregated_quote.quote.output_amount as f64;
-                        
+
                         // Check if the actual output is within acceptable deviation
-                        let deviation_pct = ((expected_output - actual_output) / expected_output).abs() * 100.0;
+                        let deviation_pct =
+                            ((expected_output - actual_output) / expected_output).abs() * 100.0;
                         let max_deviation = 5.0; // 5% max deviation
-                        
+
                         if deviation_pct > max_deviation {
                             warn!("❌ Quote validation failed for hop {}: expected {}, got {} (deviation: {:.2}%)",
                                   hop.pool, expected_output, actual_output, deviation_pct);
                             return Ok(false);
                         }
-                        
-                        debug!("✅ Quote validated for hop {}: {} -> {} (deviation: {:.2}%)",
-                               hop.pool, hop.input_amount, actual_output, deviation_pct);
-                        
+
+                        debug!(
+                            "✅ Quote validated for hop {}: {} -> {} (deviation: {:.2}%)",
+                            hop.pool, hop.input_amount, actual_output, deviation_pct
+                        );
+
                         // Record quote source for metrics
                         match aggregated_quote.source {
                             crate::arbitrage::price_aggregator::QuoteSource::Jupiter => {
@@ -346,10 +431,13 @@ impl ArbitrageOrchestrator {
                     }
                 }
             } else {
-                warn!("⚠️ Pool {} not found in hot cache for quote validation", hop.pool);
+                warn!(
+                    "⚠️ Pool {} not found in hot cache for quote validation",
+                    hop.pool
+                );
             }
         }
-        
+
         info!("✅ All opportunity quotes validated successfully");
         Ok(true)
     }

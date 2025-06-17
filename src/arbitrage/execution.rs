@@ -1,31 +1,32 @@
 //! Unified Execution Module
-//! 
+//!
 //! This module consolidates all execution-related functionality:
 //! - HftExecutor: High-frequency individual trade execution
 //! - BatchExecutor: Batch execution with Jito bundle support
 //! - ExecutionMetrics and event handling
-//! 
+//!
 //! Combines logic from executor.rs and execution_engine.rs
 
+use crate::dex::api::CommonSwapInfo;
 use crate::{
     arbitrage::{
+        analysis::{ArbitrageAnalyzer, FeeManager},
+        mev::{JitoConfig, JitoHandler, MevProtectionConfig},
         opportunity::MultiHopArbOpportunity,
-        mev::{JitoHandler, MevProtectionConfig, JitoConfig},
-        analysis::{FeeManager, ArbitrageAnalyzer},
         safety::{SafeTransactionHandler, TransactionSafetyConfig},
     },
+    cache::Cache, // Redis cache
     config::settings::Config,
     dex::api::DexClient,
     error::ArbError,
     local_metrics::Metrics,
     solana::rpc::SolanaRpcClient,
     utils::{DexType, PoolInfo, TokenAmount}, // Added PoolInfo import
-    cache::Cache, // Redis cache
 };
-use log::{info, warn, error};
+use dashmap::DashMap;
+use log::{error, info, warn};
 use serde::{Deserialize, Serialize};
 use solana_client::nonblocking::rpc_client::RpcClient as NonBlockingRpcClient;
-use uuid;
 use solana_sdk::{
     compute_budget::ComputeBudgetInstruction,
     hash::Hash,
@@ -33,15 +34,10 @@ use solana_sdk::{
     signature::{Keypair, Signature, Signer},
     transaction::Transaction,
 };
-use std::{
-    collections::HashMap,
-    sync::Arc,
-    time::Instant,
-};
-use tokio::sync::{mpsc, Mutex, RwLock}; // Mutex for dex_clients, metrics
-use dashmap::DashMap; 
-use crate::dex::api::CommonSwapInfo;
 use spl_associated_token_account::get_associated_token_address;
+use std::{collections::HashMap, sync::Arc, time::Instant};
+use tokio::sync::{mpsc, Mutex, RwLock}; // Mutex for dex_clients, metrics
+use uuid;
 
 // =============================================================================
 // Event System and Core Types
@@ -87,22 +83,21 @@ pub struct HftExecutor {
 
 impl HftExecutor {
     pub fn new(
-        wallet: Arc<Keypair>, 
-        rpc_client: Arc<NonBlockingRpcClient>, 
+        wallet: Arc<Keypair>,
+        rpc_client: Arc<NonBlockingRpcClient>,
         event_sender: Option<EventSender>,
-        config: Arc<Config>, 
+        config: Arc<Config>,
         metrics: Arc<Mutex<Metrics>>,
         hot_cache: Arc<DashMap<solana_sdk::pubkey::Pubkey, Arc<PoolInfo>>>,
     ) -> Self {
         // Create enhanced components with proper initialization
         let fee_manager = Arc::new(FeeManager::default());
-        let arbitrage_analyzer = Arc::new(Mutex::new(
-            ArbitrageAnalyzer::new(&config, metrics.clone())
-        ));
-        
+        let arbitrage_analyzer =
+            Arc::new(Mutex::new(ArbitrageAnalyzer::new(&config, metrics.clone())));
+
         // Create simplified safety configuration based on main config
         let safety_config = TransactionSafetyConfig::default();
-        
+
         // Create SolanaRpcClient with proper parameters
         let solana_rpc_client = Arc::new(SolanaRpcClient::new(
             "https://api.mainnet-beta.solana.com",
@@ -110,16 +105,17 @@ impl HftExecutor {
             3,
             std::time::Duration::from_millis(1000),
         ));
-        
-        let safety_handler = Arc::new(
-            SafeTransactionHandler::new(solana_rpc_client, safety_config)
-        );
 
-        Self { 
-            wallet, 
-            rpc_client, 
-            event_sender, 
-            config, 
+        let safety_handler = Arc::new(SafeTransactionHandler::new(
+            solana_rpc_client,
+            safety_config,
+        ));
+
+        Self {
+            wallet,
+            rpc_client,
+            event_sender,
+            config,
             metrics,
             dex_clients: None,
             hot_cache,
@@ -140,14 +136,27 @@ impl HftExecutor {
         let mut current_opportunity = initial_opportunity.clone();
         let max_reentries = self.config.rpc_max_retries.unwrap_or(0); // Default to 0 if not set (no re-entry)
 
-        info!("Attempting to execute opportunity {} with up to {} re-entries.", initial_opportunity.id, max_reentries);
+        info!(
+            "Attempting to execute opportunity {} with up to {} re-entries.",
+            initial_opportunity.id, max_reentries
+        );
 
-        for i in 0..=max_reentries { // Loop 0 is the initial execution
-            info!("Execution attempt {} for opportunity ID {}", i + 1, current_opportunity.id);
+        for i in 0..=max_reentries {
+            // Loop 0 is the initial execution
+            info!(
+                "Execution attempt {} for opportunity ID {}",
+                i + 1,
+                current_opportunity.id
+            );
 
             match self.execute_opportunity(&current_opportunity).await {
                 Ok(signature) => {
-                    info!("Successfully executed attempt {} for opportunity {}, signature: {}", i + 1, current_opportunity.id, signature);
+                    info!(
+                        "Successfully executed attempt {} for opportunity {}, signature: {}",
+                        i + 1,
+                        current_opportunity.id,
+                        signature
+                    );
                     signatures.push(signature);
 
                     // If this was the last allowed attempt, or no more re-entries configured, break.
@@ -156,7 +165,10 @@ impl HftExecutor {
                     }
 
                     // Re-evaluate for re-entry
-                    match self._reevaluate_for_reentry(&current_opportunity, &signature).await {
+                    match self
+                        ._reevaluate_for_reentry(&current_opportunity, &signature)
+                        .await
+                    {
                         Ok(Some(next_opportunity_candidate)) => {
                             // Check if still profitable enough for re-entry
                             let re_entry_threshold_pct = self.config.min_profit_pct * 0.5; // Default re-entry threshold
@@ -166,7 +178,10 @@ impl HftExecutor {
                                 // Optional: small delay if configured
                                 if let Some(delay_ms) = self.config.rpc_retry_delay_ms {
                                     if delay_ms > 0 {
-                                        tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+                                        tokio::time::sleep(std::time::Duration::from_millis(
+                                            delay_ms,
+                                        ))
+                                        .await;
                                     }
                                 }
                             } else {
@@ -175,7 +190,10 @@ impl HftExecutor {
                             }
                         }
                         Ok(None) => {
-                            info!("Opportunity {} no longer viable for re-entry after execution.", current_opportunity.id);
+                            info!(
+                                "Opportunity {} no longer viable for re-entry after execution.",
+                                current_opportunity.id
+                            );
                             break;
                         }
                         Err(e) => {
@@ -185,17 +203,29 @@ impl HftExecutor {
                     }
                 }
                 Err(e) => {
-                    error!("Execution attempt {} for opportunity {} failed: {}. Stopping re-entry.", i + 1, current_opportunity.id, e);
+                    error!(
+                        "Execution attempt {} for opportunity {} failed: {}. Stopping re-entry.",
+                        i + 1,
+                        current_opportunity.id,
+                        e
+                    );
                     // If even the first attempt fails, return the error. If a re-entry fails, we've already collected some signatures.
-                    if i == 0 { return Err(e); } else { break; }
+                    if i == 0 {
+                        return Err(e);
+                    } else {
+                        break;
+                    }
                 }
             }
         }
 
         if signatures.is_empty() && max_reentries > 0 {
-             Err(format!("No successful executions for opportunity {} after attempts.", initial_opportunity.id))
+            Err(format!(
+                "No successful executions for opportunity {} after attempts.",
+                initial_opportunity.id
+            ))
         } else {
-             Ok(signatures)
+            Ok(signatures)
         }
     }
 
@@ -212,13 +242,14 @@ impl HftExecutor {
         _last_signature: &Signature, // Parameter for context, if needed
     ) -> Result<Option<MultiHopArbOpportunity>, String> {
         warn!("Re-evaluation for rapid re-entry (opportunity ID: {}) is a STUB. Opportunity will not be re-executed further in this cycle.", executed_opportunity.id);
-        
+
         // STUB: For demonstration, let's imagine the profit slightly decreases.
         // In a real scenario, you would fetch fresh pool data and recalculate.
         let mut reevaluated_opp = executed_opportunity.clone();
         reevaluated_opp.profit_pct *= 0.5; // Simulate profit halving
         reevaluated_opp.total_profit *= 0.5;
-        reevaluated_opp.expected_output = reevaluated_opp.input_amount + reevaluated_opp.total_profit;
+        reevaluated_opp.expected_output =
+            reevaluated_opp.input_amount + reevaluated_opp.total_profit;
         reevaluated_opp.id = format!("{}_reentry", executed_opportunity.id); // Give it a new ID for clarity
 
         // Simulate it's still viable but with reduced profit
@@ -235,69 +266,86 @@ impl HftExecutor {
         opportunity: &MultiHopArbOpportunity,
     ) -> Result<Signature, String> {
         let start_time = Instant::now();
-        
+
         // Step 1: Enhanced fee calculation using FeeManager
-        info!("🔄 Calculating dynamic fees for opportunity {}", opportunity.id);
-        
+        info!(
+            "🔄 Calculating dynamic fees for opportunity {}",
+            opportunity.id
+        );
+
         // Collect pools for fee calculation
-        let pools_for_fee_calc: Vec<Arc<PoolInfo>> = opportunity.hops.iter()
+        let pools_for_fee_calc: Vec<Arc<PoolInfo>> = opportunity
+            .hops
+            .iter()
             .filter_map(|hop| self.hot_cache.get(&hop.pool).map(|arc| arc.value().clone()))
             .collect();
-        
+
         let pools_refs: Vec<&PoolInfo> = pools_for_fee_calc.iter().map(|p| p.as_ref()).collect();
-        
+
         // Estimate compute units using FeeManager
         let estimated_cu = self.fee_manager.estimate_compute_units(&pools_refs);
-        
+
         // Calculate dynamic priority fee
-        let dynamic_priority_fee = match self.fee_manager.calculate_dynamic_priority_fee(estimated_cu).await {
+        let dynamic_priority_fee = match self
+            .fee_manager
+            .calculate_dynamic_priority_fee(estimated_cu)
+            .await
+        {
             Ok(fee) => fee,
             Err(e) => {
-                warn!("Failed to calculate dynamic priority fee: {:?}. Using config default.", e);
+                warn!(
+                    "Failed to calculate dynamic priority fee: {:?}. Using config default.",
+                    e
+                );
                 self.config.transaction_priority_fee_lamports
             }
         };
-        
+
         // Calculate Jito tip for MEV protection
         let trade_value_sol = opportunity.input_amount as f64 / 1_000_000_000.0; // Convert lamports to SOL
         let complexity_factor = opportunity.hops.len() as f64;
-        let jito_tip = self.fee_manager.calculate_jito_tip(trade_value_sol, complexity_factor);
-        
+        let jito_tip = self
+            .fee_manager
+            .calculate_jito_tip(trade_value_sol, complexity_factor);
+
         info!("💰 Enhanced fee calculation - CU: {}, Priority fee: {} lamports, Jito tip: {} lamports", 
               estimated_cu, dynamic_priority_fee, jito_tip);
 
         // Step 2: Enhanced slippage calculation using ArbitrageAnalyzer
         let analyzer = self.arbitrage_analyzer.lock().await;
-        
+
         // Create input amount for fee breakdown calculation
         let input_token_amount = TokenAmount {
             amount: opportunity.input_amount as u64, // Convert f64 to u64
-            decimals: 9, // Assume SOL decimals for simplicity
+            decimals: 9,                             // Assume SOL decimals for simplicity
         };
-        
+
         // Calculate comprehensive fee breakdown
-        let fee_breakdown = analyzer.calculate_fee_breakdown(
-            &pools_refs,
-            &input_token_amount,
-            150.0 // TODO: Get real SOL price
-        ).await.unwrap_or_else(|_| {
-            // Fallback with minimal fee breakdown if async fails
-            use crate::arbitrage::analysis::{FeeBreakdown, NetworkCongestionLevel};
-            FeeBreakdown {
-                protocol_fee: 5_000_000.0, // 0.005 SOL
-                gas_fee: 10_000.0,         // 0.00001 SOL
-                priority_fee: 5_000.0,     // 0.000005 SOL
-                jito_tip: 0.0,            // No Jito tip in fallback
-                slippage_cost: 0.0,       // No slippage calculation in fallback
-                total_cost: 5_015_000.0,   // Total
-                risk_score: 0.5,
-                explanation: "Fallback calculation (async failed)".to_string(),
-                compute_units: 200_000,    // Conservative estimate
-                fee_per_signature: 5_000.0, // Standard fee
-                network_congestion: NetworkCongestionLevel::Medium,
-            }
-        });
-        
+        let fee_breakdown = analyzer
+            .calculate_fee_breakdown(
+                &pools_refs,
+                &input_token_amount,
+                150.0, // TODO: Get real SOL price
+            )
+            .await
+            .unwrap_or_else(|_| {
+                // Fallback with minimal fee breakdown if async fails
+                use crate::arbitrage::analysis::{FeeBreakdown, NetworkCongestionLevel};
+                FeeBreakdown {
+                    protocol_fee: 5_000_000.0, // 0.005 SOL
+                    gas_fee: 10_000.0,         // 0.00001 SOL
+                    priority_fee: 5_000.0,     // 0.000005 SOL
+                    jito_tip: 0.0,             // No Jito tip in fallback
+                    slippage_cost: 0.0,        // No slippage calculation in fallback
+                    total_cost: 5_015_000.0,   // Total
+                    risk_score: 0.5,
+                    explanation: "Fallback calculation (async failed)".to_string(),
+                    compute_units: 200_000,     // Conservative estimate
+                    fee_per_signature: 5_000.0, // Standard fee
+                    network_congestion: NetworkCongestionLevel::Medium,
+                }
+            });
+
         info!("📊 Fee breakdown - Protocol: {:.4}%, Gas: {:.4}%, Slippage: {:.4}%, Total: {:.4}%, Risk: {:.2}", 
               fee_breakdown.protocol_fee / 1_000_000_000.0 * 100.0,
               fee_breakdown.gas_fee / 1_000_000_000.0 * 100.0,
@@ -317,7 +365,10 @@ impl HftExecutor {
         let all_instructions: Vec<Instruction> = [
             ComputeBudgetInstruction::set_compute_unit_limit(estimated_cu),
             ComputeBudgetInstruction::set_compute_unit_price(dynamic_priority_fee),
-        ].into_iter().chain(instructions.into_iter()).collect();
+        ]
+        .into_iter()
+        .chain(instructions.into_iter())
+        .collect();
 
         let transaction = Transaction::new_signed_with_payer(
             &all_instructions,
@@ -328,28 +379,35 @@ impl HftExecutor {
 
         // Step 5: Safe execution using SafeTransactionHandler
         info!("🚀 Executing transaction with enhanced safety checks...");
-        match self.safety_handler.execute_with_safety_checks(
-            transaction,
-            &pools_refs,
-            opportunity.input_amount as u64,
-            opportunity.expected_output as u64,
-        ).await {
+        match self
+            .safety_handler
+            .execute_with_safety_checks(
+                transaction,
+                &pools_refs,
+                opportunity.input_amount as u64,
+                opportunity.expected_output as u64,
+            )
+            .await
+        {
             Ok(transaction_result) => {
                 if transaction_result.success {
                     let duration = start_time.elapsed();
                     let metrics_guard = self.metrics.lock().await;
                     (*metrics_guard).record_execution_time(duration);
                     (*metrics_guard).log_opportunity_executed_success();
-                    
+
                     // Log enhanced execution metrics
                     info!("✅ Transaction successful - Signature: {:?}, Fee: {} lamports, Slippage: {:.2}%, Time: {}ms",
                           transaction_result.signature,
                           transaction_result.fee_paid,
                           transaction_result.slippage_experienced * 100.0,
                           transaction_result.execution_time_ms);
-                    
+
                     if let Some(sender) = &self.event_sender {
-                        let signature_for_event = transaction_result.signature.as_ref().and_then(|s| s.parse().ok());
+                        let signature_for_event = transaction_result
+                            .signature
+                            .as_ref()
+                            .and_then(|s| s.parse().ok());
                         let event = ExecutorEvent::OpportunityExecuted {
                             opportunity_id: opportunity.id.clone(),
                             signature: signature_for_event,
@@ -360,19 +418,21 @@ impl HftExecutor {
                             log::error!("Failed to send execution success event: {}", e);
                         }
                     }
-                    
+
                     // Parse signature from string result
-                    let signature_str = transaction_result.signature
+                    let signature_str = transaction_result
+                        .signature
                         .as_ref()
                         .ok_or_else(|| "No signature returned".to_string())?;
-                    
+
                     let signature = signature_str
                         .parse()
                         .map_err(|e| format!("Failed to parse signature: {}", e))?;
-                    
+
                     Ok(signature)
                 } else {
-                    let error_msg = transaction_result.failure_reason
+                    let error_msg = transaction_result
+                        .failure_reason
                         .unwrap_or_else(|| "Unknown transaction failure".to_string());
                     Err(format!("Safe transaction execution failed: {}", error_msg))
                 }
@@ -380,7 +440,7 @@ impl HftExecutor {
             Err(e) => {
                 // self.metrics.lock().await.log_opportunity_executed_failure();
                 error!("❌ Enhanced execution failed: {}", e);
-                
+
                 if let Some(sender) = &self.event_sender {
                     let event = ExecutorEvent::OpportunityExecuted {
                         opportunity_id: opportunity.id.clone(),
@@ -403,32 +463,65 @@ impl HftExecutor {
     ) -> Result<Vec<Instruction>, String> {
         let mut all_instructions = Vec::new();
 
-        let dex_clients_map_arc = self.dex_clients.as_ref()
+        let dex_clients_map_arc = self
+            .dex_clients
+            .as_ref()
             .ok_or_else(|| "DEX clients not initialized in HftExecutor".to_string())?;
         let dex_clients_map = dex_clients_map_arc.lock().await;
- 
-        for (hop_index, hop) in opportunity.hops.iter().enumerate() {
-            info!("Building instruction for hop {}: {} -> {} on {:?}", hop_index + 1, hop.input_token, hop.output_token, hop.dex);
-            
-            // --- Retrieve PoolInfo for the current hop from hot_cache ---
-            let pool_info_arc = self.hot_cache.get(&hop.pool)
-                .ok_or_else(|| format!("Pool {} for hop {} not found in hot_cache", hop.pool, hop_index + 1))?
-                .value().clone();
 
-            let dex_client_boxed = dex_clients_map.get(&hop.dex)
+        for (hop_index, hop) in opportunity.hops.iter().enumerate() {
+            info!(
+                "Building instruction for hop {}: {} -> {} on {:?}",
+                hop_index + 1,
+                hop.input_token,
+                hop.output_token,
+                hop.dex
+            );
+
+            // --- Retrieve PoolInfo for the current hop from hot_cache ---
+            let pool_info_arc = self
+                .hot_cache
+                .get(&hop.pool)
+                .ok_or_else(|| {
+                    format!(
+                        "Pool {} for hop {} not found in hot_cache",
+                        hop.pool,
+                        hop_index + 1
+                    )
+                })?
+                .value()
+                .clone();
+
+            let dex_client_boxed = dex_clients_map
+                .get(&hop.dex)
                 .ok_or_else(|| format!("DexClient not found for {:?}", hop.dex))?;
             // Assuming DexClient is Arc now, if not, this needs adjustment. For Box, direct deref is fine.
             let dex_client = dex_client_boxed.as_ref(); // Get a reference to the trait object
 
             // --- Determine source and destination mints and decimals ---
-            let (source_token_details, dest_token_details) = 
-                if pool_info_arc.token_a.symbol.eq_ignore_ascii_case(&hop.input_token) && pool_info_arc.token_b.symbol.eq_ignore_ascii_case(&hop.output_token) {
-                    (&pool_info_arc.token_a, &pool_info_arc.token_b)
-                } else if pool_info_arc.token_b.symbol.eq_ignore_ascii_case(&hop.input_token) && pool_info_arc.token_a.symbol.eq_ignore_ascii_case(&hop.output_token) {
-                    (&pool_info_arc.token_b, &pool_info_arc.token_a)
-                } else {
-                    return Err(format!("Token symbol mismatch for hop {} in pool {}. Pool tokens: {}/{}, Hop tokens: {}/{}", hop_index + 1, hop.pool, pool_info_arc.token_a.symbol, pool_info_arc.token_b.symbol, hop.input_token, hop.output_token));
-                };
+            let (source_token_details, dest_token_details) = if pool_info_arc
+                .token_a
+                .symbol
+                .eq_ignore_ascii_case(&hop.input_token)
+                && pool_info_arc
+                    .token_b
+                    .symbol
+                    .eq_ignore_ascii_case(&hop.output_token)
+            {
+                (&pool_info_arc.token_a, &pool_info_arc.token_b)
+            } else if pool_info_arc
+                .token_b
+                .symbol
+                .eq_ignore_ascii_case(&hop.input_token)
+                && pool_info_arc
+                    .token_a
+                    .symbol
+                    .eq_ignore_ascii_case(&hop.output_token)
+            {
+                (&pool_info_arc.token_b, &pool_info_arc.token_a)
+            } else {
+                return Err(format!("Token symbol mismatch for hop {} in pool {}. Pool tokens: {}/{}, Hop tokens: {}/{}", hop_index + 1, hop.pool, pool_info_arc.token_a.symbol, pool_info_arc.token_b.symbol, hop.input_token, hop.output_token));
+            };
 
             let source_mint = source_token_details.mint;
             let source_decimals = source_token_details.decimals;
@@ -436,35 +529,37 @@ impl HftExecutor {
             let dest_decimals = dest_token_details.decimals;
 
             // --- Calculate amounts using precise decimal arithmetic ---
+            use num_traits::{FromPrimitive, ToPrimitive};
             use rust_decimal::Decimal;
             use rust_decimal_macros::dec;
-            use num_traits::{ToPrimitive, FromPrimitive};
-            
+
             // Convert to Decimal for precise calculations
             let input_amount_decimal = Decimal::from_f64(hop.input_amount).unwrap_or(Decimal::ZERO);
-            let expected_output_decimal = Decimal::from_f64(hop.expected_output).unwrap_or(Decimal::ZERO);
-            let max_slippage_decimal = Decimal::from_f64(self.config.max_slippage_pct / 100.0).unwrap_or(dec!(0.005)); // Convert percentage to decimal
-            
+            let expected_output_decimal =
+                Decimal::from_f64(hop.expected_output).unwrap_or(Decimal::ZERO);
+            let max_slippage_decimal =
+                Decimal::from_f64(self.config.max_slippage_pct / 100.0).unwrap_or(dec!(0.005)); // Convert percentage to decimal
+
             // Scale to token units with precise arithmetic
             let scale_factor_input = Decimal::from(10u64.pow(source_decimals as u32));
             let scale_factor_output = Decimal::from(10u64.pow(dest_decimals as u32));
-            
+
             let input_amount_u64 = (input_amount_decimal * scale_factor_input)
                 .floor()
                 .to_u64()
                 .unwrap_or(0);
-            
+
             // Calculate minimum output with precise slippage protection
             let slippage_factor = dec!(1) - max_slippage_decimal;
-            let minimum_output_decimal = expected_output_decimal * scale_factor_output * slippage_factor;
-            let minimum_output_amount_u64 = minimum_output_decimal
-                .floor()
-                .to_u64()
-                .unwrap_or(0);
+            let minimum_output_decimal =
+                expected_output_decimal * scale_factor_output * slippage_factor;
+            let minimum_output_amount_u64 = minimum_output_decimal.floor().to_u64().unwrap_or(0);
 
             // --- Get user's ATAs ---
-            let user_source_token_account = get_associated_token_address(&self.wallet.pubkey(), &source_mint);
-            let user_destination_token_account = get_associated_token_address(&self.wallet.pubkey(), &dest_mint);
+            let user_source_token_account =
+                get_associated_token_address(&self.wallet.pubkey(), &source_mint);
+            let user_destination_token_account =
+                get_associated_token_address(&self.wallet.pubkey(), &dest_mint);
 
             let common_swap_info = CommonSwapInfo {
                 user_wallet_pubkey: self.wallet.pubkey(),
@@ -475,11 +570,19 @@ impl HftExecutor {
                 input_amount: input_amount_u64,
                 minimum_output_amount: minimum_output_amount_u64,
                 priority_fee_lamports: None, // Set as needed
-                slippage_bps: None, // Set as needed
+                slippage_bps: None,          // Set as needed
             };
 
-            let instruction = dex_client.get_swap_instruction_enhanced(&common_swap_info, pool_info_arc.clone()).await
-                .map_err(|e| format!("Failed to get swap instruction for hop {}: {}", hop_index + 1, e))?;
+            let instruction = dex_client
+                .get_swap_instruction_enhanced(&common_swap_info, pool_info_arc.clone())
+                .await
+                .map_err(|e| {
+                    format!(
+                        "Failed to get swap instruction for hop {}: {}",
+                        hop_index + 1,
+                        e
+                    )
+                })?;
             all_instructions.push(instruction);
         }
 
@@ -495,23 +598,23 @@ impl HftExecutor {
 
     /// Initialize DEX clients for routing
     pub async fn initialize_dex_clients(&mut self, cache: Arc<Cache>) {
-        use crate::dex::clients::{OrcaClient, RaydiumClient, MeteoraClient, LifinityClient};
+        use crate::dex::clients::{LifinityClient, MeteoraClient, OrcaClient, RaydiumClient};
         use std::collections::HashMap;
-        
+
         let mut clients: HashMap<DexType, Box<dyn DexClient>> = HashMap::new();
-        
+
         // Initialize each DEX client
         clients.insert(DexType::Orca, Box::new(OrcaClient::new()));
         clients.insert(DexType::Raydium, Box::new(RaydiumClient::new()));
         clients.insert(DexType::Meteora, Box::new(MeteoraClient::new()));
         clients.insert(DexType::Lifinity, Box::new(LifinityClient::new()));
-        
+
         self.dex_clients = Some(Arc::new(Mutex::new(clients)));
         self.pool_cache = Some(cache);
-        
+
         info!("Initialized DEX clients for Orca, Raydium, Meteora, and Lifinity");
     }
-    
+
     /// Update the pool cache with discovered pools
     pub async fn update_pool_cache(&self, _pools: &[crate::utils::PoolInfo]) {
         // This method would update the internal pool cache
@@ -634,7 +737,8 @@ pub struct BatchExecutor {
     config: BatchExecutionConfig,
     solana_client: Arc<SolanaRpcClient>,
     wallet: Arc<Keypair>,
-    #[allow(dead_code)] // not in use - Field is marked dead_code and not used by BatchExecutor's methods
+    #[allow(dead_code)]
+    // not in use - Field is marked dead_code and not used by BatchExecutor's methods
     mev_handler: Option<Arc<JitoHandler>>,
     metrics: Arc<RwLock<ExecutionMetrics>>,
     active_batches: Arc<RwLock<HashMap<String, OpportunityBatch>>>,
@@ -653,7 +757,11 @@ impl BatchExecutor {
         let mev_handler = if config.enable_mev_protection {
             let mev_config = MevProtectionConfig::default();
             let jito_config = JitoConfig::default();
-            Some(Arc::new(JitoHandler::new(mev_config, jito_config, "https://api.mainnet-beta.solana.com".to_string())))
+            Some(Arc::new(JitoHandler::new(
+                mev_config,
+                jito_config,
+                "https://api.mainnet-beta.solana.com".to_string(),
+            )))
         } else {
             None
         };
@@ -671,9 +779,15 @@ impl BatchExecutor {
     }
 
     /// Process a new arbitrage opportunity for batch execution
-    pub async fn process_opportunity(&self, opportunity: MultiHopArbOpportunity) -> Result<(), ArbError> {
-        info!("Processing opportunity {} for batch execution", opportunity.id);
-        
+    pub async fn process_opportunity(
+        &self,
+        opportunity: MultiHopArbOpportunity,
+    ) -> Result<(), ArbError> {
+        info!(
+            "Processing opportunity {} for batch execution",
+            opportunity.id
+        );
+
         // Add to pending opportunities
         {
             let mut pending = self.pending_opportunities.write().await;
@@ -682,7 +796,7 @@ impl BatchExecutor {
 
         // Try to create batches from pending opportunities
         self.try_create_batches().await?;
-        
+
         Ok(())
     }
 
@@ -698,15 +812,24 @@ impl BatchExecutor {
             return Ok(());
         }
 
-        info!("Attempting to create batches from {} pending opportunities", pending_opportunities.len());
+        info!(
+            "Attempting to create batches from {} pending opportunities",
+            pending_opportunities.len()
+        );
 
         // Group opportunities into compatible batches
-        let batches = self.create_compatible_batches(pending_opportunities).await?;
-        
+        let batches = self
+            .create_compatible_batches(pending_opportunities)
+            .await?;
+
         for batch in batches {
             if batch.opportunities.len() > 1 {
-                info!("Created batch {} with {} opportunities (${:.2} profit)", 
-                      batch.id, batch.opportunities.len(), batch.estimated_total_profit_usd);
+                info!(
+                    "Created batch {} with {} opportunities (${:.2} profit)",
+                    batch.id,
+                    batch.opportunities.len(),
+                    batch.estimated_total_profit_usd
+                );
                 self.execute_batch(batch).await?;
             } else if let Some(single_opp) = batch.opportunities.into_iter().next() {
                 // Single opportunity - add back to pending or execute immediately
@@ -721,14 +844,19 @@ impl BatchExecutor {
     }
 
     /// Create compatible batches from opportunities
-    async fn create_compatible_batches(&self, opportunities: Vec<MultiHopArbOpportunity>) -> Result<Vec<OpportunityBatch>, ArbError> {
+    async fn create_compatible_batches(
+        &self,
+        opportunities: Vec<MultiHopArbOpportunity>,
+    ) -> Result<Vec<OpportunityBatch>, ArbError> {
         let mut batches = Vec::new();
         let mut remaining_opportunities = opportunities;
 
         while !remaining_opportunities.is_empty() {
             let mut current_batch_opps = vec![remaining_opportunities.remove(0)];
-            let mut current_batch_profit = current_batch_opps[0].estimated_profit_usd.unwrap_or(0.0);
-            let mut current_batch_compute_units = self.estimate_compute_units(&current_batch_opps[0]);
+            let mut current_batch_profit =
+                current_batch_opps[0].estimated_profit_usd.unwrap_or(0.0);
+            let mut current_batch_compute_units =
+                self.estimate_compute_units(&current_batch_opps[0]);
 
             // Try to add compatible opportunities to current batch
             let mut indices_to_remove = Vec::new();
@@ -736,13 +864,14 @@ impl BatchExecutor {
                 if current_batch_opps.len() >= self.config.max_opportunities_per_batch {
                     break;
                 }
-                
+
                 let candidate_compute_units = self.estimate_compute_units(candidate);
 
                 // Check compatibility and constraints
-                if self.are_opportunities_compatible(&current_batch_opps, candidate) &&
-                   current_batch_compute_units + candidate_compute_units <= self.config.max_compute_units_per_bundle {
-                    
+                if self.are_opportunities_compatible(&current_batch_opps, candidate)
+                    && current_batch_compute_units + candidate_compute_units
+                        <= self.config.max_compute_units_per_bundle
+                {
                     current_batch_profit += candidate.estimated_profit_usd.unwrap_or(0.0);
                     current_batch_compute_units += candidate_compute_units;
                     indices_to_remove.push(idx);
@@ -778,7 +907,11 @@ impl BatchExecutor {
     }
 
     /// Check if two opportunities are compatible for batching
-    fn are_opportunities_compatible(&self, batch_opps: &[MultiHopArbOpportunity], candidate: &MultiHopArbOpportunity) -> bool {
+    fn are_opportunities_compatible(
+        &self,
+        batch_opps: &[MultiHopArbOpportunity],
+        candidate: &MultiHopArbOpportunity,
+    ) -> bool {
         // Check for token conflicts (simplified)
         for existing in batch_opps {
             if self.have_token_conflicts(existing, candidate) {
@@ -789,7 +922,11 @@ impl BatchExecutor {
     }
 
     /// Check if two opportunities have conflicting token usage
-    fn have_token_conflicts(&self, opp1: &MultiHopArbOpportunity, opp2: &MultiHopArbOpportunity) -> bool {
+    fn have_token_conflicts(
+        &self,
+        opp1: &MultiHopArbOpportunity,
+        opp2: &MultiHopArbOpportunity,
+    ) -> bool {
         // Simplified conflict detection - check if they use the same input token
         opp1.input_token == opp2.input_token
     }
@@ -801,9 +938,16 @@ impl BatchExecutor {
     }
 
     /// Execute a batch of opportunities
-    async fn execute_batch(&self, batch: OpportunityBatch) -> Result<BundleExecutionResult, ArbError> {
+    async fn execute_batch(
+        &self,
+        batch: OpportunityBatch,
+    ) -> Result<BundleExecutionResult, ArbError> {
         let start_time = Instant::now();
-        info!("Executing batch {} with {} opportunities", batch.id, batch.opportunities.len());
+        info!(
+            "Executing batch {} with {} opportunities",
+            batch.id,
+            batch.opportunities.len()
+        );
 
         // Simulate all opportunities in parallel if enabled
         if self.config.enable_parallel_simulation {
@@ -815,10 +959,10 @@ impl BatchExecutor {
 
         // Create Jito bundle
         let jito_bundle = self.create_jito_bundle(&batch).await?;
-        
+
         // Submit bundle
         let result = self.submit_jito_bundle(jito_bundle).await?;
-        
+
         // Update metrics
         let execution_time = start_time.elapsed().as_millis() as u64;
         self.update_execution_metrics(&result, execution_time).await;
@@ -839,32 +983,39 @@ impl BatchExecutor {
     }
 
     /// Simulate batch opportunities in parallel
-    async fn simulate_batch_parallel(&self, batch: &OpportunityBatch) -> Result<Vec<SimulationResult>, ArbError> {
+    async fn simulate_batch_parallel(
+        &self,
+        batch: &OpportunityBatch,
+    ) -> Result<Vec<SimulationResult>, ArbError> {
         info!("Running parallel simulation for batch {}", batch.id);
-        
+
         let mut simulation_tasks = Vec::new();
-        
+
         for opportunity in &batch.opportunities {
             let opp_clone = opportunity.clone();
-            
+
             let task = tokio::spawn(async move {
                 let start_time = Instant::now();
-                
+
                 // Simulate the opportunity
                 // In a real implementation, this would call the appropriate DEX client
                 let success = true; // Placeholder
                 let simulation_time = start_time.elapsed().as_millis() as u64;
-                
+
                 SimulationResult {
                     opportunity_id: opp_clone.id,
                     success,
                     estimated_profit_usd: opp_clone.estimated_profit_usd.unwrap_or(0.0),
                     estimated_compute_units: 300_000, // Estimate
                     simulation_time_ms: simulation_time,
-                    error_message: if success { None } else { Some("Simulation failed".to_string()) },
+                    error_message: if success {
+                        None
+                    } else {
+                        Some("Simulation failed".to_string())
+                    },
                 }
             });
-            
+
             simulation_tasks.push(task);
         }
 
@@ -876,24 +1027,28 @@ impl BatchExecutor {
         // Check if all simulations succeeded
         for result in &simulation_results {
             if !result.success {
-                return Err(ArbError::ExecutionError(
-                    format!("Simulation failed for opportunity {}: {}", 
-                            result.opportunity_id, 
-                            result.error_message.as_deref().unwrap_or("Unknown error"))
-                ));
+                return Err(ArbError::ExecutionError(format!(
+                    "Simulation failed for opportunity {}: {}",
+                    result.opportunity_id,
+                    result.error_message.as_deref().unwrap_or("Unknown error")
+                )));
             }
         }
 
-        info!("All {} simulations succeeded for batch {}", simulation_results.len(), batch.id);
+        info!(
+            "All {} simulations succeeded for batch {}",
+            simulation_results.len(),
+            batch.id
+        );
         Ok(simulation_results)
     }
 
     /// Create a Jito bundle from a batch
     async fn create_jito_bundle(&self, batch: &OpportunityBatch) -> Result<JitoBundle, ArbError> {
         info!("Creating Jito bundle for batch {}", batch.id);
-        
+
         let mut transactions = Vec::new();
-        
+
         for opportunity in &batch.opportunities {
             // Build transaction for this opportunity
             let transaction = self.build_opportunity_transaction(opportunity).await?;
@@ -910,17 +1065,24 @@ impl BatchExecutor {
     }
 
     /// Build a transaction for a single opportunity
-    async fn build_opportunity_transaction(&self, _opportunity: &MultiHopArbOpportunity) -> Result<Transaction, ArbError> {
+    async fn build_opportunity_transaction(
+        &self,
+        _opportunity: &MultiHopArbOpportunity,
+    ) -> Result<Transaction, ArbError> {
         // Placeholder implementation
         // In real implementation, this would:
         // 1. Build swap instructions for the opportunity
         // 2. Add compute budget instructions
         // 3. Create and sign the transaction
-        
+
         let instructions = vec![]; // Placeholder
-        let recent_blockhash = self.solana_client.primary_client.get_latest_blockhash().await
+        let recent_blockhash = self
+            .solana_client
+            .primary_client
+            .get_latest_blockhash()
+            .await
             .map_err(|e| ArbError::ExecutionError(format!("Failed to get blockhash: {}", e)))?;
-        
+
         let transaction = Transaction::new_signed_with_payer(
             &instructions,
             Some(&self.wallet.pubkey()),
@@ -932,28 +1094,43 @@ impl BatchExecutor {
     }
 
     /// Submit a Jito bundle
-    async fn submit_jito_bundle(&self, bundle: JitoBundle) -> Result<BundleExecutionResult, ArbError> {
-        info!("Submitting Jito bundle {} with {} transactions", bundle.id, bundle.transactions.len());
-        
+    async fn submit_jito_bundle(
+        &self,
+        bundle: JitoBundle,
+    ) -> Result<BundleExecutionResult, ArbError> {
+        info!(
+            "Submitting Jito bundle {} with {} transactions",
+            bundle.id,
+            bundle.transactions.len()
+        );
+
         let start_time = Instant::now();
-        
+
         // In real implementation, this would:
         // 1. Submit the bundle to Jito
         // 2. Wait for confirmation
         // 3. Return the result
-        
+
         // Placeholder implementation
         let success = true;
         let signatures = vec![None; bundle.transactions.len()]; // Placeholder
         let execution_time = start_time.elapsed().as_millis() as u64;
-        
+
         Ok(BundleExecutionResult {
             bundle_id: bundle.id,
             success,
             signatures,
             execution_time_ms: execution_time,
-            actual_profit_usd: if success { Some(bundle.estimated_total_profit_usd) } else { None },
-            error_message: if success { None } else { Some("Bundle execution failed".to_string()) },
+            actual_profit_usd: if success {
+                Some(bundle.estimated_total_profit_usd)
+            } else {
+                None
+            },
+            error_message: if success {
+                None
+            } else {
+                Some("Bundle execution failed".to_string())
+            },
         })
     }
 
@@ -961,16 +1138,21 @@ impl BatchExecutor {
     async fn update_batch_assembly_metrics(&self, assembly_time_ms: u64) {
         let mut metrics = self.metrics.write().await;
         metrics.total_batches_created += 1;
-        metrics.avg_batch_assembly_time_ms = 
-            (metrics.avg_batch_assembly_time_ms * (metrics.total_batches_created - 1) as f64 + assembly_time_ms as f64) 
+        metrics.avg_batch_assembly_time_ms = (metrics.avg_batch_assembly_time_ms
+            * (metrics.total_batches_created - 1) as f64
+            + assembly_time_ms as f64)
             / metrics.total_batches_created as f64;
     }
 
     /// Update execution metrics
-    async fn update_execution_metrics(&self, result: &BundleExecutionResult, execution_time_ms: u64) {
+    async fn update_execution_metrics(
+        &self,
+        result: &BundleExecutionResult,
+        execution_time_ms: u64,
+    ) {
         let mut metrics = self.metrics.write().await;
         metrics.total_batches_executed += 1;
-        
+
         if result.success {
             metrics.total_successful_batches += 1;
             if let Some(profit) = result.actual_profit_usd {
@@ -979,9 +1161,10 @@ impl BatchExecutor {
         } else {
             metrics.total_failed_batches += 1;
         }
-        
-        metrics.avg_batch_execution_time_ms = 
-            (metrics.avg_batch_execution_time_ms * (metrics.total_batches_executed - 1) as f64 + execution_time_ms as f64) 
+
+        metrics.avg_batch_execution_time_ms = (metrics.avg_batch_execution_time_ms
+            * (metrics.total_batches_executed - 1) as f64
+            + execution_time_ms as f64)
             / metrics.total_batches_executed as f64;
     }
 
@@ -1010,25 +1193,28 @@ impl BatchExecutor {
     /// Force execution of all pending opportunities
     pub async fn force_execute_pending(&self) -> Result<Vec<BundleExecutionResult>, ArbError> {
         info!("Force executing all pending opportunities");
-        
+
         let pending_opportunities = {
             let mut pending = self.pending_opportunities.write().await;
             std::mem::take(&mut *pending)
         };
 
         let mut results = Vec::new();
-        
+
         // Create batches without strict profitability requirements
         for chunk in pending_opportunities.chunks(self.config.max_opportunities_per_batch) {
             let batch = OpportunityBatch {
                 id: uuid::Uuid::new_v4().to_string(),
                 opportunities: chunk.to_vec(),
-                estimated_total_profit_usd: chunk.iter().map(|o| o.estimated_profit_usd.unwrap_or(0.0)).sum(),
+                estimated_total_profit_usd: chunk
+                    .iter()
+                    .map(|o| o.estimated_profit_usd.unwrap_or(0.0))
+                    .sum(),
                 estimated_total_compute_units: chunk.len() as u32 * 300_000,
                 created_at: Instant::now(),
                 priority_score: 1.0,
             };
-            
+
             let result = self.execute_batch(batch).await?;
             results.push(result);
         }

@@ -1,18 +1,18 @@
 //! Price Aggregator with Jupiter Fallback
-//! 
+//!
 //! This module provides a unified price aggregation interface that uses multiple
 //! DEX clients for quote generation with Jupiter as a fallback when primary sources fail.
 
 use crate::{
+    arbitrage::jupiter::{integration::JupiterIntegrationConfig, JupiterFallbackManager},
     config::settings::Config,
-    dex::{DexClient, api::Quote},
     dex::clients::jupiter::JupiterClient,
-    arbitrage::jupiter::{JupiterFallbackManager, integration::JupiterIntegrationConfig},
+    dex::{api::Quote, DexClient},
     error::ArbError,
     local_metrics::Metrics,
     utils::PoolInfo,
 };
-use log::{debug, warn, info, error};
+use log::{debug, error, info, warn};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
@@ -145,7 +145,7 @@ impl PriceAggregator {
 
         // Step 1: Try primary DEX clients
         let primary_quotes = self.get_primary_quotes(pool, input_amount).await;
-        
+
         // Step 2: If primary quotes are insufficient, try Jupiter fallback
         let jupiter_quote = if self.should_use_jupiter_fallback(&primary_quotes).await {
             self.get_jupiter_quote(pool, input_amount).await
@@ -154,20 +154,19 @@ impl PriceAggregator {
         };
 
         // Step 3: Select the best quote
-        let best_quote = self.select_best_quote(primary_quotes, jupiter_quote).await?;
+        let best_quote = self
+            .select_best_quote(primary_quotes, jupiter_quote)
+            .await?;
 
         // Step 4: Record metrics
-        self.record_aggregation_metrics(&best_quote, start_time.elapsed()).await;
+        self.record_aggregation_metrics(&best_quote, start_time.elapsed())
+            .await;
 
         Ok(best_quote)
     }
 
     /// Get quotes from primary DEX clients
-    async fn get_primary_quotes(
-        &self,
-        pool: &PoolInfo,
-        input_amount: u64,
-    ) -> Vec<AggregatedQuote> {
+    async fn get_primary_quotes(&self, pool: &PoolInfo, input_amount: u64) -> Vec<AggregatedQuote> {
         let mut quotes = Vec::new();
 
         for client in &self.primary_dex_clients {
@@ -179,8 +178,12 @@ impl PriceAggregator {
                         confidence: self.calculate_confidence_for_dex_quote(client.get_name()),
                         latency_ms: 0, // Would be measured in real implementation
                     };
-                    debug!("✅ Got quote from {}: {} -> {}", 
-                           client.get_name(), input_amount, aggregated_quote.quote.output_amount);
+                    debug!(
+                        "✅ Got quote from {}: {} -> {}",
+                        client.get_name(),
+                        input_amount,
+                        aggregated_quote.quote.output_amount
+                    );
                     quotes.push(aggregated_quote);
                 }
                 Err(e) => {
@@ -193,10 +196,7 @@ impl PriceAggregator {
     }
 
     /// Determine if Jupiter fallback should be used
-    async fn should_use_jupiter_fallback(
-        &self,
-        primary_quotes: &[AggregatedQuote],
-    ) -> bool {
+    async fn should_use_jupiter_fallback(&self, primary_quotes: &[AggregatedQuote]) -> bool {
         if !self.config.enable_jupiter_fallback {
             return false;
         }
@@ -209,18 +209,20 @@ impl PriceAggregator {
         // 1. No primary quotes available
         // 2. Primary quotes have low confidence
         // 3. Primary quotes show high price deviation
-        
+
         if primary_quotes.is_empty() {
             debug!("🔄 No primary quotes available, using Jupiter fallback");
             return true;
         }
 
-        let avg_confidence = primary_quotes.iter()
-            .map(|q| q.confidence)
-            .sum::<f64>() / primary_quotes.len() as f64;
+        let avg_confidence =
+            primary_quotes.iter().map(|q| q.confidence).sum::<f64>() / primary_quotes.len() as f64;
 
         if avg_confidence < self.config.min_confidence_threshold {
-            debug!("🔄 Low confidence quotes ({:.2}), using Jupiter fallback", avg_confidence);
+            debug!(
+                "🔄 Low confidence quotes ({:.2}), using Jupiter fallback",
+                avg_confidence
+            );
             return true;
         }
 
@@ -241,29 +243,32 @@ impl PriceAggregator {
     ) -> Option<AggregatedQuote> {
         if let Some(fallback_manager) = &self.jupiter_fallback_manager {
             let start_time = std::time::Instant::now();
-            
+
             // Use configured slippage tolerance
             let slippage_bps = 50; // Default 0.5% slippage, could be configurable
-            
+
             // Try multi-route optimization first if available
             let result = if fallback_manager.is_route_optimization_enabled() {
                 debug!("🛣️  Using Jupiter multi-route optimization for quote");
-                
-                match fallback_manager.get_optimal_route(
-                    &pool.token_a.mint.to_string(),
-                    &pool.token_b.mint.to_string(),
-                    input_amount,
-                    Some(slippage_bps),
-                ).await {
+
+                match fallback_manager
+                    .get_optimal_route(
+                        &pool.token_a.mint.to_string(),
+                        &pool.token_b.mint.to_string(),
+                        input_amount,
+                        Some(slippage_bps),
+                    )
+                    .await
+                {
                     Ok(multi_route_result) => {
                         let quote_response = multi_route_result.best_route.quote;
                         let latency_ms = start_time.elapsed().as_millis() as u64;
-                        
+
                         info!("🏆 Jupiter optimal route selected: {} routes evaluated, {} failed, reason: {}", 
                               multi_route_result.routes_evaluated,
                               multi_route_result.routes_failed,
                               multi_route_result.selection_reason);
-                        
+
                         Some((quote_response, latency_ms, true)) // true = used route optimization
                     }
                     Err(e) => {
@@ -274,18 +279,21 @@ impl PriceAggregator {
             } else {
                 None
             };
-            
+
             // Fallback to cached single quote if multi-route failed or not available
             let (quote_response, latency_ms, used_optimization) = match result {
                 Some(data) => data,
                 None => {
                     debug!("📡 Using Jupiter cached quote fallback");
-                    match fallback_manager.get_quote_with_cache(
-                        &pool.token_a.mint.to_string(),
-                        &pool.token_b.mint.to_string(),
-                        input_amount,
-                        Some(slippage_bps),
-                    ).await {
+                    match fallback_manager
+                        .get_quote_with_cache(
+                            &pool.token_a.mint.to_string(),
+                            &pool.token_b.mint.to_string(),
+                            input_amount,
+                            Some(slippage_bps),
+                        )
+                        .await
+                    {
                         Ok(quote_response) => {
                             let latency_ms = start_time.elapsed().as_millis() as u64;
                             (quote_response, latency_ms, false) // false = used single route
@@ -297,34 +305,45 @@ impl PriceAggregator {
                     }
                 }
             };
-            
+
             // Convert QuoteResponse to Quote
             let quote = Quote {
                 input_token: pool.token_a.symbol.clone(),
                 output_token: pool.token_b.symbol.clone(),
                 input_amount,
                 output_amount: quote_response.out_amount.parse().unwrap_or(0),
-                dex: if used_optimization { "Jupiter (Multi-Route)" } else { "Jupiter (Single)" }.to_string(),
+                dex: if used_optimization {
+                    "Jupiter (Multi-Route)"
+                } else {
+                    "Jupiter (Single)"
+                }
+                .to_string(),
                 route: vec![], // Jupiter routes are complex, simplified here
                 slippage_estimate: Some(slippage_bps as f64 / 10000.0),
             };
-            
+
             // Higher confidence for optimized routes
             let confidence = if used_optimization { 0.9 } else { 0.8 };
-            
+
             let aggregated_quote = AggregatedQuote {
                 quote,
                 source: QuoteSource::Jupiter,
                 confidence,
                 latency_ms,
             };
-            
-            info!("🪐 Jupiter quote: {} -> {} ({}, {}ms)", 
-                  input_amount, 
-                  aggregated_quote.quote.output_amount,
-                  if used_optimization { "optimized" } else { "cached" },
-                  latency_ms);
-            
+
+            info!(
+                "🪐 Jupiter quote: {} -> {} ({}, {}ms)",
+                input_amount,
+                aggregated_quote.quote.output_amount,
+                if used_optimization {
+                    "optimized"
+                } else {
+                    "cached"
+                },
+                latency_ms
+            );
+
             Some(aggregated_quote)
         } else {
             None
@@ -338,31 +357,40 @@ impl PriceAggregator {
         jupiter_quote: Option<AggregatedQuote>,
     ) -> Result<AggregatedQuote, ArbError> {
         if primary_quotes.is_empty() && jupiter_quote.is_none() {
-            return Err(ArbError::DexError("No quotes available from any source".to_string()));
+            return Err(ArbError::DexError(
+                "No quotes available from any source".to_string(),
+            ));
         }
 
         // Perform cross-validation if both primary and Jupiter quotes are available
         if let Some(ref jupiter_quote) = jupiter_quote {
             if self.config.cross_validation.enable_validation && !primary_quotes.is_empty() {
-                let validation_result = self.cross_validate_quotes(&primary_quotes, jupiter_quote).await;
+                let validation_result = self
+                    .cross_validate_quotes(&primary_quotes, jupiter_quote)
+                    .await;
                 self.log_cross_validation_result(&validation_result).await;
-                
+
                 // Update Jupiter quote confidence based on validation
                 if validation_result.is_within_threshold {
                     // Boost Jupiter confidence if it passes validation
                     let mut validated_jupiter = jupiter_quote.clone();
-                    validated_jupiter.confidence += self.config.cross_validation.validation_confidence_boost;
+                    validated_jupiter.confidence +=
+                        self.config.cross_validation.validation_confidence_boost;
                     validated_jupiter.confidence = validated_jupiter.confidence.min(1.0); // Cap at 1.0
-                    
+
                     primary_quotes.push(validated_jupiter);
-                    info!("✅ Jupiter quote validated against primary sources (deviation: {:.2}%)", 
-                          validation_result.deviation_percent);
+                    info!(
+                        "✅ Jupiter quote validated against primary sources (deviation: {:.2}%)",
+                        validation_result.deviation_percent
+                    );
                 } else {
                     // Log but still include Jupiter quote with original confidence
                     primary_quotes.push(jupiter_quote.clone());
-                    warn!("⚠️ Jupiter quote failed validation (deviation: {:.2}% > {:.2}%)", 
-                          validation_result.deviation_percent, 
-                          self.config.cross_validation.max_acceptable_deviation_pct);
+                    warn!(
+                        "⚠️ Jupiter quote failed validation (deviation: {:.2}% > {:.2}%)",
+                        validation_result.deviation_percent,
+                        self.config.cross_validation.max_acceptable_deviation_pct
+                    );
                 }
             } else {
                 // No validation, just add Jupiter quote
@@ -380,7 +408,9 @@ impl PriceAggregator {
             let output_cmp = b.quote.output_amount.cmp(&a.quote.output_amount);
             if output_cmp == std::cmp::Ordering::Equal {
                 // If output amounts are equal, compare by confidence
-                b.confidence.partial_cmp(&a.confidence).unwrap_or(std::cmp::Ordering::Equal)
+                b.confidence
+                    .partial_cmp(&a.confidence)
+                    .unwrap_or(std::cmp::Ordering::Equal)
             } else {
                 output_cmp
             }
@@ -388,16 +418,18 @@ impl PriceAggregator {
 
         // Return the best quote by output amount and confidence
         let best_quote = primary_quotes.into_iter().next().unwrap();
-        
-        info!("🎯 Selected best quote from {}: {} -> {} (confidence: {:.2})",
-              match &best_quote.source {
-                  QuoteSource::Primary(name) => name,
-                  QuoteSource::Jupiter => "Jupiter",
-                  QuoteSource::Fallback(name) => name,
-              },
-              best_quote.quote.input_amount,
-              best_quote.quote.output_amount,
-              best_quote.confidence);
+
+        info!(
+            "🎯 Selected best quote from {}: {} -> {} (confidence: {:.2})",
+            match &best_quote.source {
+                QuoteSource::Primary(name) => name,
+                QuoteSource::Jupiter => "Jupiter",
+                QuoteSource::Fallback(name) => name,
+            },
+            best_quote.quote.input_amount,
+            best_quote.quote.output_amount,
+            best_quote.confidence
+        );
 
         Ok(best_quote)
     }
@@ -405,10 +437,10 @@ impl PriceAggregator {
     /// Calculate confidence score for a DEX quote
     fn calculate_confidence_for_dex_quote(&self, dex_name: &str) -> f64 {
         match dex_name.to_lowercase().as_str() {
-            "orca" => 0.9,      // High confidence for Orca
-            "raydium" => 0.85,  // High confidence for Raydium
-            "jupiter" => 0.8,   // Good confidence for Jupiter
-            _ => 0.7,           // Default confidence
+            "orca" => 0.9,     // High confidence for Orca
+            "raydium" => 0.85, // High confidence for Raydium
+            "jupiter" => 0.8,  // Good confidence for Jupiter
+            _ => 0.7,          // Default confidence
         }
     }
 
@@ -418,12 +450,14 @@ impl PriceAggregator {
             return false;
         }
 
-        let prices: Vec<f64> = quotes.iter()
+        let prices: Vec<f64> = quotes
+            .iter()
             .map(|q| q.quote.output_amount as f64 / q.quote.input_amount as f64)
             .collect();
 
         let avg_price = prices.iter().sum::<f64>() / prices.len() as f64;
-        let max_deviation = prices.iter()
+        let max_deviation = prices
+            .iter()
             .map(|price| ((price - avg_price) / avg_price).abs() * 100.0)
             .fold(0.0, f64::max);
 
@@ -437,7 +471,7 @@ impl PriceAggregator {
         duration: std::time::Duration,
     ) {
         let mut metrics = self.metrics.lock().await;
-        
+
         // Record quote source metrics
         match &quote.source {
             QuoteSource::Primary(dex_name) => {
@@ -461,7 +495,12 @@ impl PriceAggregator {
         primary_quotes: &[AggregatedQuote],
         jupiter_quote: &AggregatedQuote,
     ) -> CrossValidationResult {
-        if primary_quotes.len() < self.config.cross_validation.min_primary_quotes_for_validation {
+        if primary_quotes.len()
+            < self
+                .config
+                .cross_validation
+                .min_primary_quotes_for_validation
+        {
             return CrossValidationResult {
                 primary_average_price: 0.0,
                 jupiter_price: 0.0,
@@ -472,7 +511,8 @@ impl PriceAggregator {
         }
 
         // Calculate average price from primary quotes (price = output_amount / input_amount)
-        let primary_prices: Vec<f64> = primary_quotes.iter()
+        let primary_prices: Vec<f64> = primary_quotes
+            .iter()
             .filter(|q| matches!(q.source, QuoteSource::Primary(_)))
             .map(|q| q.quote.output_amount as f64 / q.quote.input_amount as f64)
             .collect();
@@ -487,9 +527,11 @@ impl PriceAggregator {
             };
         }
 
-        let primary_average_price = primary_prices.iter().sum::<f64>() / primary_prices.len() as f64;
-        let jupiter_price = jupiter_quote.quote.output_amount as f64 / jupiter_quote.quote.input_amount as f64;
-        
+        let primary_average_price =
+            primary_prices.iter().sum::<f64>() / primary_prices.len() as f64;
+        let jupiter_price =
+            jupiter_quote.quote.output_amount as f64 / jupiter_quote.quote.input_amount as f64;
+
         // Calculate percentage deviation
         let deviation_percent = if primary_average_price > 0.0 {
             ((jupiter_price - primary_average_price) / primary_average_price * 100.0).abs()
@@ -497,7 +539,8 @@ impl PriceAggregator {
             100.0 // If primary price is 0, consider it 100% deviation
         };
 
-        let is_within_threshold = deviation_percent <= self.config.cross_validation.max_acceptable_deviation_pct;
+        let is_within_threshold =
+            deviation_percent <= self.config.cross_validation.max_acceptable_deviation_pct;
 
         CrossValidationResult {
             primary_average_price,
@@ -525,10 +568,13 @@ impl PriceAggregator {
         }
 
         // Alert on high deviation
-        if result.deviation_percent > self.config.cross_validation.max_acceptable_deviation_pct * 2.0 {
-            warn!("🚨 High Jupiter quote deviation detected: {:.2}% (threshold: {:.2}%)",
-                  result.deviation_percent,
-                  self.config.cross_validation.max_acceptable_deviation_pct);
+        if result.deviation_percent
+            > self.config.cross_validation.max_acceptable_deviation_pct * 2.0
+        {
+            warn!(
+                "🚨 High Jupiter quote deviation detected: {:.2}% (threshold: {:.2}%)",
+                result.deviation_percent, self.config.cross_validation.max_acceptable_deviation_pct
+            );
         }
     }
 }
@@ -593,7 +639,7 @@ mod tests {
     async fn test_price_aggregator_selection() {
         let config = Config::test_default();
         let metrics = Arc::new(Mutex::new(Metrics::new()));
-        
+
         let aggregator = PriceAggregator::new(
             vec![], // No primary DEX clients for this test
             None,   // No Jupiter client for this test
@@ -611,13 +657,8 @@ mod tests {
     fn test_price_deviation_detection() {
         let config = Config::test_default();
         let metrics = Arc::new(Mutex::new(Metrics::new()));
-        
-        let aggregator = PriceAggregator::new(
-            vec![],
-            None,
-            &config,
-            metrics,
-        );
+
+        let aggregator = PriceAggregator::new(vec![], None, &config, metrics);
 
         // Create quotes with high price deviation
         let quotes = vec![
@@ -659,13 +700,8 @@ mod tests {
     async fn test_cross_validation_within_threshold() {
         let config = Config::test_default();
         let metrics = Arc::new(Mutex::new(Metrics::new()));
-        
-        let aggregator = PriceAggregator::new(
-            vec![],
-            None,
-            &config,
-            metrics,
-        );
+
+        let aggregator = PriceAggregator::new(vec![], None, &config, metrics);
 
         // Create primary quotes
         let primary_quotes = vec![
@@ -715,10 +751,18 @@ mod tests {
             latency_ms: 200,
         };
 
-        let validation_result = aggregator.cross_validate_quotes(&primary_quotes, &jupiter_quote).await;
-        
-        assert!(validation_result.is_within_threshold, "Jupiter quote should pass validation");
-        assert!(validation_result.deviation_percent < 5.0, "Deviation should be less than 5%");
+        let validation_result = aggregator
+            .cross_validate_quotes(&primary_quotes, &jupiter_quote)
+            .await;
+
+        assert!(
+            validation_result.is_within_threshold,
+            "Jupiter quote should pass validation"
+        );
+        assert!(
+            validation_result.deviation_percent < 5.0,
+            "Deviation should be less than 5%"
+        );
         assert_eq!(validation_result.primary_quotes_count, 2);
     }
 
@@ -726,13 +770,8 @@ mod tests {
     async fn test_cross_validation_exceeds_threshold() {
         let config = Config::test_default();
         let metrics = Arc::new(Mutex::new(Metrics::new()));
-        
-        let aggregator = PriceAggregator::new(
-            vec![],
-            None,
-            &config,
-            metrics,
-        );
+
+        let aggregator = PriceAggregator::new(vec![], None, &config, metrics);
 
         // Create primary quotes - need at least 2 for validation
         let primary_quotes = vec![
@@ -782,11 +821,20 @@ mod tests {
             latency_ms: 200,
         };
 
-        let validation_result = aggregator.cross_validate_quotes(&primary_quotes, &jupiter_quote).await;
-        
+        let validation_result = aggregator
+            .cross_validate_quotes(&primary_quotes, &jupiter_quote)
+            .await;
+
         println!("Deviation: {:.2}%", validation_result.deviation_percent);
-        assert!(!validation_result.is_within_threshold, "Jupiter quote should fail validation");
-        assert!(validation_result.deviation_percent >= 5.0, "Deviation should be at least 5%, got {:.2}%", validation_result.deviation_percent);
+        assert!(
+            !validation_result.is_within_threshold,
+            "Jupiter quote should fail validation"
+        );
+        assert!(
+            validation_result.deviation_percent >= 5.0,
+            "Deviation should be at least 5%, got {:.2}%",
+            validation_result.deviation_percent
+        );
         assert_eq!(validation_result.primary_quotes_count, 2);
     }
 
@@ -794,31 +842,24 @@ mod tests {
     async fn test_cross_validation_confidence_boost() {
         let config = Config::test_default();
         let metrics = Arc::new(Mutex::new(Metrics::new()));
-        
-        let aggregator = PriceAggregator::new(
-            vec![],
-            None,
-            &config,
-            metrics,
-        );
+
+        let aggregator = PriceAggregator::new(vec![], None, &config, metrics);
 
         // Create primary quotes
-        let primary_quotes = vec![
-            AggregatedQuote {
-                quote: Quote {
-                    input_token: "SOL".to_string(),
-                    output_token: "USDC".to_string(),
-                    input_amount: 1000000,
-                    output_amount: 99000, // Lower output than Jupiter
-                    dex: "Orca".to_string(),
-                    route: vec![],
-                    slippage_estimate: Some(0.01),
-                },
-                source: QuoteSource::Primary("Orca".to_string()),
-                confidence: 0.9,
-                latency_ms: 100,
+        let primary_quotes = vec![AggregatedQuote {
+            quote: Quote {
+                input_token: "SOL".to_string(),
+                output_token: "USDC".to_string(),
+                input_amount: 1000000,
+                output_amount: 99000, // Lower output than Jupiter
+                dex: "Orca".to_string(),
+                route: vec![],
+                slippage_estimate: Some(0.01),
             },
-        ];
+            source: QuoteSource::Primary("Orca".to_string()),
+            confidence: 0.9,
+            latency_ms: 100,
+        }];
 
         // Create Jupiter quote with better price that passes validation
         let jupiter_quote = AggregatedQuote {
@@ -836,15 +877,23 @@ mod tests {
             latency_ms: 200,
         };
 
-        let result = aggregator.select_best_quote(primary_quotes, Some(jupiter_quote)).await;
-        
+        let result = aggregator
+            .select_best_quote(primary_quotes, Some(jupiter_quote))
+            .await;
+
         assert!(result.is_ok(), "Should successfully select best quote");
         let best_quote = result.unwrap();
-        
-        println!("Best quote source: {:?}, confidence: {:.2}", best_quote.source, best_quote.confidence);
-        
+
+        println!(
+            "Best quote source: {:?}, confidence: {:.2}",
+            best_quote.source, best_quote.confidence
+        );
+
         // Jupiter should be selected due to better output amount
-        assert!(matches!(best_quote.source, QuoteSource::Jupiter), "Jupiter should be selected");
+        assert!(
+            matches!(best_quote.source, QuoteSource::Jupiter),
+            "Jupiter should be selected"
+        );
         // Note: We don't test confidence boost here as it depends on validation passing
     }
 }

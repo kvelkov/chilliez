@@ -6,18 +6,14 @@ use futures_util::SinkExt;
 use log::{debug, error, info};
 use serde::{Deserialize, Serialize};
 use std::time::{Duration, Instant};
-use tokio::{
-    sync::mpsc,
-    time::timeout,
-};
-use tokio_tungstenite::{connect_async, tungstenite::Message, WebSocketStream, MaybeTlsStream};
+use tokio::{sync::mpsc, time::timeout};
+use tokio_tungstenite::{connect_async, tungstenite::Message, MaybeTlsStream, WebSocketStream};
 use url::Url;
 
 use crate::{
     utils::DexType,
     websocket::price_feeds::{
-        ConnectionStatus, PriceUpdate, WebSocketFeed, WebSocketConfig,
-        WebSocketMetrics,
+        ConnectionStatus, PriceUpdate, WebSocketConfig, WebSocketFeed, WebSocketMetrics,
     },
 };
 
@@ -123,12 +119,15 @@ impl WebSocketFeed for RaydiumWebSocketFeed {
     }
 
     async fn connect(&mut self) -> Result<()> {
-        info!("🔌 Connecting to Raydium account monitoring WebSocket: {}", self.config.url);
+        info!(
+            "🔌 Connecting to Raydium account monitoring WebSocket: {}",
+            self.config.url
+        );
         self.status = ConnectionStatus::Connecting;
         self.reconnect_attempts = 0;
 
         let url = Url::parse(&self.config.url)?;
-        
+
         match timeout(Duration::from_secs(10), connect_async(url)).await {
             Ok(Ok((ws_stream, response))) => {
                 info!("✅ Connected to Raydium WebSocket: {}", response.status());
@@ -153,11 +152,11 @@ impl WebSocketFeed for RaydiumWebSocketFeed {
 
     async fn disconnect(&mut self) -> Result<()> {
         info!("🔌 Disconnecting from Raydium WebSocket");
-        
+
         if let Some(mut ws) = self.websocket.take() {
             let _ = ws.close(None).await;
         }
-        
+
         self.status = ConnectionStatus::Disconnected;
         Ok(())
     }
@@ -172,7 +171,7 @@ impl WebSocketFeed for RaydiumWebSocketFeed {
         }
 
         info!("� Subscribing to {} Raydium pools", pool_addresses.len());
-        
+
         // Subscribe to program account changes for each pool
         for (idx, pool_address) in pool_addresses.iter().enumerate() {
             let subscription_msg = RaydiumSubscription {
@@ -184,18 +183,23 @@ impl WebSocketFeed for RaydiumWebSocketFeed {
                     serde_json::json!({
                         "encoding": "base64",
                         "commitment": "processed"
-                    })
+                    }),
                 ],
             };
 
             if let Some(ws) = &mut self.websocket {
                 let msg = Message::Text(serde_json::to_string(&subscription_msg)?);
-                ws.send(msg).await.map_err(|e| anyhow!("Failed to send subscription: {}", e))?;
+                ws.send(msg)
+                    .await
+                    .map_err(|e| anyhow!("Failed to send subscription: {}", e))?;
             }
         }
 
         self.subscribed_pools = pool_addresses;
-        info!("✅ Successfully subscribed to {} Raydium pools", self.subscribed_pools.len());
+        info!(
+            "✅ Successfully subscribed to {} Raydium pools",
+            self.subscribed_pools.len()
+        );
         Ok(())
     }
 
@@ -228,15 +232,19 @@ impl RaydiumWebSocketFeed {
     }
 
     /// Convert account update to price update
-    fn handle_account_update(&self, notification: RaydiumAccountNotification) -> Result<Vec<PriceUpdate>> {
+    fn handle_account_update(
+        &self,
+        notification: RaydiumAccountNotification,
+    ) -> Result<Vec<PriceUpdate>> {
         let account_data = &notification.params.result.value.account.data;
         let pool_address = &notification.params.result.value.pubkey;
         let slot = notification.params.result.context.slot;
 
         // Decode base64 account data
         let decoded_data = if !account_data.is_empty() {
-            use base64::{Engine as _, engine::general_purpose};
-            general_purpose::STANDARD.decode(&account_data[0])
+            use base64::{engine::general_purpose, Engine as _};
+            general_purpose::STANDARD
+                .decode(&account_data[0])
                 .map_err(|e| anyhow!("Failed to decode account data: {}", e))?
         } else {
             return Err(anyhow!("No account data in notification"));
@@ -244,30 +252,38 @@ impl RaydiumWebSocketFeed {
 
         // Parse Raydium AMM account structure (simplified version)
         if decoded_data.len() < 100 {
-            return Err(anyhow!("Account data too small for Raydium AMM: {} bytes", decoded_data.len()));
+            return Err(anyhow!(
+                "Account data too small for Raydium AMM: {} bytes",
+                decoded_data.len()
+            ));
         }
 
         // Parse basic Raydium AMM structure
         let price_update = self.parse_raydium_amm_account(&decoded_data, pool_address, slot)?;
-        
+
         Ok(vec![price_update])
     }
 
     /// Parse Raydium AMM account data into PriceUpdate (simplified implementation)
-    fn parse_raydium_amm_account(&self, data: &[u8], pool_address: &str, slot: u64) -> Result<PriceUpdate> {
+    fn parse_raydium_amm_account(
+        &self,
+        data: &[u8],
+        pool_address: &str,
+        slot: u64,
+    ) -> Result<PriceUpdate> {
         // NOTE: This is a simplified parser for demonstration
         // In production, use the official Raydium SDK for proper parsing
-        
+
         if data.len() < 100 {
             return Err(anyhow!("Insufficient data for Raydium AMM parsing"));
         }
 
         // For now, create a mock price update based on slot variation
         let timestamp = chrono::Utc::now().timestamp_millis() as u64;
-        
+
         // Mock data - in production, extract from account data
         let mock_price = 1.0 + (slot as f64 % 200.0) / 8000.0; // Different variation for Raydium
-        
+
         Ok(PriceUpdate {
             pool_address: pool_address.to_string(),
             dex_type: DexType::Raydium,

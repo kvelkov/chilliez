@@ -1,12 +1,12 @@
 //! Test for Wallet-Jito Integration
-//! 
+//!
 //! This test verifies that the wallet pool and Jito client integration works correctly.
 
 #[cfg(test)]
 mod tests {
     use crate::{
-        wallet::{WalletJitoIntegration, WalletJitoConfig, WalletPoolConfig},
         arbitrage::JitoClientConfig,
+        wallet::{WalletJitoConfig, WalletJitoIntegration, WalletPoolConfig},
     };
     use solana_client::nonblocking::rpc_client::RpcClient;
     use solana_sdk::{signature::Keypair, signer::Signer};
@@ -41,18 +41,16 @@ mod tests {
         let collector_pubkey = collector_keypair.pubkey();
 
         // Create test RPC client
-        let rpc_client = Arc::new(RpcClient::new("https://api.mainnet-beta.solana.com".to_string()));
+        let rpc_client = Arc::new(RpcClient::new(
+            "https://api.mainnet-beta.solana.com".to_string(),
+        ));
 
         // Create integration system
-        let integration_system = WalletJitoIntegration::new(
-            config,
-            collector_pubkey,
-            rpc_client,
-        );
+        let integration_system = WalletJitoIntegration::new(config, collector_pubkey, rpc_client);
 
         // Test that the system was created successfully
         assert_eq!(integration_system.get_success_rate(), 0.0); // No trades yet
-        
+
         // Get initial stats
         let stats = integration_system.get_comprehensive_stats().await;
         assert_eq!(stats.wallet_stats.total_wallets, 0);
@@ -66,7 +64,7 @@ mod tests {
     #[test]
     fn test_wallet_jito_config_defaults() {
         let config = WalletJitoConfig::default();
-        
+
         // Verify default configuration values
         assert_eq!(config.wallet_config.wallet_ttl_secs, 300);
         assert_eq!(config.wallet_config.sweep_threshold_lamports, 10_000);
@@ -74,7 +72,7 @@ mod tests {
         assert!(config.auto_sweep_profits);
         assert_eq!(config.min_profit_threshold, 50_000);
         assert!(config.optimize_bundles);
-        
+
         println!("✅ Default configuration test passed!");
     }
 
@@ -82,15 +80,15 @@ mod tests {
     fn test_error_handling() {
         // Test that insufficient profit is handled correctly
         use crate::error::ArbError;
-        
+
         let error = ArbError::InsufficientProfit("Test error".to_string());
         assert!(!error.is_recoverable());
         assert!(!error.should_retry());
-        
+
         let error = ArbError::TransactionFailed("Network timeout".to_string());
         assert!(error.is_recoverable());
         assert!(error.should_retry());
-        
+
         println!("✅ Error handling test passed!");
     }
 }

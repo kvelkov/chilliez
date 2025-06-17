@@ -1,39 +1,35 @@
+pub mod api; // NEW: Production API management (rate limiting, connection pooling, failover)
 pub mod arbitrage;
-pub mod local_metrics;
+pub mod cache;
 pub mod config;
 pub mod dex;
-pub mod solana;
-pub mod utils;
 pub mod error;
-pub mod websocket;
-pub mod webhooks;
-pub mod cache;
-pub mod helius_client;  // Enhanced Helius SDK client with rate limiting
-pub mod testing; // Testing infrastructure
-pub mod paper_trading; // Paper trading simulation system
+pub mod helius_client; // Enhanced Helius SDK client with rate limiting
+pub mod local_metrics;
 pub mod monitoring; // Enhanced monitoring and alerting
-pub mod api; // NEW: Production API management (rate limiting, connection pooling, failover)
-pub mod wallet; // NEW: Wallet management features
+pub mod paper_trading; // Paper trading simulation system
 pub mod performance; // NEW: Performance optimization and monitoring
-pub mod streams; // NEW: Real-time data streams and processing
+pub mod solana;
+pub mod streams;
+pub mod testing; // Testing infrastructure
+pub mod utils;
+pub mod wallet; // NEW: Wallet management features
+pub mod webhooks;
+pub mod websocket; // NEW: Real-time data streams and processing
 
 // Re-export key testing components for easy access
-pub use testing::{
-    MockDexEnvironment, MarketCondition, TestSuiteRunner,
-};
+pub use testing::{MarketCondition, MockDexEnvironment, TestSuiteRunner};
 
 // Re-export key API management components
 pub use api::{
-    ApiManager, ApiRequest, ApiResponse, ApiError,
-    AdvancedRateLimiter, RequestPriority, RateLimitStats,
-    RpcConnectionPool, EndpointHealth, EndpointStatus,
-    EnhancedApiErrorHandler, EnhancedRetryExecutor, ApiErrorType,
-    BanDetectionConfig, BackoffStrategy, BanStatusReport,
+    AdvancedRateLimiter, ApiError, ApiErrorType, ApiManager, ApiRequest, ApiResponse,
+    BackoffStrategy, BanDetectionConfig, BanStatusReport, EndpointHealth, EndpointStatus,
+    EnhancedApiErrorHandler, EnhancedRetryExecutor, RateLimitStats, RequestPriority,
+    RpcConnectionPool,
 };
 
 // Re-export key performance components
 pub use performance::{
-    PerformanceManager, PerformanceConfig, PerformanceReport,
-    ParallelExecutor, ParallelStats, CacheManager, CacheStats,
-    MetricsCollector, MetricsSummary, BenchmarkRunner, BenchmarkResults,
+    BenchmarkResults, BenchmarkRunner, CacheManager, CacheStats, MetricsCollector, MetricsSummary,
+    ParallelExecutor, ParallelStats, PerformanceConfig, PerformanceManager, PerformanceReport,
 };

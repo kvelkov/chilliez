@@ -1,6 +1,6 @@
 // src/api/rate_limiter.rs
 //! Advanced Rate Limiting System for Production API Management
-//! 
+//!
 //! Implements intelligent rate limiting with:
 //! - Helius API: 3000 requests/hour (conservative limit from 6.7M available)
 //! - Per-DEX rate limiting
@@ -8,23 +8,23 @@
 //! - Priority request queuing
 //! - Connection pooling and failover
 
-use anyhow::{Result, anyhow};
-use log::{warn, debug, error, info};
+use anyhow::{anyhow, Result};
+use log::{debug, error, info, warn};
+use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tokio::sync::{RwLock, Semaphore, Mutex};
+use tokio::sync::{Mutex, RwLock, Semaphore};
 use tokio::time::sleep;
-use std::collections::{HashMap, VecDeque};
-use serde::{Serialize, Deserialize};
 
 /// Request priority levels for intelligent queuing
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum RequestPriority {
-    Critical = 4,    // Live trading, balance checks
-    High = 3,        // Price updates, opportunity detection
-    Medium = 2,      // Pool discovery, DEX queries
-    Low = 1,         // Analytics, historical data
-    Background = 0,  // Non-essential operations
+    Critical = 4,   // Live trading, balance checks
+    High = 3,       // Price updates, opportunity detection
+    Medium = 2,     // Pool discovery, DEX queries
+    Low = 1,        // Analytics, historical data
+    Background = 0, // Non-essential operations
 }
 
 /// Rate limit configuration for different API providers
@@ -87,10 +87,15 @@ impl AdvancedRateLimiter {
     /// Create a new rate limiter for the specified provider
     pub fn new(provider_name: String, config: RateLimitConfig) -> Self {
         let permits = config.burst_capacity as usize;
-        
-        info!("🚦 Initializing rate limiter for {}: {}req/h, {}req/m, burst: {}", 
-              provider_name, config.requests_per_hour, config.requests_per_minute, config.burst_capacity);
-        
+
+        info!(
+            "🚦 Initializing rate limiter for {}: {}req/h, {}req/m, burst: {}",
+            provider_name,
+            config.requests_per_hour,
+            config.requests_per_minute,
+            config.burst_capacity
+        );
+
         Self {
             config,
             request_history: Arc::new(RwLock::new(VecDeque::new())),
@@ -101,20 +106,20 @@ impl AdvancedRateLimiter {
             provider_name,
         }
     }
-    
+
     /// Create rate limiter with Helius-optimized defaults
     pub fn new_helius() -> Self {
         let config = RateLimitConfig {
-            requests_per_hour: 3000,    // Conservative from 6.7M available
+            requests_per_hour: 3000, // Conservative from 6.7M available
             requests_per_minute: 50,
             burst_capacity: 15,         // Allow slightly larger bursts for Helius
             cooldown_duration_secs: 30, // Shorter cooldown for Helius
             max_backoff_secs: 180,      // 3 minute max backoff
         };
-        
+
         Self::new("Helius".to_string(), config)
     }
-    
+
     /// Check if we can make a request without hitting rate limits
     pub async fn can_make_request(&self) -> bool {
         // Check if we're in backoff period
@@ -124,36 +129,46 @@ impl AdvancedRateLimiter {
                 return false;
             }
         }
-        
+
         // Check semaphore availability
         if self.semaphore.available_permits() == 0 {
             debug!("🚫 {} API semaphore exhausted", self.provider_name);
             return false;
         }
-        
+
         // Check rate limits
         self.check_rate_limits().await
     }
-    
+
     /// Attempt to acquire a permit for making a request
-    pub async fn acquire_permit(&self, priority: RequestPriority, endpoint: &str) -> Result<RateLimitPermit> {
+    pub async fn acquire_permit(
+        &self,
+        priority: RequestPriority,
+        endpoint: &str,
+    ) -> Result<RateLimitPermit> {
         // Check if we're in backoff
         if let Some(backoff_until) = *self.backoff_until.read().await {
             if Instant::now() < backoff_until {
                 let wait_time = backoff_until.duration_since(Instant::now());
-                warn!("⏳ {} API in backoff, waiting {:?}", self.provider_name, wait_time);
+                warn!(
+                    "⏳ {} API in backoff, waiting {:?}",
+                    self.provider_name, wait_time
+                );
                 sleep(wait_time).await;
             }
         }
-        
+
         // For critical requests, try to skip the queue
         if priority == RequestPriority::Critical {
             if let Ok(_permit) = self.semaphore.try_acquire() {
-                debug!("🚨 Critical request fast-tracked for {} API: {}", self.provider_name, endpoint);
+                debug!(
+                    "🚨 Critical request fast-tracked for {} API: {}",
+                    self.provider_name, endpoint
+                );
                 return Ok(RateLimitPermit::new(1, self.clone(), endpoint.to_string()));
             }
         }
-        
+
         // Queue the request based on priority
         let (sender, receiver) = tokio::sync::oneshot::channel();
         let queued_request = QueuedRequest {
@@ -162,32 +177,44 @@ impl AdvancedRateLimiter {
             created_at: Instant::now(),
             sender,
         };
-        
+
         // Insert into priority queue
         {
             let mut queue = self.request_queue.lock().await;
-            let insert_pos = queue.iter().position(|req| req.priority < priority).unwrap_or(queue.len());
+            let insert_pos = queue
+                .iter()
+                .position(|req| req.priority < priority)
+                .unwrap_or(queue.len());
             queue.insert(insert_pos, queued_request);
-            debug!("📝 Queued {} priority request for {} API: {} (queue size: {})", 
-                   priority_to_string(priority), self.provider_name, endpoint, queue.len());
+            debug!(
+                "📝 Queued {} priority request for {} API: {} (queue size: {})",
+                priority_to_string(priority),
+                self.provider_name,
+                endpoint,
+                queue.len()
+            );
         }
-        
+
         // Process the queue
         self.process_queue().await;
-        
+
         // Wait for our turn
         receiver.await??;
-        
+
         // Acquire the semaphore permit
-        let _permit = self.semaphore.acquire().await.map_err(|e| anyhow!("Failed to acquire semaphore: {}", e))?;
-        
+        let _permit = self
+            .semaphore
+            .acquire()
+            .await
+            .map_err(|e| anyhow!("Failed to acquire semaphore: {}", e))?;
+
         Ok(RateLimitPermit::new(1, self.clone(), endpoint.to_string()))
     }
-    
+
     /// Process the priority queue
     async fn process_queue(&self) {
         let mut queue = self.request_queue.lock().await;
-        
+
         while !queue.is_empty() && self.semaphore.available_permits() > 0 {
             if let Some(request) = queue.pop() {
                 let _ = request.sender.send(Ok(()));
@@ -195,19 +222,24 @@ impl AdvancedRateLimiter {
             }
         }
     }
-    
+
     /// Record a successful request
-    pub async fn record_request(&self, endpoint: &str, duration_ms: u64, priority: RequestPriority) {
+    pub async fn record_request(
+        &self,
+        endpoint: &str,
+        duration_ms: u64,
+        priority: RequestPriority,
+    ) {
         let record = RequestRecord {
             timestamp: Instant::now(),
             priority,
             endpoint: endpoint.to_string(),
             duration_ms,
         };
-        
+
         let mut history = self.request_history.write().await;
         history.push_back(record);
-        
+
         // Clean old records (keep only last hour)
         let cutoff = Instant::now() - Duration::from_secs(3600);
         while let Some(front) = history.front() {
@@ -217,29 +249,34 @@ impl AdvancedRateLimiter {
                 break;
             }
         }
-        
-        debug!("📊 Recorded {} API request: {} ({}ms, {} priority)", 
-               self.provider_name, endpoint, duration_ms, priority_to_string(priority));
+
+        debug!(
+            "📊 Recorded {} API request: {} ({}ms, {} priority)",
+            self.provider_name,
+            endpoint,
+            duration_ms,
+            priority_to_string(priority)
+        );
     }
-    
+
     /// Handle rate limit hit with exponential backoff
     pub async fn handle_rate_limit_hit(&self) {
         let mut consecutive_hits = self.consecutive_rate_limits.write().await;
         *consecutive_hits += 1;
-        
+
         // Calculate exponential backoff: 2^n seconds, capped at max_backoff
-        let backoff_secs = std::cmp::min(
-            2_u64.pow(*consecutive_hits), 
-            self.config.max_backoff_secs
-        );
-        
+        let backoff_secs =
+            std::cmp::min(2_u64.pow(*consecutive_hits), self.config.max_backoff_secs);
+
         let backoff_until = Instant::now() + Duration::from_secs(backoff_secs);
         *self.backoff_until.write().await = Some(backoff_until);
-        
-        error!("🚫 {} API rate limit hit! Consecutive hits: {}, backing off for {}s", 
-               self.provider_name, *consecutive_hits, backoff_secs);
+
+        error!(
+            "🚫 {} API rate limit hit! Consecutive hits: {}, backing off for {}s",
+            self.provider_name, *consecutive_hits, backoff_secs
+        );
     }
-    
+
     /// Reset consecutive rate limit counter on successful requests
     pub async fn reset_rate_limit_counter(&self) {
         let mut consecutive_hits = self.consecutive_rate_limits.write().await;
@@ -248,50 +285,50 @@ impl AdvancedRateLimiter {
             *consecutive_hits = 0;
         }
     }
-    
+
     /// Check current rate limits
     async fn check_rate_limits(&self) -> bool {
         let history = self.request_history.read().await;
         let now = Instant::now();
-        
+
         // Check hourly limit
         let hour_ago = now - Duration::from_secs(3600);
-        let hourly_requests = history.iter()
-            .filter(|r| r.timestamp > hour_ago)
-            .count() as u32;
-            
+        let hourly_requests = history.iter().filter(|r| r.timestamp > hour_ago).count() as u32;
+
         if hourly_requests >= self.config.requests_per_hour {
-            debug!("⚠️ {} API hourly limit reached: {}/{}", 
-                   self.provider_name, hourly_requests, self.config.requests_per_hour);
+            debug!(
+                "⚠️ {} API hourly limit reached: {}/{}",
+                self.provider_name, hourly_requests, self.config.requests_per_hour
+            );
             return false;
         }
-        
+
         // Check minute limit
         let minute_ago = now - Duration::from_secs(60);
-        let minute_requests = history.iter()
-            .filter(|r| r.timestamp > minute_ago)
-            .count() as u32;
-            
+        let minute_requests = history.iter().filter(|r| r.timestamp > minute_ago).count() as u32;
+
         if minute_requests >= self.config.requests_per_minute {
-            debug!("⚠️ {} API minute limit reached: {}/{}", 
-                   self.provider_name, minute_requests, self.config.requests_per_minute);
+            debug!(
+                "⚠️ {} API minute limit reached: {}/{}",
+                self.provider_name, minute_requests, self.config.requests_per_minute
+            );
             return false;
         }
-        
+
         true
     }
-    
+
     /// Get current usage statistics
     pub async fn get_usage_stats(&self) -> RateLimitStats {
         let history = self.request_history.read().await;
         let now = Instant::now();
-        
+
         let hour_ago = now - Duration::from_secs(3600);
         let minute_ago = now - Duration::from_secs(60);
-        
+
         let hourly_requests = history.iter().filter(|r| r.timestamp > hour_ago).count() as u32;
         let minute_requests = history.iter().filter(|r| r.timestamp > minute_ago).count() as u32;
-        
+
         let queue_size = self.request_queue.lock().await.len();
         let available_permits = self.semaphore.available_permits();
         let backoff_remaining = if let Some(backoff_until) = *self.backoff_until.read().await {
@@ -303,7 +340,7 @@ impl AdvancedRateLimiter {
         } else {
             None
         };
-        
+
         RateLimitStats {
             provider_name: self.provider_name.clone(),
             hourly_requests,
@@ -335,14 +372,16 @@ impl RateLimitPermit {
             start_time: Instant::now(),
         }
     }
-    
+
     /// Mark the request as successful
     pub async fn mark_success(&self, priority: RequestPriority) {
         let duration_ms = self.start_time.elapsed().as_millis() as u64;
-        self.limiter.record_request(&self.endpoint, duration_ms, priority).await;
+        self.limiter
+            .record_request(&self.endpoint, duration_ms, priority)
+            .await;
         self.limiter.reset_rate_limit_counter().await;
     }
-    
+
     /// Mark the request as rate limited
     pub async fn mark_rate_limited(&self) {
         self.limiter.handle_rate_limit_hit().await;
@@ -372,13 +411,18 @@ pub struct RateLimitStats {
 
 impl std::fmt::Display for RateLimitStats {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}API: {}/{}/h, {}/{}/m, queue:{}, permits:{}, backoff:{:?}", 
-               self.provider_name,
-               self.hourly_requests, self.hourly_limit,
-               self.minute_requests, self.minute_limit,
-               self.queue_size,
-               self.available_permits,
-               self.backoff_remaining)
+        write!(
+            f,
+            "{}API: {}/{}/h, {}/{}/m, queue:{}, permits:{}, backoff:{:?}",
+            self.provider_name,
+            self.hourly_requests,
+            self.hourly_limit,
+            self.minute_requests,
+            self.minute_limit,
+            self.queue_size,
+            self.available_permits,
+            self.backoff_remaining
+        )
     }
 }
 
@@ -387,7 +431,7 @@ fn priority_to_string(priority: RequestPriority) -> &'static str {
     match priority {
         RequestPriority::Critical => "CRITICAL",
         RequestPriority::High => "HIGH",
-        RequestPriority::Medium => "MEDIUM", 
+        RequestPriority::Medium => "MEDIUM",
         RequestPriority::Low => "LOW",
         RequestPriority::Background => "BACKGROUND",
     }
@@ -405,36 +449,36 @@ impl RateLimiterManager {
             limiters: HashMap::new(),
         }
     }
-    
+
     /// Add a rate limiter for a provider
     pub fn add_limiter(&mut self, provider: String, limiter: AdvancedRateLimiter) {
         self.limiters.insert(provider.clone(), Arc::new(limiter));
         info!("📈 Added rate limiter for provider: {}", provider);
     }
-    
+
     /// Get rate limiter for a provider
     pub fn get_limiter(&self, provider: &str) -> Option<Arc<AdvancedRateLimiter>> {
         self.limiters.get(provider).cloned()
     }
-    
+
     /// Get all current usage statistics
     pub async fn get_all_stats(&self) -> Vec<RateLimitStats> {
         let mut stats = Vec::new();
-        
+
         for limiter in self.limiters.values() {
             stats.push(limiter.get_usage_stats().await);
         }
-        
+
         stats
     }
-    
+
     /// Create standard rate limiters for all known providers
     pub fn create_standard_limiters() -> Self {
         let mut manager = Self::new();
-        
+
         // Helius API with optimized settings
         manager.add_limiter("helius".to_string(), AdvancedRateLimiter::new_helius());
-        
+
         // Jupiter API (more conservative)
         let jupiter_config = RateLimitConfig {
             requests_per_hour: 1200,
@@ -443,8 +487,11 @@ impl RateLimiterManager {
             cooldown_duration_secs: 60,
             max_backoff_secs: 300,
         };
-        manager.add_limiter("jupiter".to_string(), AdvancedRateLimiter::new("Jupiter".to_string(), jupiter_config));
-        
+        manager.add_limiter(
+            "jupiter".to_string(),
+            AdvancedRateLimiter::new("Jupiter".to_string(), jupiter_config),
+        );
+
         // Orca API
         let orca_config = RateLimitConfig {
             requests_per_hour: 3600,
@@ -453,8 +500,11 @@ impl RateLimiterManager {
             cooldown_duration_secs: 30,
             max_backoff_secs: 180,
         };
-        manager.add_limiter("orca".to_string(), AdvancedRateLimiter::new("Orca".to_string(), orca_config));
-        
+        manager.add_limiter(
+            "orca".to_string(),
+            AdvancedRateLimiter::new("Orca".to_string(), orca_config),
+        );
+
         // Raydium API
         let raydium_config = RateLimitConfig {
             requests_per_hour: 2400,
@@ -463,8 +513,11 @@ impl RateLimiterManager {
             cooldown_duration_secs: 45,
             max_backoff_secs: 240,
         };
-        manager.add_limiter("raydium".to_string(), AdvancedRateLimiter::new("Raydium".to_string(), raydium_config));
-        
+        manager.add_limiter(
+            "raydium".to_string(),
+            AdvancedRateLimiter::new("Raydium".to_string(), raydium_config),
+        );
+
         // Generic RPC endpoints
         let rpc_config = RateLimitConfig {
             requests_per_hour: 1800,
@@ -473,8 +526,11 @@ impl RateLimiterManager {
             cooldown_duration_secs: 90,
             max_backoff_secs: 360,
         };
-        manager.add_limiter("rpc".to_string(), AdvancedRateLimiter::new("RPC".to_string(), rpc_config));
-        
+        manager.add_limiter(
+            "rpc".to_string(),
+            AdvancedRateLimiter::new("RPC".to_string(), rpc_config),
+        );
+
         info!("🏭 Created standard rate limiters for all providers");
         manager
     }
@@ -490,7 +546,7 @@ impl Default for RateLimiterManager {
 mod tests {
     use super::*;
     use tokio::time::timeout;
-    
+
     #[tokio::test]
     async fn test_rate_limiter_basic_functionality() {
         let config = RateLimitConfig {
@@ -500,17 +556,20 @@ mod tests {
             cooldown_duration_secs: 1,
             max_backoff_secs: 5,
         };
-        
+
         let limiter = AdvancedRateLimiter::new("test".to_string(), config);
-        
+
         // Should be able to make requests initially
         assert!(limiter.can_make_request().await);
-        
+
         // Acquire permit
-        let permit = limiter.acquire_permit(RequestPriority::High, "/test").await.unwrap();
+        let permit = limiter
+            .acquire_permit(RequestPriority::High, "/test")
+            .await
+            .unwrap();
         permit.mark_success(RequestPriority::High).await;
     }
-    
+
     #[tokio::test]
     async fn test_priority_queue() {
         let config = RateLimitConfig {
@@ -520,28 +579,31 @@ mod tests {
             cooldown_duration_secs: 1,
             max_backoff_secs: 5,
         };
-        
+
         let limiter = AdvancedRateLimiter::new("test".to_string(), config);
-        
+
         // First request should succeed immediately
-        let _permit1 = limiter.acquire_permit(RequestPriority::Low, "/test1").await.unwrap();
-        
+        let _permit1 = limiter
+            .acquire_permit(RequestPriority::Low, "/test1")
+            .await
+            .unwrap();
+
         // Subsequent requests should be queued
         let critical_future = limiter.acquire_permit(RequestPriority::Critical, "/critical");
         let _low_future = limiter.acquire_permit(RequestPriority::Low, "/low");
-        
+
         // Critical should be processed first when permit becomes available
         drop(_permit1); // Release the permit
-        
+
         let result = timeout(Duration::from_millis(100), critical_future).await;
         assert!(result.is_ok());
     }
-    
+
     #[tokio::test]
     async fn test_rate_limit_stats() {
         let limiter = AdvancedRateLimiter::new_helius();
         let stats = limiter.get_usage_stats().await;
-        
+
         assert_eq!(stats.provider_name, "Helius");
         assert_eq!(stats.hourly_requests, 0);
         assert!(stats.available_permits > 0);

@@ -8,14 +8,13 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{broadcast, RwLock};
 use tokio::time::{Duration, Instant};
-use tokio_tungstenite::{connect_async, tungstenite::Message, WebSocketStream, MaybeTlsStream};
+use tokio_tungstenite::{connect_async, tungstenite::Message, MaybeTlsStream, WebSocketStream};
 use url::Url;
 
 use crate::{
     utils::DexType,
     websocket::price_feeds::{
-        ConnectionStatus, PriceUpdate, WebSocketFeed, WebSocketConfig,
-        WebSocketMetrics,
+        ConnectionStatus, PriceUpdate, WebSocketConfig, WebSocketFeed, WebSocketMetrics,
     },
 };
 
@@ -52,19 +51,11 @@ pub enum MeteoraMessage {
         pool_specific: PoolSpecificData,
     },
     #[serde(rename = "subscription_ack")]
-    SubscriptionAck {
-        pools: Vec<String>,
-        status: String,
-    },
+    SubscriptionAck { pools: Vec<String>, status: String },
     #[serde(rename = "error")]
-    Error {
-        message: String,
-        code: u32,
-    },
+    Error { message: String, code: u32 },
     #[serde(rename = "heartbeat")]
-    Heartbeat {
-        timestamp: u64,
-    },
+    Heartbeat { timestamp: u64 },
 }
 
 /// Pool-specific data that varies by pool type
@@ -101,12 +92,12 @@ impl PoolSpecificData {
     /// Get total liquidity value regardless of pool type
     pub fn total_liquidity(&self) -> Option<u64> {
         match self {
-            PoolSpecificData::Dynamic { total_liquidity, .. } => *total_liquidity,
-            PoolSpecificData::Dlmm { liquidity_per_bin, .. } => {
-                liquidity_per_bin.as_ref().map(|bins| {
-                    bins.values().sum()
-                })
-            }
+            PoolSpecificData::Dynamic {
+                total_liquidity, ..
+            } => *total_liquidity,
+            PoolSpecificData::Dlmm {
+                liquidity_per_bin, ..
+            } => liquidity_per_bin.as_ref().map(|bins| bins.values().sum()),
             PoolSpecificData::Legacy { .. } => None,
         }
     }
@@ -150,47 +141,61 @@ impl MeteoraWebSocketFeed {
     async fn connect_with_retry(&mut self) -> Result<()> {
         const MAX_RETRIES: u32 = 5;
         const INITIAL_BACKOFF: Duration = Duration::from_secs(1);
-        
+
         for attempt in 0..MAX_RETRIES {
             match self.establish_connection().await {
                 Ok(()) => {
                     *self.reconnect_attempts.write().await = 0;
-                    info!("✅ Connected to Meteora WebSocket on attempt {}", attempt + 1);
+                    info!(
+                        "✅ Connected to Meteora WebSocket on attempt {}",
+                        attempt + 1
+                    );
                     return Ok(());
                 }
                 Err(e) => {
                     *self.reconnect_attempts.write().await = attempt + 1;
                     let backoff = INITIAL_BACKOFF * 2_u32.pow(attempt);
-                    warn!("❌ Meteora connection attempt {} failed: {}. Retrying in {:?}", 
-                          attempt + 1, e, backoff);
-                    
+                    warn!(
+                        "❌ Meteora connection attempt {} failed: {}. Retrying in {:?}",
+                        attempt + 1,
+                        e,
+                        backoff
+                    );
+
                     if attempt < MAX_RETRIES - 1 {
                         tokio::time::sleep(backoff).await;
                     }
                 }
             }
         }
-        
-        Err(anyhow!("Failed to connect to Meteora WebSocket after {} attempts", MAX_RETRIES))
+
+        Err(anyhow!(
+            "Failed to connect to Meteora WebSocket after {} attempts",
+            MAX_RETRIES
+        ))
     }
 
     /// Establish the WebSocket connection
     async fn establish_connection(&mut self) -> Result<()> {
-        let url = Url::parse(&self.config.url)
-            .map_err(|e| anyhow!("Invalid WebSocket URL: {}", e))?;
-        
-        let (ws_stream, _) = connect_async(url).await
+        let url =
+            Url::parse(&self.config.url).map_err(|e| anyhow!("Invalid WebSocket URL: {}", e))?;
+
+        let (ws_stream, _) = connect_async(url)
+            .await
             .map_err(|e| anyhow!("WebSocket connection failed: {}", e))?;
-        
+
         *self.websocket.write().await = Some(ws_stream);
         *self.status.write().await = ConnectionStatus::Connected;
         *self.last_heartbeat.write().await = Some(Instant::now());
-        
+
         Ok(())
     }
 
     /// Start the message handling loop
-    async fn start_message_loop(&self, mut price_sender: broadcast::Sender<PriceUpdate>) -> Result<()> {
+    async fn start_message_loop(
+        &self,
+        mut price_sender: broadcast::Sender<PriceUpdate>,
+    ) -> Result<()> {
         loop {
             let status = self.status.read().await.clone();
             if !matches!(status, ConnectionStatus::Connected) {
@@ -242,20 +247,24 @@ impl MeteoraWebSocketFeed {
     }
 
     /// Handle incoming WebSocket message
-    async fn handle_message(&self, text: &str, price_sender: &mut broadcast::Sender<PriceUpdate>) -> Result<()> {
+    async fn handle_message(
+        &self,
+        text: &str,
+        price_sender: &mut broadcast::Sender<PriceUpdate>,
+    ) -> Result<()> {
         let message: MeteoraMessage = serde_json::from_str(text)
             .map_err(|e| anyhow!("Failed to parse Meteora message: {}", e))?;
 
         match message {
-            MeteoraMessage::PoolUpdate { 
-                pool_address, 
-                pool_type: _,  // Pool type stored but not used in PriceUpdate
+            MeteoraMessage::PoolUpdate {
+                pool_address,
+                pool_type: _, // Pool type stored but not used in PriceUpdate
                 token_a_mint,
                 token_b_mint,
                 token_a_reserve,
                 token_b_reserve,
                 price,
-                fee_rate: _,  // Fee rate available but not stored in PriceUpdate
+                fee_rate: _, // Fee rate available but not stored in PriceUpdate
                 timestamp,
                 pool_specific,
             } => {
@@ -281,7 +290,11 @@ impl MeteoraWebSocketFeed {
                 debug!("📊 Processed Meteora pool update for {}", pool_address);
             }
             MeteoraMessage::SubscriptionAck { pools, status } => {
-                info!("✅ Meteora subscription confirmed for {} pools: {}", pools.len(), status);
+                info!(
+                    "✅ Meteora subscription confirmed for {} pools: {}",
+                    pools.len(),
+                    status
+                );
                 self.update_metrics_message().await;
             }
             MeteoraMessage::Error { message, code } => {
@@ -308,10 +321,14 @@ impl MeteoraWebSocketFeed {
 
         let mut websocket_guard = self.websocket.write().await;
         if let Some(ref mut ws) = *websocket_guard {
-            ws.send(Message::Text(subscription_message.to_string())).await
+            ws.send(Message::Text(subscription_message.to_string()))
+                .await
                 .map_err(|e| anyhow!("Failed to send subscription: {}", e))?;
-            
-            info!("📡 Sent Meteora subscription for {} pools", pool_addresses.len());
+
+            info!(
+                "📡 Sent Meteora subscription for {} pools",
+                pool_addresses.len()
+            );
             Ok(())
         } else {
             Err(anyhow!("WebSocket not connected"))
@@ -357,7 +374,7 @@ impl WebSocketFeed for MeteoraWebSocketFeed {
 
     async fn connect(&mut self) -> Result<()> {
         info!("🔌 Connecting to Meteora WebSocket...");
-        
+
         // Set URL if not provided
         if self.config.url.is_empty() {
             self.config.url = Self::get_meteora_websocket_url();
@@ -384,9 +401,9 @@ impl WebSocketFeed for MeteoraWebSocketFeed {
 
     async fn disconnect(&mut self) -> Result<()> {
         info!("🔌 Disconnecting from Meteora WebSocket...");
-        
+
         *self.status.write().await = ConnectionStatus::Disconnected;
-        
+
         let mut websocket_guard = self.websocket.write().await;
         if let Some(mut ws) = websocket_guard.take() {
             let _ = ws.close(None).await;
@@ -394,7 +411,7 @@ impl WebSocketFeed for MeteoraWebSocketFeed {
 
         *self.price_sender.write().await = None;
         self.subscribed_pools.write().await.clear();
-        
+
         info!("✅ Disconnected from Meteora WebSocket");
         Ok(())
     }
@@ -403,9 +420,7 @@ impl WebSocketFeed for MeteoraWebSocketFeed {
         // This is a blocking call, but we need it for the trait
         // In a real implementation, you might want to cache the status
         tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(async {
-                self.status.read().await.clone()
-            })
+            tokio::runtime::Handle::current().block_on(async { self.status.read().await.clone() })
         })
     }
 
@@ -435,15 +450,15 @@ impl WebSocketFeed for MeteoraWebSocketFeed {
         let meteora_message: MeteoraMessage = serde_json::from_str(message)?;
 
         match meteora_message {
-            MeteoraMessage::PoolUpdate { 
-                pool_address, 
-                pool_type: _,  // Pool type stored but not used in PriceUpdate
+            MeteoraMessage::PoolUpdate {
+                pool_address,
+                pool_type: _, // Pool type stored but not used in PriceUpdate
                 token_a_mint,
                 token_b_mint,
                 token_a_reserve,
                 token_b_reserve,
                 price,
-                fee_rate: _,  // Fee rate available but not stored in PriceUpdate
+                fee_rate: _, // Fee rate available but not stored in PriceUpdate
                 timestamp,
                 pool_specific,
             } => {
@@ -469,9 +484,7 @@ impl WebSocketFeed for MeteoraWebSocketFeed {
     fn get_metrics(&self) -> WebSocketMetrics {
         // This is a blocking call for the trait
         tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(async {
-                self.metrics.read().await.clone()
-            })
+            tokio::runtime::Handle::current().block_on(async { self.metrics.read().await.clone() })
         })
     }
 }
@@ -552,7 +565,7 @@ mod tests {
         let pool_type = MeteoraPoolType::Dlmm;
         let serialized = serde_json::to_string(&pool_type).unwrap();
         assert_eq!(serialized, r#""dlmm""#);
-        
+
         let deserialized: MeteoraPoolType = serde_json::from_str(&serialized).unwrap();
         assert_eq!(deserialized, MeteoraPoolType::Dlmm);
     }

@@ -1,6 +1,6 @@
 // examples/enhanced_long_term_paper_trading_validation.rs
 //! Enhanced Long-term Paper Trading Validation with Security Audit
-//! 
+//!
 //! This example demonstrates a comprehensive 48+ hour paper trading validation
 //! with performance monitoring, security auditing, and accuracy validation.
 //! Key features:
@@ -11,13 +11,13 @@
 //! - Automated reporting and alerting
 
 use anyhow::Result;
-use log::{info, warn, error};
-use std::sync::{Arc, atomic::AtomicU64};
+use log::{error, info, warn};
+use serde::{Deserialize, Serialize};
+use std::sync::{atomic::AtomicU64, Arc};
 use std::time::{Duration, Instant, SystemTime};
 use tokio::time::interval;
-use serde::{Serialize, Deserialize};
 
-// Note: This example uses mock implementations since the performance module 
+// Note: This example uses mock implementations since the performance module
 // is not fully integrated yet. For production, replace with actual imports.
 
 // Mock type definitions for demo purposes
@@ -94,12 +94,12 @@ impl PerformanceManager {
     pub async fn new(config: PerformanceConfig) -> Result<Self> {
         Ok(Self { config })
     }
-    
+
     pub async fn start_monitoring(&self) -> Result<()> {
         info!("🔄 Performance monitoring started");
         Ok(())
     }
-    
+
     pub async fn get_performance_report(&self) -> PerformanceReport {
         PerformanceReport {
             metrics: MetricsSummary {
@@ -193,7 +193,7 @@ impl Default for LongTermValidationConfig {
             monitoring_interval: Duration::from_secs(5 * 60), // 5 minutes
             security_audit_interval: Duration::from_secs(30 * 60), // 30 minutes
             accuracy_check_interval: Duration::from_secs(15 * 60), // 15 minutes
-            max_difference_threshold: 0.01, // 1%
+            max_difference_threshold: 0.01,              // 1%
             continuous_monitoring: true,
             auto_restart: true,
         }
@@ -260,7 +260,7 @@ impl LongTermValidationSession {
     async fn new(config: LongTermValidationConfig) -> Result<Self> {
         info!("🚀 Initializing Long-term Paper Trading Validation Session");
         info!("Duration: {:?}", config.duration);
-        
+
         // Initialize performance optimization system
         let performance_config = PerformanceConfig {
             max_concurrent_workers: 12,
@@ -270,7 +270,7 @@ impl LongTermValidationSession {
         };
         let performance_manager = Arc::new(PerformanceManager::new(performance_config).await?);
         performance_manager.start_monitoring().await?;
-        
+
         // Initialize smart router with performance optimizations
         let router_config = SmartRouterConfig {
             enable_intelligent_routing: true,
@@ -281,13 +281,16 @@ impl LongTermValidationSession {
             min_improvement_threshold: 0.01,
             ..Default::default()
         };
-        
+
         // Create mock components for demonstration
         let _routing_graph = RoutingGraph::new();
         let _fee_estimator = FeeEstimator::new();
-        let smart_router = Arc::new(SmartRouter::new(router_config).await
-            .map_err(|e| anyhow::anyhow!("Failed to create smart router: {}", e))?);
-        
+        let smart_router = Arc::new(
+            SmartRouter::new(router_config)
+                .await
+                .map_err(|e| anyhow::anyhow!("Failed to create smart router: {}", e))?,
+        );
+
         Ok(Self {
             config,
             performance_manager,
@@ -299,17 +302,17 @@ impl LongTermValidationSession {
             total_trades: Arc::new(AtomicU64::new(0)),
         })
     }
-    
+
     async fn run_validation(&self) -> Result<ValidationResult> {
         info!("▶️  Starting 48+ Hour Paper Trading Validation");
         info!("============================================");
-        
+
         let start_time = Instant::now();
         let target_duration = self.config.duration;
-        
+
         // Start background monitoring tasks
         self.start_monitoring_tasks().await?;
-        
+
         // Main validation loop
         while start_time.elapsed() < target_duration {
             // Run trading cycle with performance optimization
@@ -321,18 +324,18 @@ impl LongTermValidationSession {
                     continue;
                 }
             }
-            
+
             // Short delay between cycles
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
-        
+
         info!("⏰ Validation duration completed");
         self.generate_final_report().await
     }
-    
+
     async fn start_monitoring_tasks(&self) -> Result<()> {
         info!("🔄 Starting background monitoring tasks");
-        
+
         // Performance monitoring task
         {
             let performance_manager = self.performance_manager.clone();
@@ -347,7 +350,7 @@ impl LongTermValidationSession {
                 }
             });
         }
-        
+
         // Security audit task
         {
             let security_audits = self.security_audits.clone();
@@ -362,7 +365,7 @@ impl LongTermValidationSession {
                 }
             });
         }
-        
+
         // Accuracy validation task
         {
             let accuracy_validations = self.accuracy_validations.clone();
@@ -374,22 +377,25 @@ impl LongTermValidationSession {
                 loop {
                     interval.tick().await;
                     if let Err(e) = Self::accuracy_validation_cycle(
-                        &accuracy_validations, 
-                        &portfolio_value, 
-                        threshold
-                    ).await {
+                        &accuracy_validations,
+                        &portfolio_value,
+                        threshold,
+                    )
+                    .await
+                    {
                         warn!("Accuracy validation error: {}", e);
                     }
                 }
             });
         }
-        
+
         Ok(())
     }
-    
+
     async fn run_optimized_trading_cycle(&self) -> Result<()> {
         // Create a route request for testing
-        let _route_request = RouteRequest { // Prefixed as it's not used
+        let _route_request = RouteRequest {
+            // Prefixed as it's not used
             input_token: "SOL".to_string(),
             output_token: "USDC".to_string(),
             amount: 1000,
@@ -398,66 +404,89 @@ impl LongTermValidationSession {
             max_hops: Some(3),
             max_slippage: 0.005,
         };
-        
+
         // Use performance-optimized routing
         let execution_start = Instant::now();
-        
+
         // Simulate smart router execution with parallel processing
         tokio::time::sleep(Duration::from_millis(50)).await; // Simulate processing
-        
+
         let execution_time = execution_start.elapsed();
-        
+
         // Update portfolio value (simulate profit/loss)
         {
             let mut portfolio = self.portfolio_value.lock().await;
             let profit = (rand::random::<f64>() - 0.4) * 20.0; // Slight positive bias
             *portfolio += profit;
         }
-        
+
         // Update trade counter
-        self.total_trades.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        
+        self.total_trades
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+
         // Log every 100 trades
         let trade_count = self.total_trades.load(std::sync::atomic::Ordering::SeqCst);
         if trade_count % 100 == 0 {
             let portfolio = *self.portfolio_value.lock().await;
-            info!("📊 Trade #{}: Portfolio Value: ${:.2}, Execution Time: {:?}", 
-                  trade_count, portfolio, execution_time);
+            info!(
+                "📊 Trade #{}: Portfolio Value: ${:.2}, Execution Time: {:?}",
+                trade_count, portfolio, execution_time
+            );
         }
-        
+
         Ok(())
     }
-    
-    async fn performance_monitoring_cycle(performance_manager: &Arc<PerformanceManager>) -> Result<()> {
+
+    async fn performance_monitoring_cycle(
+        performance_manager: &Arc<PerformanceManager>,
+    ) -> Result<()> {
         let report = performance_manager.get_performance_report().await;
-        
+
         // Log key metrics
         info!("📊 Performance Snapshot:");
         info!("   CPU Usage: {:.1}%", report.metrics.cpu_usage);
         info!("   Memory: {:.1}MB", report.metrics.memory_usage_mb);
-        info!("   Cache Hit Rate: {:.1}%", 
-              (report.cache_stats.pool_hit_rate + report.cache_stats.route_hit_rate + report.cache_stats.quote_hit_rate) / 3.0 * 100.0);
-        info!("   Active Workers: {}", report.parallel_stats.active_workers);
-        info!("   Completed Tasks: {}", report.parallel_stats.completed_tasks);
-        
+        info!(
+            "   Cache Hit Rate: {:.1}%",
+            (report.cache_stats.pool_hit_rate
+                + report.cache_stats.route_hit_rate
+                + report.cache_stats.quote_hit_rate)
+                / 3.0
+                * 100.0
+        );
+        info!(
+            "   Active Workers: {}",
+            report.parallel_stats.active_workers
+        );
+        info!(
+            "   Completed Tasks: {}",
+            report.parallel_stats.completed_tasks
+        );
+
         // Check for performance issues
         if report.metrics.cpu_usage > 90.0 {
-            warn!("⚠️ High CPU usage detected: {:.1}%", report.metrics.cpu_usage);
+            warn!(
+                "⚠️ High CPU usage detected: {:.1}%",
+                report.metrics.cpu_usage
+            );
         }
         if report.metrics.memory_usage_mb > 2000.0 {
-            warn!("⚠️ High memory usage detected: {:.1}MB", report.metrics.memory_usage_mb);
+            warn!(
+                "⚠️ High memory usage detected: {:.1}MB",
+                report.metrics.memory_usage_mb
+            );
         }
-        
+
         Ok(())
     }
-    
+
     async fn security_audit_cycle(
         security_audits: &Arc<tokio::sync::Mutex<Vec<SecurityAudit>>>,
     ) -> Result<()> {
         info!("🔒 Running security audit...");
-        
+
         let mut checks = Vec::new();
-        
+
         // Check 1: Memory safety
         checks.push(SecurityCheck {
             name: "Memory Safety".to_string(),
@@ -465,7 +494,7 @@ impl LongTermValidationSession {
             details: "No memory leaks detected".to_string(),
             severity: SecuritySeverity::High,
         });
-        
+
         // Check 2: Connection security
         checks.push(SecurityCheck {
             name: "Connection Security".to_string(),
@@ -473,7 +502,7 @@ impl LongTermValidationSession {
             details: "All connections using TLS".to_string(),
             severity: SecuritySeverity::Medium,
         });
-        
+
         // Check 3: Rate limiting
         checks.push(SecurityCheck {
             name: "Rate Limiting".to_string(),
@@ -481,7 +510,7 @@ impl LongTermValidationSession {
             details: "Rate limits properly enforced".to_string(),
             severity: SecuritySeverity::Medium,
         });
-        
+
         // Check 4: Input validation
         checks.push(SecurityCheck {
             name: "Input Validation".to_string(),
@@ -489,7 +518,7 @@ impl LongTermValidationSession {
             details: "All inputs properly validated".to_string(),
             severity: SecuritySeverity::High,
         });
-        
+
         // Check 5: Performance optimization security
         checks.push(SecurityCheck {
             name: "Performance Optimization Security".to_string(),
@@ -497,7 +526,7 @@ impl LongTermValidationSession {
             details: "Parallel processing and caching secure".to_string(),
             severity: SecuritySeverity::Medium,
         });
-        
+
         let overall_status = if checks.iter().any(|c| c.status == SecurityStatus::Critical) {
             SecurityStatus::Critical
         } else if checks.iter().any(|c| c.status == SecurityStatus::Failed) {
@@ -507,7 +536,7 @@ impl LongTermValidationSession {
         } else {
             SecurityStatus::Pass
         };
-        
+
         let audit = SecurityAudit {
             timestamp: SystemTime::now(),
             checks,
@@ -519,32 +548,32 @@ impl LongTermValidationSession {
                 "Monitor parallel processing for resource leaks".to_string(),
             ],
         };
-        
+
         {
             let mut audits = security_audits.lock().await;
             audits.push(audit.clone());
         }
-        
+
         info!("✅ Security audit completed: {:?}", overall_status);
         Ok(())
     }
-    
+
     async fn accuracy_validation_cycle(
         accuracy_validations: &Arc<tokio::sync::Mutex<Vec<AccuracyValidation>>>,
         portfolio_value: &Arc<tokio::sync::Mutex<f64>>,
         threshold: f64,
     ) -> Result<()> {
         info!("🎯 Running accuracy validation...");
-        
+
         // Get simulated results from portfolio
         let simulated_value = *portfolio_value.lock().await;
-        
+
         // Simulate actual market data (in real implementation, fetch from live market)
         let actual_market_value = simulated_value * (1.0 + (rand::random::<f64>() - 0.5) * 0.02); // ±1% variation
-        
+
         let difference = (simulated_value - actual_market_value).abs() / actual_market_value;
         let within_threshold = difference <= threshold;
-        
+
         let validation = AccuracyValidation {
             timestamp: SystemTime::now(),
             simulated_results: simulated_value,
@@ -553,62 +582,80 @@ impl LongTermValidationSession {
             within_threshold,
             samples_count: 1,
         };
-        
+
         {
             let mut validations = accuracy_validations.lock().await;
             validations.push(validation.clone());
         }
-        
+
         if within_threshold {
-            info!("✅ Accuracy check passed: {:.4}% difference", difference * 100.0);
+            info!(
+                "✅ Accuracy check passed: {:.4}% difference",
+                difference * 100.0
+            );
         } else {
-            warn!("⚠️ Accuracy check failed: {:.4}% difference (threshold: {:.2}%)", 
-                  difference * 100.0, threshold * 100.0);
+            warn!(
+                "⚠️ Accuracy check failed: {:.4}% difference (threshold: {:.2}%)",
+                difference * 100.0,
+                threshold * 100.0
+            );
         }
-        
+
         Ok(())
     }
-    
+
     async fn generate_final_report(&self) -> Result<ValidationResult> {
         info!("📋 Generating final validation report...");
-        
+
         let duration = self.start_time.elapsed();
-        
+
         // Collect accuracy data
         let accuracy_validations = self.accuracy_validations.lock().await.clone();
         let accuracy_pass_rate = if !accuracy_validations.is_empty() {
-            accuracy_validations.iter()
+            accuracy_validations
+                .iter()
                 .map(|v| if v.within_threshold { 1.0 } else { 0.0 })
-                .sum::<f64>() / accuracy_validations.len() as f64
+                .sum::<f64>()
+                / accuracy_validations.len() as f64
         } else {
             1.0
         };
-        
+
         let avg_difference = if !accuracy_validations.is_empty() {
-            accuracy_validations.iter()
+            accuracy_validations
+                .iter()
                 .map(|v| v.difference_percentage)
-                .sum::<f64>() / accuracy_validations.len() as f64
+                .sum::<f64>()
+                / accuracy_validations.len() as f64
         } else {
             0.0
         };
-        
+
         // Collect security data
         let security_audits = self.security_audits.lock().await.clone();
         let security_pass_rate = if !security_audits.is_empty() {
-            security_audits.iter()
-                .map(|a| if a.overall_status == SecurityStatus::Pass { 1.0 } else { 0.0 })
-                .sum::<f64>() / security_audits.len() as f64
+            security_audits
+                .iter()
+                .map(|a| {
+                    if a.overall_status == SecurityStatus::Pass {
+                        1.0
+                    } else {
+                        0.0
+                    }
+                })
+                .sum::<f64>()
+                / security_audits.len() as f64
         } else {
             1.0
         };
-        
+
         // Get final performance report
         let performance_report = self.performance_manager.get_performance_report().await;
-        
+
         // Get portfolio data
         let portfolio_value = *self.portfolio_value.lock().await;
         let total_trades = self.total_trades.load(std::sync::atomic::Ordering::SeqCst);
-        
+
         let result = ValidationResult {
             duration,
             accuracy_pass_rate,
@@ -617,23 +664,43 @@ impl LongTermValidationSession {
             total_trades_executed: total_trades,
             final_portfolio_value: portfolio_value,
             performance_metrics: performance_report.metrics,
-            cache_efficiency: (performance_report.cache_stats.pool_hit_rate + 
-                              performance_report.cache_stats.route_hit_rate + 
-                              performance_report.cache_stats.quote_hit_rate) / 3.0,
-            parallel_efficiency: performance_report.parallel_stats.completed_tasks as f64 / duration.as_secs() as f64,
+            cache_efficiency: (performance_report.cache_stats.pool_hit_rate
+                + performance_report.cache_stats.route_hit_rate
+                + performance_report.cache_stats.quote_hit_rate)
+                / 3.0,
+            parallel_efficiency: performance_report.parallel_stats.completed_tasks as f64
+                / duration.as_secs() as f64,
         };
-        
+
         info!("✅ Validation completed successfully!");
         info!("📊 Final Results:");
         info!("   Duration: {:?}", result.duration);
-        info!("   Accuracy Pass Rate: {:.1}%", result.accuracy_pass_rate * 100.0);
-        info!("   Average Difference: {:.4}%", result.average_difference_percentage * 100.0);
-        info!("   Security Pass Rate: {:.1}%", result.security_pass_rate * 100.0);
+        info!(
+            "   Accuracy Pass Rate: {:.1}%",
+            result.accuracy_pass_rate * 100.0
+        );
+        info!(
+            "   Average Difference: {:.4}%",
+            result.average_difference_percentage * 100.0
+        );
+        info!(
+            "   Security Pass Rate: {:.1}%",
+            result.security_pass_rate * 100.0
+        );
         info!("   Total Trades: {}", result.total_trades_executed);
-        info!("   Final Portfolio Value: ${:.2}", result.final_portfolio_value);
-        info!("   Cache Efficiency: {:.1}%", result.cache_efficiency * 100.0);
-        info!("   Parallel Processing Rate: {:.1} tasks/sec", result.parallel_efficiency);
-        
+        info!(
+            "   Final Portfolio Value: ${:.2}",
+            result.final_portfolio_value
+        );
+        info!(
+            "   Cache Efficiency: {:.1}%",
+            result.cache_efficiency * 100.0
+        );
+        info!(
+            "   Parallel Processing Rate: {:.1} tasks/sec",
+            result.parallel_efficiency
+        );
+
         Ok(result)
     }
 }
@@ -655,10 +722,10 @@ struct ValidationResult {
 #[tokio::main]
 async fn main() -> Result<()> {
     env_logger::init();
-    
+
     info!("🚀 Starting Enhanced Long-term Paper Trading Validation");
     info!("======================================================");
-    
+
     // Create validation configuration (shortened for demo)
     let config = LongTermValidationConfig {
         duration: Duration::from_secs(60), // 1 minute for demo (change to 48*3600 for real)
@@ -669,25 +736,31 @@ async fn main() -> Result<()> {
         continuous_monitoring: true,
         auto_restart: true,
     };
-    
+
     info!("🔧 Validation Configuration:");
-    info!("   Duration: {:?} (demo mode - use 48 hours for production)", config.duration);
-    info!("   Max Difference Threshold: {:.1}%", config.max_difference_threshold * 100.0);
+    info!(
+        "   Duration: {:?} (demo mode - use 48 hours for production)",
+        config.duration
+    );
+    info!(
+        "   Max Difference Threshold: {:.1}%",
+        config.max_difference_threshold * 100.0
+    );
     info!("   Continuous Monitoring: {}", config.continuous_monitoring);
     info!("   Performance Optimizations: ✅ Enabled");
     info!("   Parallel Processing: ✅ Enabled");
     info!("   Advanced Caching: ✅ Enabled");
-    
+
     // Create and run validation session
     let session = LongTermValidationSession::new(config).await?;
     let result = session.run_validation().await?;
-    
+
     // Check if validation passed all requirements
     let validation_passed = result.accuracy_pass_rate >= 0.99 && // 99% accuracy pass rate
                            result.average_difference_percentage <= 0.01 && // <1% difference
                            result.security_pass_rate >= 0.95 && // 95% security pass rate
                            result.cache_efficiency >= 0.80; // 80% cache efficiency
-    
+
     if validation_passed {
         info!("🎉 VALIDATION PASSED!");
         info!("✅ All requirements met:");
@@ -700,17 +773,29 @@ async fn main() -> Result<()> {
     } else {
         warn!("❌ VALIDATION FAILED!");
         warn!("Requirements not met. Check the detailed report above.");
-        warn!("   Accuracy Pass Rate: {:.1}% (required: ≥99%)", result.accuracy_pass_rate * 100.0);
-        warn!("   Avg Difference: {:.4}% (required: ≤1%)", result.average_difference_percentage * 100.0);
-        warn!("   Security Pass Rate: {:.1}% (required: ≥95%)", result.security_pass_rate * 100.0);
-        warn!("   Cache Efficiency: {:.1}% (required: ≥80%)", result.cache_efficiency * 100.0);
+        warn!(
+            "   Accuracy Pass Rate: {:.1}% (required: ≥99%)",
+            result.accuracy_pass_rate * 100.0
+        );
+        warn!(
+            "   Avg Difference: {:.4}% (required: ≤1%)",
+            result.average_difference_percentage * 100.0
+        );
+        warn!(
+            "   Security Pass Rate: {:.1}% (required: ≥95%)",
+            result.security_pass_rate * 100.0
+        );
+        warn!(
+            "   Cache Efficiency: {:.1}% (required: ≥80%)",
+            result.cache_efficiency * 100.0
+        );
     }
-    
+
     info!("📄 For production deployment:");
     info!("   - Set duration to Duration::from_secs(48 * 60 * 60) for 48 hours");
     info!("   - Integrate with real market data feeds");
     info!("   - Enable production monitoring and alerting");
     info!("   - Configure automatic restart and recovery");
-    
+
     Ok(())
 }

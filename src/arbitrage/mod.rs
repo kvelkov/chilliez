@@ -1,5 +1,5 @@
 //! Arbitrage Module
-//! 
+//!
 //! This module contains all arbitrage-related functionality organized in a modular structure:
 //! - orchestrator: Modular central control and coordination (core, detection, execution, concurrency)
 //! - strategy: Opportunity detection and path finding
@@ -9,35 +9,38 @@
 //! - safety: Transaction safety, retry logic, and recovery
 
 use crate::local_metrics::Metrics;
+use log::{error, info};
 use std::sync::Arc;
-use tokio::sync::{mpsc::{self, Receiver, Sender}, Mutex};
-use log::{info, error};
+use tokio::sync::{
+    mpsc::{self, Receiver, Sender},
+    Mutex,
+};
 
 // =============================================================================
 // Module Declarations
 // =============================================================================
 
 // Core modules
-pub mod opportunity;
-pub mod tests;
 pub mod calculator_tests;
+pub mod jito_client;
 pub mod jupiter_fallback_tests; // Jupiter fallback integration tests
-pub mod jito_client;            // Jito bundle client for MEV protection
+pub mod opportunity;
+pub mod tests; // Jito bundle client for MEV protection
 
 // Jupiter-specific components (Phase 3.2: Intelligent Caching)
-pub mod jupiter;          // Jupiter-specific arbitrage components (cache, integration)
+pub mod jupiter; // Jupiter-specific arbitrage components (cache, integration)
 
 // Modular orchestrator (replaces the monolithic orchestrator.rs)
-pub mod orchestrator;     // Modular central controller with focused components
+pub mod orchestrator; // Modular central controller with focused components
 
 // Specialized modules
-pub mod strategy;         // Opportunity detection and path finding
-pub mod execution;        // All execution logic (HFT + batch)
-pub mod analysis;         // Mathematical analysis, fees, thresholds
-pub mod mev;              // MEV protection and Jito integration
-pub mod safety;           // Transaction safety, retry logic, and recovery
+pub mod analysis; // Mathematical analysis, fees, thresholds
+pub mod execution; // All execution logic (HFT + batch)
+pub mod mev; // MEV protection and Jito integration
 pub mod price_aggregator; // Price aggregation with Jupiter fallback
-pub mod routing;          // Advanced multi-hop and smart order routing
+pub mod routing;
+pub mod safety; // Transaction safety, retry logic, and recovery
+pub mod strategy; // Opportunity detection and path finding // Advanced multi-hop and smart order routing
 
 // New modular architecture (refactored from orchestrator.rs) - temporarily disabled
 // pub mod types;            // Common types and enums
@@ -51,21 +54,25 @@ pub mod routing;          // Advanced multi-hop and smart order routing
 // =============================================================================
 
 // Primary exports from new consolidated modules
-pub use self::orchestrator::ArbitrageOrchestrator;
-pub use self::strategy::ArbitrageStrategy;
 pub use self::analysis::ArbitragePath;
-pub use self::price_aggregator::{PriceAggregator, AggregatedQuote, QuoteSource, PriceAggregatorConfig};
-pub use self::execution::{
-    HftExecutor, BatchExecutor, ExecutorEvent,
-    BatchExecutionConfig, OpportunityBatch, SimulationResult, 
-    JitoBundle, BundleExecutionResult, ExecutionMetrics
-};
-pub use self::jito_client::{JitoClient, JitoConfig as JitoClientConfig, BundleStats, BundleBuilder};
 pub use self::analysis::{
-    ArbitrageAnalyzer, OpportunityCalculationResult, OptimalArbitrageResult,
-    VolatilityTracker, DynamicThresholdUpdater, FeeBreakdown, SlippageModel, XYKSlippageModel,
-    OptimalInputResult, SimulationResult as AnalysisSimulationResult, ContractSelector, ExecutionStrategy
+    ArbitrageAnalyzer, ContractSelector, DynamicThresholdUpdater, ExecutionStrategy, FeeBreakdown,
+    OpportunityCalculationResult, OptimalArbitrageResult, OptimalInputResult,
+    SimulationResult as AnalysisSimulationResult, SlippageModel, VolatilityTracker,
+    XYKSlippageModel,
 };
+pub use self::execution::{
+    BatchExecutionConfig, BatchExecutor, BundleExecutionResult, ExecutionMetrics, ExecutorEvent,
+    HftExecutor, JitoBundle, OpportunityBatch, SimulationResult,
+};
+pub use self::jito_client::{
+    BundleBuilder, BundleStats, JitoClient, JitoConfig as JitoClientConfig,
+};
+pub use self::orchestrator::ArbitrageOrchestrator;
+pub use self::price_aggregator::{
+    AggregatedQuote, PriceAggregator, PriceAggregatorConfig, QuoteSource,
+};
+pub use self::strategy::ArbitrageStrategy;
 
 // New modular components (temporarily disabled)
 // pub use self::types::{ExecutionStrategy as TypesExecutionStrategy, CompetitivenessAnalysis, ExecutionRecommendation, DetectionMetrics};
@@ -73,20 +80,23 @@ pub use self::analysis::{
 // pub use self::execution_manager::ExecutionManager;
 // pub use self::strategy_manager::StrategyManager;
 pub use self::mev::{
-    JitoHandler, MevProtectionConfig, JitoConfig, GasOptimizationMetrics, NetworkConditions,
-    MevProtectionStrategy, MevProtectionStatus, JitoBundleResult
+    GasOptimizationMetrics, JitoBundleResult, JitoConfig, JitoHandler, MevProtectionConfig,
+    MevProtectionStatus, MevProtectionStrategy, NetworkConditions,
+};
+pub use self::opportunity::{
+    AdvancedMultiHopOpportunity, ArbHop, EnhancedArbHop, MultiHopArbOpportunity,
 };
 pub use self::safety::{
-    SafeTransactionHandler, TransactionSafetyConfig, TransactionResult, SafetyViolation,
-    RetryPolicy, BalanceValidationConfig, SlippageProtectionConfig, MevProtectionConfig as SafetyMevConfig,
-    ConfirmationConfig, FailureRecoveryStrategy, SafetyConfig, TransactionRecord
+    BalanceValidationConfig, ConfirmationConfig, FailureRecoveryStrategy,
+    MevProtectionConfig as SafetyMevConfig, RetryPolicy, SafeTransactionHandler, SafetyConfig,
+    SafetyViolation, SlippageProtectionConfig, TransactionRecord, TransactionResult,
+    TransactionSafetyConfig,
 };
-pub use self::opportunity::{ArbHop, MultiHopArbOpportunity, AdvancedMultiHopOpportunity, EnhancedArbHop};
 
 // Backward compatibility aliases
-pub use self::strategy::ArbitrageStrategy as ArbitrageDetector;
-pub use self::execution::HftExecutor as ArbitrageExecutor;
 pub use self::execution::BatchExecutor as BatchExecutionEngine;
+pub use self::execution::HftExecutor as ArbitrageExecutor;
+pub use self::strategy::ArbitrageStrategy as ArbitrageDetector;
 
 // =============================================================================
 // Trade Coordination System
@@ -154,10 +164,7 @@ impl ArbitrageCoordinator {
                             // metrics_guard.last_successful_trade_timestamp = Some(chrono::Utc::now());
                         }
                         Err(err) => {
-                            error!(
-                                "Execution failed for opportunity {}: {:?}",
-                                opp.id, err
-                            );
+                            error!("Execution failed for opportunity {}: {:?}", opp.id, err);
                             // self.metrics.lock().await.log_opportunity_executed_failure();
                         }
                     }

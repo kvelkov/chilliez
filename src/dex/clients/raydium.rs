@@ -3,12 +3,15 @@
 //! This implementation follows the official Raydium V4 layout for maximum accuracy.
 //! Includes Raydium API data models.
 
-use crate::dex::api::{DexClient, Quote, SwapInfo, PoolDiscoverable, CommonSwapInfo, DexHealthStatus};
+use crate::dex::api::{
+    CommonSwapInfo, DexClient, DexHealthStatus, PoolDiscoverable, Quote, SwapInfo,
+};
 use crate::solana::rpc::SolanaRpcClient;
 use crate::utils::{DexType, PoolInfo, PoolParser as UtilsPoolParser, PoolToken};
 use anyhow::{anyhow, Result as AnyhowResult};
 use async_trait::async_trait;
 use bytemuck::{Pod, Zeroable};
+use chrono;
 use log::{info, warn};
 use serde::{Deserialize, Serialize};
 use solana_sdk::{
@@ -19,10 +22,10 @@ use solana_sdk::{
 use spl_token::state::{Account as TokenAccount, Mint};
 use std::str::FromStr;
 use std::sync::Arc;
-use chrono;
 
 // --- Constants (made public for tests) ---
-pub const RAYDIUM_LIQUIDITY_POOL_V4_PROGRAM_ID: Pubkey = solana_sdk::pubkey!("675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8");
+pub const RAYDIUM_LIQUIDITY_POOL_V4_PROGRAM_ID: Pubkey =
+    solana_sdk::pubkey!("675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8");
 const RAYDIUM_LIQUIDITY_JSON_URL: &str = "https://api.raydium.io/v2/sdk/liquidity/mainnet.json";
 pub const RAYDIUM_V4_POOL_STATE_SIZE: usize = 752;
 
@@ -96,10 +99,15 @@ impl UtilsPoolParser for RaydiumPoolParser {
         rpc_client: &Arc<SolanaRpcClient>,
     ) -> AnyhowResult<PoolInfo> {
         if data.len() < RAYDIUM_V4_POOL_STATE_SIZE {
-            return Err(anyhow!("Invalid Raydium pool data size: expected {}, got {}", RAYDIUM_V4_POOL_STATE_SIZE, data.len()));
+            return Err(anyhow!(
+                "Invalid Raydium pool data size: expected {}, got {}",
+                RAYDIUM_V4_POOL_STATE_SIZE,
+                data.len()
+            ));
         }
 
-        let pool_state = bytemuck::from_bytes::<LiquidityStateV4>(&data[..RAYDIUM_V4_POOL_STATE_SIZE]);
+        let pool_state =
+            bytemuck::from_bytes::<LiquidityStateV4>(&data[..RAYDIUM_V4_POOL_STATE_SIZE]);
 
         // Fetch token account data concurrently
         let (base_account_result, quote_account_result, base_mint_result, quote_mint_result) = tokio::join!(
@@ -140,7 +148,9 @@ impl UtilsPoolParser for RaydiumPoolParser {
             token_b_vault: pool_state.quote_vault,
             fee_numerator: Some(pool_state.swap_fee_numerator),
             fee_denominator: Some(pool_state.swap_fee_denominator),
-            fee_rate_bips: Some((pool_state.swap_fee_numerator * 10000 / pool_state.swap_fee_denominator) as u16),
+            fee_rate_bips: Some(
+                (pool_state.swap_fee_numerator * 10000 / pool_state.swap_fee_denominator) as u16,
+            ),
             last_update_timestamp: chrono::Utc::now().timestamp() as u64,
             dex_type: DexType::Raydium,
             // Raydium V4 is not CLMM, so these are None
@@ -183,17 +193,18 @@ impl DexClient for RaydiumClient {
     }
 
     fn calculate_onchain_quote(&self, pool: &PoolInfo, input_amount: u64) -> AnyhowResult<Quote> {
-        // Use Raydium-specific calculation from math module  
+        // Use Raydium-specific calculation from math module
         let fee_numerator = pool.fee_numerator.unwrap_or(25);
         let fee_denominator = pool.fee_denominator.unwrap_or(10000);
-        
+
         let swap_result = crate::dex::math::raydium::calculate_raydium_swap_output(
             input_amount,
             pool.token_a.reserve,
             pool.token_b.reserve,
             fee_numerator,
             fee_denominator,
-        ).map_err(|e| anyhow!("Raydium quote calculation failed: {}", e))?;
+        )
+        .map_err(|e| anyhow!("Raydium quote calculation failed: {}", e))?;
 
         Ok(Quote {
             input_token: pool.token_a.symbol.clone(),
@@ -208,7 +219,7 @@ impl DexClient for RaydiumClient {
 
     fn get_swap_instruction(&self, swap_info: &SwapInfo) -> AnyhowResult<Instruction> {
         warn!("get_swap_instruction for Raydium is a basic implementation. Use get_swap_instruction_enhanced for production.");
-        
+
         // Create a basic instruction for legacy compatibility
         Ok(Instruction {
             program_id: RAYDIUM_LIQUIDITY_POOL_V4_PROGRAM_ID,
@@ -233,18 +244,22 @@ impl DexClient for RaydiumClient {
         );
 
         // Validate that the tokens match the pool
-        if swap_info.source_token_mint != pool_info.token_a.mint && 
-           swap_info.source_token_mint != pool_info.token_b.mint {
-            return Err(crate::error::ArbError::InstructionError(
-                format!("Source token {} does not match pool tokens", swap_info.source_token_mint)
-            ));
+        if swap_info.source_token_mint != pool_info.token_a.mint
+            && swap_info.source_token_mint != pool_info.token_b.mint
+        {
+            return Err(crate::error::ArbError::InstructionError(format!(
+                "Source token {} does not match pool tokens",
+                swap_info.source_token_mint
+            )));
         }
 
-        if swap_info.destination_token_mint != pool_info.token_a.mint && 
-           swap_info.destination_token_mint != pool_info.token_b.mint {
-            return Err(crate::error::ArbError::InstructionError(
-                format!("Destination token {} does not match pool tokens", swap_info.destination_token_mint)
-            ));
+        if swap_info.destination_token_mint != pool_info.token_a.mint
+            && swap_info.destination_token_mint != pool_info.token_b.mint
+        {
+            return Err(crate::error::ArbError::InstructionError(format!(
+                "Destination token {} does not match pool tokens",
+                swap_info.destination_token_mint
+            )));
         }
 
         // Calculate minimum output with slippage protection
@@ -254,16 +269,20 @@ impl DexClient for RaydiumClient {
             pool_info.token_b.reserve,
             pool_info.fee_numerator.unwrap_or(25),
             pool_info.fee_denominator.unwrap_or(10000),
-        ).map_err(|e| crate::error::ArbError::InstructionError(
-            format!("Failed to calculate swap output: {}", e)
-        ))?;
+        )
+        .map_err(|e| {
+            crate::error::ArbError::InstructionError(format!(
+                "Failed to calculate swap output: {}",
+                e
+            ))
+        })?;
 
         // Use calculated minimum output or provided one, whichever is higher for safety
         let minimum_output = swap_info.minimum_output_amount.max(
             crate::dex::math::raydium::calculate_minimum_output_with_slippage(
                 swap_result.output_amount,
                 500, // 5% default slippage tolerance
-            )
+            ),
         );
 
         // TODO: In production, these addresses need to be derived from pool state
@@ -271,32 +290,32 @@ impl DexClient for RaydiumClient {
         let amm_authority = derive_amm_authority(&pool_info.address)?;
         let market_program_id = derive_market_program_id(&pool_info)?;
         let market_id = derive_market_id(&pool_info)?;
-        
+
         // Build complete Raydium V4 swap instruction with all required accounts
         let accounts = vec![
-            AccountMeta::new_readonly(spl_token::id(), false),                    // TOKEN_PROGRAM_ID
-            AccountMeta::new_readonly(swap_info.user_wallet_pubkey, true),        // User wallet (signer)
-            AccountMeta::new(pool_info.address, false),                           // AMM ID
-            AccountMeta::new_readonly(amm_authority, false),                      // AMM authority
-            AccountMeta::new(swap_info.user_source_token_account, false),         // User source token account
-            AccountMeta::new(swap_info.user_destination_token_account, false),    // User destination token account
-            AccountMeta::new(pool_info.token_a_vault, false),                     // Pool coin vault
-            AccountMeta::new(pool_info.token_b_vault, false),                     // Pool PC vault
-            AccountMeta::new_readonly(market_program_id, false),                  // Market program
-            AccountMeta::new(market_id, false),                                   // Market ID
-            AccountMeta::new(derive_market_bids(&market_id)?, false),             // Market bids
-            AccountMeta::new(derive_market_asks(&market_id)?, false),             // Market asks
-            AccountMeta::new(derive_market_event_queue(&market_id)?, false),      // Market event queue
-            AccountMeta::new(derive_market_coin_vault(&market_id)?, false),       // Market coin vault
-            AccountMeta::new(derive_market_pc_vault(&market_id)?, false),         // Market PC vault
+            AccountMeta::new_readonly(spl_token::id(), false), // TOKEN_PROGRAM_ID
+            AccountMeta::new_readonly(swap_info.user_wallet_pubkey, true), // User wallet (signer)
+            AccountMeta::new(pool_info.address, false),        // AMM ID
+            AccountMeta::new_readonly(amm_authority, false),   // AMM authority
+            AccountMeta::new(swap_info.user_source_token_account, false), // User source token account
+            AccountMeta::new(swap_info.user_destination_token_account, false), // User destination token account
+            AccountMeta::new(pool_info.token_a_vault, false),                  // Pool coin vault
+            AccountMeta::new(pool_info.token_b_vault, false),                  // Pool PC vault
+            AccountMeta::new_readonly(market_program_id, false),               // Market program
+            AccountMeta::new(market_id, false),                                // Market ID
+            AccountMeta::new(derive_market_bids(&market_id)?, false),          // Market bids
+            AccountMeta::new(derive_market_asks(&market_id)?, false),          // Market asks
+            AccountMeta::new(derive_market_event_queue(&market_id)?, false),   // Market event queue
+            AccountMeta::new(derive_market_coin_vault(&market_id)?, false),    // Market coin vault
+            AccountMeta::new(derive_market_pc_vault(&market_id)?, false),      // Market PC vault
             AccountMeta::new_readonly(derive_market_vault_signer(&market_id)?, false), // Market vault signer
         ];
 
         // Build instruction data (Raydium V4 swap instruction format)
         let mut instruction_data = Vec::new();
         instruction_data.push(9); // Raydium swap instruction discriminator
-        instruction_data.extend_from_slice(&swap_info.input_amount.to_le_bytes());    // Amount in
-        instruction_data.extend_from_slice(&minimum_output.to_le_bytes());            // Minimum amount out
+        instruction_data.extend_from_slice(&swap_info.input_amount.to_le_bytes()); // Amount in
+        instruction_data.extend_from_slice(&minimum_output.to_le_bytes()); // Minimum amount out
 
         info!(
             "RaydiumClient: Built swap instruction - input: {}, min_output: {}, price_impact: {:.4}%",
@@ -312,19 +331,19 @@ impl DexClient for RaydiumClient {
 
     async fn discover_pools(&self) -> AnyhowResult<Vec<PoolInfo>> {
         info!("RaydiumClient: Starting pool discovery from API...");
-        
+
         let client = reqwest::Client::new();
-        let response = client
-            .get(RAYDIUM_LIQUIDITY_JSON_URL)
-            .send()
-            .await?;
+        let response = client.get(RAYDIUM_LIQUIDITY_JSON_URL).send().await?;
 
         if !response.status().is_success() {
-            return Err(anyhow!("Failed to fetch Raydium pools: HTTP {}", response.status()));
+            return Err(anyhow!(
+                "Failed to fetch Raydium pools: HTTP {}",
+                response.status()
+            ));
         }
 
         let liquidity_file: LiquidityFile = response.json().await?;
-        
+
         let pools: Vec<PoolInfo> = liquidity_file
             .official
             .into_iter()
@@ -338,36 +357,38 @@ impl DexClient for RaydiumClient {
 
                 Some(PoolInfo {
                     address: pool_pubkey,
-                    name: format!("Raydium {}/{}", 
-                        pool.base_symbol.clone().unwrap_or_default(), 
-                        pool.quote_symbol.clone().unwrap_or_default()),
+                    name: format!(
+                        "Raydium {}/{}",
+                        pool.base_symbol.clone().unwrap_or_default(),
+                        pool.quote_symbol.clone().unwrap_or_default()
+                    ),
                     dex_type: DexType::Raydium,
-                    token_a: PoolToken { 
-                        mint: base_mint, 
-                        symbol: pool.base_symbol.unwrap_or_default(), 
-                        decimals: pool.base_decimals.unwrap_or(0), 
-                        reserve: 0 
+                    token_a: PoolToken {
+                        mint: base_mint,
+                        symbol: pool.base_symbol.unwrap_or_default(),
+                        decimals: pool.base_decimals.unwrap_or(0),
+                        reserve: 0,
                     },
-                    token_b: PoolToken { 
-                        mint: quote_mint, 
-                        symbol: pool.quote_symbol.unwrap_or_default(), 
-                        decimals: pool.quote_decimals.unwrap_or(0), 
-                        reserve: 0 
+                    token_b: PoolToken {
+                        mint: quote_mint,
+                        symbol: pool.quote_symbol.unwrap_or_default(),
+                        decimals: pool.quote_decimals.unwrap_or(0),
+                        reserve: 0,
                     },
-                    token_a_vault: base_vault, 
-                    token_b_vault: quote_vault, 
-                    fee_numerator: Some(25), 
-                    fee_denominator: Some(10000), 
-                    fee_rate_bips: Some(25), 
+                    token_a_vault: base_vault,
+                    token_b_vault: quote_vault,
+                    fee_numerator: Some(25),
+                    fee_denominator: Some(10000),
+                    fee_rate_bips: Some(25),
                     last_update_timestamp: 0,
-                    sqrt_price: None, 
-                    liquidity: None, 
-                    tick_current_index: None, 
+                    sqrt_price: None,
+                    liquidity: None,
+                    tick_current_index: None,
                     tick_spacing: None,
                     // Orca-specific fields (not applicable to Raydium)
-                    tick_array_0: None, 
-                    tick_array_1: None, 
-                    tick_array_2: None, 
+                    tick_array_0: None,
+                    tick_array_1: None,
+                    tick_array_2: None,
                     oracle: None,
                 })
             })
@@ -379,14 +400,14 @@ impl DexClient for RaydiumClient {
 
     async fn health_check(&self) -> Result<DexHealthStatus, crate::error::ArbError> {
         let start_time = std::time::Instant::now();
-        
+
         // Test Raydium API connectivity
         let client = reqwest::Client::new();
         match client.get(RAYDIUM_LIQUIDITY_JSON_URL).send().await {
             Ok(response) => {
                 let response_time = start_time.elapsed().as_millis() as u64;
                 let is_healthy = response.status().is_success();
-                
+
                 let health_result = DexHealthStatus {
                     is_healthy,
                     last_successful_request: if is_healthy { Some(start_time) } else { None },
@@ -401,9 +422,15 @@ impl DexClient for RaydiumClient {
                 };
 
                 if health_result.is_healthy {
-                    info!("Raydium health check passed: {}", health_result.status_message);
+                    info!(
+                        "Raydium health check passed: {}",
+                        health_result.status_message
+                    );
                 } else {
-                    warn!("Raydium health check failed: {}", health_result.status_message);
+                    warn!(
+                        "Raydium health check failed: {}",
+                        health_result.status_message
+                    );
                 }
 
                 Ok(health_result)
@@ -411,7 +438,7 @@ impl DexClient for RaydiumClient {
             Err(e) => {
                 let response_time = start_time.elapsed().as_millis() as u64;
                 warn!("Raydium health check failed: {}", e);
-                
+
                 Ok(DexHealthStatus {
                     is_healthy: false,
                     last_successful_request: None,
@@ -427,16 +454,19 @@ impl DexClient for RaydiumClient {
 
 #[async_trait]
 impl PoolDiscoverable for RaydiumClient {
-    async fn discover_pools(&self) -> AnyhowResult<Vec<PoolInfo>> { 
-        <Self as DexClient>::discover_pools(self).await 
+    async fn discover_pools(&self) -> AnyhowResult<Vec<PoolInfo>> {
+        <Self as DexClient>::discover_pools(self).await
     }
-    
-    async fn fetch_pool_data(&self, pool_address: Pubkey) -> AnyhowResult<PoolInfo> { 
-        Err(anyhow!("fetch_pool_data not yet implemented for RaydiumClient. Pool address: {}", pool_address)) 
+
+    async fn fetch_pool_data(&self, pool_address: Pubkey) -> AnyhowResult<PoolInfo> {
+        Err(anyhow!(
+            "fetch_pool_data not yet implemented for RaydiumClient. Pool address: {}",
+            pool_address
+        ))
     }
-    
-    fn dex_name(&self) -> &str { 
-        self.get_name() 
+
+    fn dex_name(&self) -> &str {
+        self.get_name()
     }
 }
 
@@ -452,14 +482,17 @@ fn derive_amm_authority(pool_address: &Pubkey) -> Result<Pubkey, crate::error::A
     Ok(Pubkey::find_program_address(
         &[pool_address.as_ref(), b"amm_authority"],
         &RAYDIUM_LIQUIDITY_POOL_V4_PROGRAM_ID,
-    ).0)
+    )
+    .0)
 }
 
 /// Derive market program ID from pool info (typically Serum DEX)
 fn derive_market_program_id(_pool_info: &PoolInfo) -> Result<Pubkey, crate::error::ArbError> {
     // In a real implementation, this would be read from the pool's on-chain state
     // For now, use the standard Serum DEX program ID
-    Ok(solana_sdk::pubkey!("9xQeWvG816bUx9EPjHmaT23yvVM2ZWbrrpZb9PusVFin")) // Serum DEX v3
+    Ok(solana_sdk::pubkey!(
+        "9xQeWvG816bUx9EPjHmaT23yvVM2ZWbrrpZb9PusVFin"
+    )) // Serum DEX v3
 }
 
 /// Derive market ID from pool info
@@ -469,7 +502,8 @@ fn derive_market_id(pool_info: &PoolInfo) -> Result<Pubkey, crate::error::ArbErr
     Ok(Pubkey::find_program_address(
         &[pool_info.address.as_ref(), b"market"],
         &RAYDIUM_LIQUIDITY_POOL_V4_PROGRAM_ID,
-    ).0)
+    )
+    .0)
 }
 
 /// Derive market bids account
@@ -477,7 +511,8 @@ fn derive_market_bids(market_id: &Pubkey) -> Result<Pubkey, crate::error::ArbErr
     Ok(Pubkey::find_program_address(
         &[market_id.as_ref(), b"bids"],
         &solana_sdk::pubkey!("9xQeWvG816bUx9EPjHmaT23yvVM2ZWbrrpZb9PusVFin"),
-    ).0)
+    )
+    .0)
 }
 
 /// Derive market asks account  
@@ -485,7 +520,8 @@ fn derive_market_asks(market_id: &Pubkey) -> Result<Pubkey, crate::error::ArbErr
     Ok(Pubkey::find_program_address(
         &[market_id.as_ref(), b"asks"],
         &solana_sdk::pubkey!("9xQeWvG816bUx9EPjHmaT23yvVM2ZWbrrpZb9PusVFin"),
-    ).0)
+    )
+    .0)
 }
 
 /// Derive market event queue account
@@ -493,7 +529,8 @@ fn derive_market_event_queue(market_id: &Pubkey) -> Result<Pubkey, crate::error:
     Ok(Pubkey::find_program_address(
         &[market_id.as_ref(), b"event_queue"],
         &solana_sdk::pubkey!("9xQeWvG816bUx9EPjHmaT23yvVM2ZWbrrpZb9PusVFin"),
-    ).0)
+    )
+    .0)
 }
 
 /// Derive market coin vault account
@@ -501,7 +538,8 @@ fn derive_market_coin_vault(market_id: &Pubkey) -> Result<Pubkey, crate::error::
     Ok(Pubkey::find_program_address(
         &[market_id.as_ref(), b"coin_vault"],
         &solana_sdk::pubkey!("9xQeWvG816bUx9EPjHmaT23yvVM2ZWbrrpZb9PusVFin"),
-    ).0)
+    )
+    .0)
 }
 
 /// Derive market PC vault account
@@ -509,7 +547,8 @@ fn derive_market_pc_vault(market_id: &Pubkey) -> Result<Pubkey, crate::error::Ar
     Ok(Pubkey::find_program_address(
         &[market_id.as_ref(), b"pc_vault"],
         &solana_sdk::pubkey!("9xQeWvG816bUx9EPjHmaT23yvVM2ZWbrrpZb9PusVFin"),
-    ).0)
+    )
+    .0)
 }
 
 /// Derive market vault signer account
@@ -517,7 +556,8 @@ fn derive_market_vault_signer(market_id: &Pubkey) -> Result<Pubkey, crate::error
     Ok(Pubkey::find_program_address(
         &[market_id.as_ref(), b"vault_signer"],
         &solana_sdk::pubkey!("9xQeWvG816bUx9EPjHmaT23yvVM2ZWbrrpZb9PusVFin"),
-    ).0)
+    )
+    .0)
 }
 
 // =====================================================================================
@@ -603,11 +643,17 @@ mod tests {
     #[test]
     fn test_raydium_pool_parser_program_id() {
         let parser = RaydiumPoolParser;
-        assert_eq!(parser.get_program_id(), RAYDIUM_LIQUIDITY_POOL_V4_PROGRAM_ID);
+        assert_eq!(
+            parser.get_program_id(),
+            RAYDIUM_LIQUIDITY_POOL_V4_PROGRAM_ID
+        );
     }
 
     #[test]
     fn test_liquidity_state_v4_size() {
-        assert_eq!(std::mem::size_of::<LiquidityStateV4>(), RAYDIUM_V4_POOL_STATE_SIZE);
+        assert_eq!(
+            std::mem::size_of::<LiquidityStateV4>(),
+            RAYDIUM_V4_POOL_STATE_SIZE
+        );
     }
 }

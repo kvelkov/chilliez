@@ -1,22 +1,22 @@
 // src/arbitrage/routing/graph.rs
 //! Routing Graph Module for Multi-Hop DEX Routing
-//! 
+//!
 //! This module provides a graph-based representation of liquidity pools across
 //! multiple DEXs, enabling efficient pathfinding and route optimization.
 
 use anyhow::Result;
 use dashmap::DashMap;
-use serde::{Serialize, Deserialize};
+use log::{debug, info};
+use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 use tokio::sync::RwLock;
-use log::{debug, info};
 
 // Removed unused imports
 use crate::dex::discovery::PoolDiscoveryService;
-use crate::utils::{PoolInfo, DexType};
 use crate::solana::rpc::SolanaRpcClient;
+use crate::utils::{DexType, PoolInfo};
 use solana_sdk::pubkey::Pubkey;
 
 /// A node in the routing graph representing a token
@@ -85,8 +85,8 @@ pub struct PoolHealth {
     pub last_successful_trade: Option<SystemTime>,
     pub error_count_24h: u32,
     pub liquidity_depth_score: f64, // 0.0 to 1.0
-    pub spread_quality_score: f64,   // 0.0 to 1.0
-    pub overall_score: f64,          // 0.0 to 1.0
+    pub spread_quality_score: f64,  // 0.0 to 1.0
+    pub overall_score: f64,         // 0.0 to 1.0
 }
 
 impl Default for PoolMetrics {
@@ -207,7 +207,7 @@ impl RoutingGraph {
     /// Add a pool to the graph
     pub fn add_pool(&self, pool_info: Arc<PoolInfo>) -> Result<()> {
         let pool_address = pool_info.address;
-        
+
         // Ensure tokens exist in the graph
         if !self.tokens.contains_key(&pool_info.token_a.mint) {
             self.add_token(
@@ -216,7 +216,7 @@ impl RoutingGraph {
                 pool_info.token_a.decimals,
             )?;
         }
-        
+
         if !self.tokens.contains_key(&pool_info.token_b.mint) {
             self.add_token(
                 pool_info.token_b.mint,
@@ -263,14 +263,22 @@ impl RoutingGraph {
         };
 
         // Add edges to adjacency list
-        self.adjacency.entry(pool_info.token_a.mint).or_insert_with(Vec::new).push(edge_a_to_b);
-        self.adjacency.entry(pool_info.token_b.mint).or_insert_with(Vec::new).push(edge_b_to_a);
+        self.adjacency
+            .entry(pool_info.token_a.mint)
+            .or_insert_with(Vec::new)
+            .push(edge_a_to_b);
+        self.adjacency
+            .entry(pool_info.token_b.mint)
+            .or_insert_with(Vec::new)
+            .push(edge_b_to_a);
 
         // Store pool
         self.pools.insert(pool_address, liquidity_pool);
 
-        debug!("Added pool {} ({} -> {}) to routing graph", 
-               pool_address, pool_info.token_a.symbol, pool_info.token_b.symbol);
+        debug!(
+            "Added pool {} ({} -> {}) to routing graph",
+            pool_address, pool_info.token_a.symbol, pool_info.token_b.symbol
+        );
         Ok(())
     }
 
@@ -294,18 +302,32 @@ impl RoutingGraph {
     }
 
     /// Find all possible paths between two tokens
-    pub fn find_paths(&self, from_token: Pubkey, to_token: Pubkey, max_hops: usize) -> Vec<Vec<RouteEdge>> {
+    pub fn find_paths(
+        &self,
+        from_token: Pubkey,
+        to_token: Pubkey,
+        max_hops: usize,
+    ) -> Vec<Vec<RouteEdge>> {
         let mut paths = Vec::new();
         let mut visited = HashSet::new();
         let mut current_path = Vec::new();
 
-        self.dfs_paths(from_token, to_token, max_hops, &mut visited, &mut current_path, &mut paths);
-        
+        self.dfs_paths(
+            from_token,
+            to_token,
+            max_hops,
+            &mut visited,
+            &mut current_path,
+            &mut paths,
+        );
+
         // Sort paths by total weight (ascending = better)
         paths.sort_by(|a, b| {
             let weight_a: f64 = a.iter().map(|edge| edge.weight).sum();
             let weight_b: f64 = b.iter().map(|edge| edge.weight).sum();
-            weight_a.partial_cmp(&weight_b).unwrap_or(std::cmp::Ordering::Equal)
+            weight_a
+                .partial_cmp(&weight_b)
+                .unwrap_or(std::cmp::Ordering::Equal)
         });
 
         paths
@@ -336,7 +358,14 @@ impl RoutingGraph {
             for edge in edges.iter() {
                 if !visited.contains(&edge.to_token) {
                     current_path.push(edge.clone());
-                    self.dfs_paths(edge.to_token, target, max_hops, visited, current_path, all_paths);
+                    self.dfs_paths(
+                        edge.to_token,
+                        target,
+                        max_hops,
+                        visited,
+                        current_path,
+                        all_paths,
+                    );
                     current_path.pop();
                 }
             }
@@ -348,10 +377,10 @@ impl RoutingGraph {
     /// Update graph with latest pool data
     pub async fn update_liquidity(&mut self) -> Result<()> {
         let start_time = SystemTime::now();
-        
+
         if let Some(discovery_service) = &self.discovery_service {
             let pools = discovery_service.get_all_cached_pools();
-            
+
             for pool_info in pools {
                 // Update existing pool or add new one
                 if self.pools.contains_key(&pool_info.address) {
@@ -363,11 +392,14 @@ impl RoutingGraph {
         }
 
         self.update_stats().await?;
-        
+
         let mut last_update = self.last_update.write().await;
         *last_update = SystemTime::now();
-        
-        info!("Updated routing graph liquidity in {:?}", start_time.elapsed());
+
+        info!(
+            "Updated routing graph liquidity in {:?}",
+            start_time.elapsed()
+        );
         Ok(())
     }
 
@@ -375,7 +407,7 @@ impl RoutingGraph {
     pub async fn update_fees(&mut self) -> Result<()> {
         // This would integrate with real-time fee data from DEXs
         // For now, we update weights based on current fee data
-        
+
         for mut pool_entry in self.pools.iter_mut() {
             let pool = pool_entry.value_mut();
             let fee_bps = pool.info.get_fee_rate_bips();
@@ -394,12 +426,13 @@ impl RoutingGraph {
     pub async fn update_health_status(&mut self) -> Result<()> {
         for mut pool_entry in self.pools.iter_mut() {
             let pool = pool_entry.value_mut();
-            
+
             // Calculate health metrics
             pool.health.liquidity_depth_score = self.calculate_liquidity_depth_score(&pool.info);
             pool.health.spread_quality_score = self.calculate_spread_quality_score(&pool.info);
-            pool.health.overall_score = (pool.health.liquidity_depth_score + pool.health.spread_quality_score) / 2.0;
-            
+            pool.health.overall_score =
+                (pool.health.liquidity_depth_score + pool.health.spread_quality_score) / 2.0;
+
             // Update pool activity status
             pool.health.is_active = pool.health.overall_score > 0.3;
         }
@@ -420,9 +453,14 @@ impl RoutingGraph {
     /// Get best direct route between two tokens
     pub fn get_best_direct_route(&self, from_token: Pubkey, to_token: Pubkey) -> Option<RouteEdge> {
         if let Some(edges) = self.adjacency.get(&from_token) {
-            edges.iter()
+            edges
+                .iter()
                 .filter(|edge| edge.to_token == to_token)
-                .min_by(|a, b| a.weight.partial_cmp(&b.weight).unwrap_or(std::cmp::Ordering::Equal))
+                .min_by(|a, b| {
+                    a.weight
+                        .partial_cmp(&b.weight)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                })
                 .cloned()
         } else {
             None
@@ -438,7 +476,7 @@ impl RoutingGraph {
 
         let total_possible_edges = token_count * (token_count - 1.0);
         let actual_edges = self.adjacency.len() as f64;
-        
+
         (actual_edges / total_possible_edges).min(1.0)
     }
 
@@ -458,10 +496,12 @@ impl RoutingGraph {
             return 0.0;
         }
 
-        let total_liquidity: f64 = self.pools.iter()
+        let total_liquidity: f64 = self
+            .pools
+            .iter()
             .map(|entry| self.calculate_liquidity_score(&entry.value().info))
             .sum();
-        
+
         total_liquidity / self.pools.len() as f64
     }
 
@@ -470,12 +510,12 @@ impl RoutingGraph {
         if let Some(mut pool_entry) = self.pools.get_mut(&pool_info.address) {
             // Update the pool info
             pool_entry.info = Arc::new(pool_info.clone());
-            
+
             // Recalculate metrics
             let liquidity_score = self.calculate_liquidity_score(pool_info);
             let fee_bps = pool_info.get_fee_rate_bips();
             let new_weight = self.calculate_edge_weight(fee_bps, liquidity_score);
-            
+
             // Update edge weights
             self.update_edge_weights(pool_info.address, new_weight);
         }
@@ -497,7 +537,7 @@ impl RoutingGraph {
     fn calculate_edge_weight(&self, fee_bps: u16, liquidity_score: f64) -> f64 {
         let fee_factor = fee_bps as f64 / 10000.0; // Convert bps to decimal
         let liquidity_factor = 1.0 / (liquidity_score + 1.0); // Higher liquidity = lower weight
-        
+
         // Combine factors (lower is better)
         fee_factor + liquidity_factor
     }
@@ -508,7 +548,7 @@ impl RoutingGraph {
         // In production, this would use USD values and market prices
         let token_a_reserve = pool_info.token_a.reserve as f64;
         let token_b_reserve = pool_info.token_b.reserve as f64;
-        
+
         // Geometric mean of reserves (better for unbalanced pools)
         (token_a_reserve * token_b_reserve).sqrt()
     }
@@ -544,31 +584,35 @@ impl RoutingGraph {
     /// Estimate execution time for a DEX
     fn estimate_execution_time(&self, dex_type: &DexType) -> u64 {
         match dex_type {
-            DexType::Jupiter => 2000,       // 2s for aggregation
-            DexType::Orca => 800,           // 800ms for CLMM
-            DexType::Raydium => 600,        // 600ms for AMM
-            DexType::Meteora => 700,        // 700ms for Dynamic AMM
-            DexType::Lifinity => 900,       // 900ms for PMM
-            DexType::Phoenix => 1200,       // 1.2s for order book
-            DexType::Whirlpool => 800,      // Same as Orca
-            DexType::Unknown(_) => 3000,    // Conservative estimate
+            DexType::Jupiter => 2000,    // 2s for aggregation
+            DexType::Orca => 800,        // 800ms for CLMM
+            DexType::Raydium => 600,     // 600ms for AMM
+            DexType::Meteora => 700,     // 700ms for Dynamic AMM
+            DexType::Lifinity => 900,    // 900ms for PMM
+            DexType::Phoenix => 1200,    // 1.2s for order book
+            DexType::Whirlpool => 800,   // Same as Orca
+            DexType::Unknown(_) => 3000, // Conservative estimate
         }
     }
 
     /// Update graph statistics
     async fn update_stats(&self) -> Result<()> {
         let mut stats = self.stats.write().await;
-        
+
         stats.token_count = self.tokens.len();
         stats.pool_count = self.pools.len();
         stats.edge_count = self.adjacency.iter().map(|entry| entry.value().len()).sum();
-        stats.total_liquidity_usd = self.pools.iter()
+        stats.total_liquidity_usd = self
+            .pools
+            .iter()
             .map(|entry| self.calculate_liquidity_score(&entry.value().info))
             .sum();
         stats.connectivity_score = self.connectivity_score();
-        
+
         // Calculate active pool percentage
-        let active_pools = self.pools.iter()
+        let active_pools = self
+            .pools
+            .iter()
             .filter(|entry| entry.value().health.is_active)
             .count();
         stats.active_pool_percentage = if stats.pool_count > 0 {
@@ -609,7 +653,7 @@ impl std::fmt::Debug for RoutingGraph {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::utils::{PoolToken, DexType};
+    use crate::utils::{DexType, PoolToken};
 
     fn create_test_pool_info(
         address: Pubkey,
@@ -661,7 +705,7 @@ mod tests {
     fn test_add_token() {
         let graph = RoutingGraph::new();
         let token_mint = Pubkey::new_unique();
-        
+
         graph.add_token(token_mint, "TEST".to_string(), 6).unwrap();
         assert_eq!(graph.token_count(), 1);
         assert!(graph.tokens.contains_key(&token_mint));
@@ -673,16 +717,12 @@ mod tests {
         let pool_address = Pubkey::new_unique();
         let token_a_mint = Pubkey::new_unique();
         let token_b_mint = Pubkey::new_unique();
-        
-        let pool_info = create_test_pool_info(
-            pool_address,
-            token_a_mint,
-            token_b_mint,
-            DexType::Raydium,
-        );
-        
+
+        let pool_info =
+            create_test_pool_info(pool_address, token_a_mint, token_b_mint, DexType::Raydium);
+
         graph.add_pool(Arc::new(pool_info)).unwrap();
-        
+
         assert_eq!(graph.pool_count(), 1);
         assert_eq!(graph.token_count(), 2);
         assert!(graph.pools.contains_key(&pool_address));
@@ -694,19 +734,15 @@ mod tests {
         let token_a_mint = Pubkey::new_unique();
         let token_b_mint = Pubkey::new_unique();
         let pool_address = Pubkey::new_unique();
-        
-        let pool_info = create_test_pool_info(
-            pool_address,
-            token_a_mint,
-            token_b_mint,
-            DexType::Orca,
-        );
-        
+
+        let pool_info =
+            create_test_pool_info(pool_address, token_a_mint, token_b_mint, DexType::Orca);
+
         graph.add_pool(Arc::new(pool_info)).unwrap();
-        
+
         let best_route = graph.get_best_direct_route(token_a_mint, token_b_mint);
         assert!(best_route.is_some());
-        
+
         let route = best_route.unwrap();
         assert_eq!(route.from_token, token_a_mint);
         assert_eq!(route.to_token, token_b_mint);
@@ -716,33 +752,24 @@ mod tests {
     #[test]
     fn test_multi_hop_paths() {
         let graph = RoutingGraph::new();
-        
+
         // Create tokens: A -> B -> C
         let token_a = Pubkey::new_unique();
         let token_b = Pubkey::new_unique();
         let token_c = Pubkey::new_unique();
-        
+
         // Create pools: A-B and B-C
-        let pool_ab = create_test_pool_info(
-            Pubkey::new_unique(),
-            token_a,
-            token_b,
-            DexType::Raydium,
-        );
-        let pool_bc = create_test_pool_info(
-            Pubkey::new_unique(),
-            token_b,
-            token_c,
-            DexType::Orca,
-        );
-        
+        let pool_ab =
+            create_test_pool_info(Pubkey::new_unique(), token_a, token_b, DexType::Raydium);
+        let pool_bc = create_test_pool_info(Pubkey::new_unique(), token_b, token_c, DexType::Orca);
+
         graph.add_pool(Arc::new(pool_ab)).unwrap();
         graph.add_pool(Arc::new(pool_bc)).unwrap();
-        
+
         // Find path from A to C
         let paths = graph.find_paths(token_a, token_c, 3);
         assert!(!paths.is_empty());
-        
+
         let path = &paths[0];
         assert_eq!(path.len(), 2); // Two hops: A->B->C
         assert_eq!(path[0].from_token, token_a);
@@ -754,23 +781,19 @@ mod tests {
     #[test]
     fn test_connectivity_score() {
         let graph = RoutingGraph::new();
-        
+
         // Empty graph
         assert_eq!(graph.connectivity_score(), 0.0);
-        
+
         // Add tokens and pools
         let token_a = Pubkey::new_unique();
         let token_b = Pubkey::new_unique();
-        
-        let pool_info = create_test_pool_info(
-            Pubkey::new_unique(),
-            token_a,
-            token_b,
-            DexType::Raydium,
-        );
-        
+
+        let pool_info =
+            create_test_pool_info(Pubkey::new_unique(), token_a, token_b, DexType::Raydium);
+
         graph.add_pool(Arc::new(pool_info)).unwrap();
-        
+
         let score = graph.connectivity_score();
         assert!(score > 0.0);
         assert!(score <= 1.0);
@@ -779,7 +802,7 @@ mod tests {
     #[tokio::test]
     async fn test_graph_stats_update() {
         let graph = RoutingGraph::new();
-        
+
         // Add some pools
         for _i in 0..3 {
             let pool_info = create_test_pool_info(
@@ -790,10 +813,10 @@ mod tests {
             );
             graph.add_pool(Arc::new(pool_info)).unwrap();
         }
-        
+
         // Update stats
         graph.update_stats().await.unwrap();
-        
+
         let stats = graph.stats.read().await;
         assert_eq!(stats.pool_count, 3);
         assert_eq!(stats.token_count, 6); // 2 tokens per pool

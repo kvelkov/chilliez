@@ -1,29 +1,33 @@
 // src/dex/meteora.rs
 //! Meteora DEX integration supporting both Dynamic AMM and DLMM pool types.
 
-use crate::dex::api::{DexClient, Quote, SwapInfo, PoolDiscoverable, CommonSwapInfo, DexHealthStatus};
+use crate::dex::api::{
+    CommonSwapInfo, DexClient, DexHealthStatus, PoolDiscoverable, Quote, SwapInfo,
+};
 use crate::solana::rpc::SolanaRpcClient;
 use crate::utils::{DexType, PoolInfo, PoolParser as UtilsPoolParser, PoolToken};
 use anyhow::{anyhow, Result as AnyhowResult};
 use async_trait::async_trait;
 use bytemuck::{Pod, Zeroable};
 use log::{debug, info, warn};
+use num_traits::ToPrimitive;
 use solana_sdk::{
-    instruction::{Instruction, AccountMeta},
+    instruction::{AccountMeta, Instruction},
     pubkey::Pubkey,
     system_program,
 };
-use std::sync::Arc;
 use std::str::FromStr;
-use num_traits::ToPrimitive;
+use std::sync::Arc;
 
 // Import our math functions for Meteora calculations
-use crate::dex::math::meteora::{calculate_dlmm_output, calculate_dynamic_amm_output};
 use crate::dex::math::clmm::calculate_price_impact;
+use crate::dex::math::meteora::{calculate_dlmm_output, calculate_dynamic_amm_output};
 
 // --- Constants (Made Public for tests) ---
-pub const METEORA_DYNAMIC_AMM_PROGRAM_ID: Pubkey = solana_sdk::pubkey!("Eo7WjKq67rjJQSZxS6z3YkapzY3eMj6Xy8X5EQVn5UaB");
-pub const METEORA_DLMM_PROGRAM_ID: Pubkey = solana_sdk::pubkey!("LBUZKhRxPF3XUpBCjp4YzTKgLccjZhTSDM9YuVaPwxo");
+pub const METEORA_DYNAMIC_AMM_PROGRAM_ID: Pubkey =
+    solana_sdk::pubkey!("Eo7WjKq67rjJQSZxS6z3YkapzY3eMj6Xy8X5EQVn5UaB");
+pub const METEORA_DLMM_PROGRAM_ID: Pubkey =
+    solana_sdk::pubkey!("LBUZKhRxPF3XUpBCjp4YzTKgLccjZhTSDM9YuVaPwxo");
 pub const DYNAMIC_AMM_POOL_STATE_SIZE: usize = 520;
 pub const DLMM_LB_PAIR_STATE_SIZE: usize = 304;
 
@@ -132,7 +136,8 @@ impl MeteoraPoolParser {
             return Err(anyhow!("Invalid Dynamic AMM pool data size"));
         }
 
-        let pool_state = bytemuck::from_bytes::<DynamicAmmPoolState>(&data[..DYNAMIC_AMM_POOL_STATE_SIZE]);
+        let pool_state =
+            bytemuck::from_bytes::<DynamicAmmPoolState>(&data[..DYNAMIC_AMM_POOL_STATE_SIZE]);
 
         // Create pool info with available data
         let pool_info = PoolInfo {
@@ -141,8 +146,8 @@ impl MeteoraPoolParser {
             token_a: PoolToken {
                 mint: pool_state.token_a_mint,
                 symbol: "Unknown".to_string(), // Will be resolved later
-                decimals: 6, // Default, will be resolved
-                reserve: 0, // Will be fetched from vault
+                decimals: 6,                   // Default, will be resolved
+                reserve: 0,                    // Will be fetched from vault
             },
             token_b: PoolToken {
                 mint: pool_state.token_b_mint,
@@ -207,7 +212,7 @@ impl MeteoraPoolParser {
             last_update_timestamp: chrono::Utc::now().timestamp() as u64,
             dex_type: DexType::Meteora,
             // DLMM-specific fields
-            liquidity: None, // DLMM uses bin-based liquidity
+            liquidity: None,  // DLMM uses bin-based liquidity
             sqrt_price: None, // DLMM uses different pricing model
             tick_current_index: Some(pool_state.active_id as i32),
             tick_spacing: Some(pool_state.bin_step),
@@ -238,9 +243,7 @@ impl UtilsPoolParser for MeteoraPoolParser {
             MeteoraPoolType::DynamicAmm => {
                 Self::parse_dynamic_amm_pool(pool_address, data, rpc_client)
             }
-            MeteoraPoolType::Dlmm => {
-                Self::parse_dlmm_pool(pool_address, data, rpc_client)
-            }
+            MeteoraPoolType::Dlmm => Self::parse_dlmm_pool(pool_address, data, rpc_client),
         }
     }
 
@@ -280,13 +283,13 @@ impl MeteoraClient {
         let accounts = vec![
             AccountMeta::new_readonly(METEORA_DYNAMIC_AMM_PROGRAM_ID, false),
             AccountMeta::new_readonly(swap_info.user_wallet_pubkey, true), // Signer
-            AccountMeta::new(pool_info.address, false), // Pool
-            AccountMeta::new(swap_info.user_source_token_account, false), // User source
+            AccountMeta::new(pool_info.address, false),                    // Pool
+            AccountMeta::new(swap_info.user_source_token_account, false),  // User source
             AccountMeta::new(swap_info.user_destination_token_account, false), // User destination
-            AccountMeta::new(pool_info.token_a_vault, false), // Pool token A vault
-            AccountMeta::new(pool_info.token_b_vault, false), // Pool token B vault
-            AccountMeta::new_readonly(spl_token::id(), false), // Token program
-            AccountMeta::new_readonly(system_program::id(), false), // System program
+            AccountMeta::new(pool_info.token_a_vault, false),              // Pool token A vault
+            AccountMeta::new(pool_info.token_b_vault, false),              // Pool token B vault
+            AccountMeta::new_readonly(spl_token::id(), false),             // Token program
+            AccountMeta::new_readonly(system_program::id(), false),        // System program
         ];
 
         // Build instruction data
@@ -311,14 +314,14 @@ impl MeteoraClient {
         let accounts = vec![
             AccountMeta::new_readonly(METEORA_DLMM_PROGRAM_ID, false),
             AccountMeta::new_readonly(swap_info.user_wallet_pubkey, true), // Signer
-            AccountMeta::new(pool_info.address, false), // LB Pair
-            AccountMeta::new(swap_info.user_source_token_account, false), // User source
+            AccountMeta::new(pool_info.address, false),                    // LB Pair
+            AccountMeta::new(swap_info.user_source_token_account, false),  // User source
             AccountMeta::new(swap_info.user_destination_token_account, false), // User destination
-            AccountMeta::new(pool_info.token_a_vault, false), // Reserve X
-            AccountMeta::new(pool_info.token_b_vault, false), // Reserve Y
-            AccountMeta::new_readonly(spl_token::id(), false), // Token program
-            AccountMeta::new_readonly(system_program::id(), false), // System program
-            // Note: DLMM requires bin arrays which would need to be resolved dynamically
+            AccountMeta::new(pool_info.token_a_vault, false),              // Reserve X
+            AccountMeta::new(pool_info.token_b_vault, false),              // Reserve Y
+            AccountMeta::new_readonly(spl_token::id(), false),             // Token program
+            AccountMeta::new_readonly(system_program::id(), false),        // System program
+                                                                           // Note: DLMM requires bin arrays which would need to be resolved dynamically
         ];
 
         // Build instruction data for DLMM
@@ -326,7 +329,7 @@ impl MeteoraClient {
         instruction_data.push(DLMM_SWAP_DISCRIMINATOR);
         instruction_data.extend_from_slice(&swap_info.input_amount.to_le_bytes());
         instruction_data.extend_from_slice(&swap_info.minimum_output_amount.to_le_bytes());
-        
+
         // Add active bin ID if available
         if let Some(active_id) = pool_info.tick_current_index {
             instruction_data.extend_from_slice(&(active_id as u32).to_le_bytes());
@@ -343,7 +346,7 @@ impl MeteoraClient {
     /// In production, this would be replaced by actual on-chain scanning
     fn create_sample_pools(&self) -> Vec<PoolInfo> {
         let mut pools = Vec::new();
-        
+
         // Sample Dynamic AMM pool
         let dynamic_pool = PoolInfo {
             address: Pubkey::new_unique(),
@@ -404,7 +407,7 @@ impl MeteoraClient {
             liquidity: Some(1_000_000_000_000),
             sqrt_price: None,
             tick_current_index: Some(8388608), // Active bin ID
-            tick_spacing: Some(1), // Bin step for DLMM
+            tick_spacing: Some(1),             // Bin step for DLMM
             tick_array_0: None,
             tick_array_1: None,
             tick_array_2: None,
@@ -415,13 +418,15 @@ impl MeteoraClient {
         // Log pool types using our identification function
         for pool in &pools {
             let pool_type = self.get_pool_type(pool);
-            debug!("Created sample {} pool: {} ({})", 
-                   match pool_type {
-                       MeteoraPoolType::DynamicAmm => "Dynamic AMM",
-                       MeteoraPoolType::Dlmm => "DLMM",
-                   },
-                   pool.name, 
-                   pool.address);
+            debug!(
+                "Created sample {} pool: {} ({})",
+                match pool_type {
+                    MeteoraPoolType::DynamicAmm => "Dynamic AMM",
+                    MeteoraPoolType::Dlmm => "DLMM",
+                },
+                pool.name,
+                pool.address
+            );
         }
 
         pools
@@ -436,7 +441,7 @@ impl DexClient for MeteoraClient {
 
     fn calculate_onchain_quote(&self, pool: &PoolInfo, input_amount: u64) -> AnyhowResult<Quote> {
         let pool_type = self.get_pool_type(pool);
-        
+
         let output_amount = match pool_type {
             MeteoraPoolType::DynamicAmm => {
                 // Use Dynamic AMM calculation from math module
@@ -446,32 +451,31 @@ impl DexClient for MeteoraClient {
                     pool.token_b.reserve,
                     pool.fee_rate_bips.unwrap_or(25) as u32, // Base fee
                     0, // No dynamic fee for simplified calculation
-                ).map_err(|e| anyhow!("Dynamic AMM calculation failed: {}", e))?
+                )
+                .map_err(|e| anyhow!("Dynamic AMM calculation failed: {}", e))?
             }
             MeteoraPoolType::Dlmm => {
                 // Use DLMM calculation from math module
                 let active_id = pool.tick_current_index.unwrap_or(8388608) as u32; // 2^23 neutral bin
                 let bin_step = pool.tick_spacing.unwrap_or(1) as u16;
                 let liquidity_in_bin = pool.liquidity.unwrap_or(1_000_000_000_000) as u128;
-                
+
                 calculate_dlmm_output(
                     input_amount,
                     active_id,
                     bin_step,
                     liquidity_in_bin,
                     pool.fee_rate_bips.unwrap_or(25),
-                ).map_err(|e| anyhow!("DLMM calculation failed: {}", e))?
+                )
+                .map_err(|e| anyhow!("DLMM calculation failed: {}", e))?
             }
         };
 
         // Calculate price impact for better slippage estimation
         let price_impact = match pool_type {
             MeteoraPoolType::DynamicAmm => {
-                calculate_price_impact(
-                    input_amount,
-                    pool.token_a.reserve,
-                    pool.token_b.reserve,
-                ).unwrap_or_else(|_| rust_decimal::Decimal::from_str("0.01").unwrap())
+                calculate_price_impact(input_amount, pool.token_a.reserve, pool.token_b.reserve)
+                    .unwrap_or_else(|_| rust_decimal::Decimal::from_str("0.01").unwrap())
             }
             MeteoraPoolType::Dlmm => {
                 // For DLMM, use a simplified price impact estimate based on bin concentration
@@ -492,7 +496,7 @@ impl DexClient for MeteoraClient {
 
     fn get_swap_instruction(&self, swap_info: &SwapInfo) -> AnyhowResult<Instruction> {
         warn!("get_swap_instruction for Meteora is a basic implementation. Use get_swap_instruction_enhanced for production.");
-        
+
         // Create a basic instruction for legacy compatibility
         Ok(Instruction {
             program_id: METEORA_DYNAMIC_AMM_PROGRAM_ID,
@@ -518,7 +522,7 @@ impl DexClient for MeteoraClient {
 
         // Determine pool type and build appropriate instruction
         let pool_type = self.get_pool_type(&pool_info);
-        
+
         match pool_type {
             MeteoraPoolType::DynamicAmm => {
                 debug!("Building Dynamic AMM swap instruction");
@@ -533,21 +537,21 @@ impl DexClient for MeteoraClient {
 
     async fn discover_pools(&self) -> AnyhowResult<Vec<PoolInfo>> {
         info!("MeteoraClient: Starting pool discovery...");
-        
+
         // Create a mock pool for demonstration - in production this would scan on-chain
         let mock_pools = self.create_sample_pools();
-        
+
         info!("MeteoraClient: Discovered {} pools", mock_pools.len());
         Ok(mock_pools)
     }
 
     async fn health_check(&self) -> Result<DexHealthStatus, crate::error::ArbError> {
         let start_time = std::time::Instant::now();
-        
+
         // Basic health check - in production this would ping Meteora's API
         let is_healthy = true; // Placeholder
         let response_time = start_time.elapsed().as_millis() as u64;
-        
+
         Ok(DexHealthStatus {
             is_healthy,
             last_successful_request: Some(start_time),
@@ -569,7 +573,7 @@ impl PoolDiscoverable for MeteoraClient {
         // In production, this would fetch actual pool data from the blockchain
         // For now, return a sample pool to demonstrate functionality
         info!("MeteoraClient: Fetching pool data for {}", _pool_address);
-        
+
         // Create a sample pool that uses our parsing functionality
         let sample_pool = PoolInfo {
             address: _pool_address,
@@ -637,10 +641,7 @@ mod tests {
         assert_eq!(dlmm_type, Some(MeteoraPoolType::Dlmm));
 
         // Test unknown program ID
-        let unknown_type = MeteoraPoolParser::identify_pool_type(
-            &Pubkey::new_unique(),
-            100,
-        );
+        let unknown_type = MeteoraPoolParser::identify_pool_type(&Pubkey::new_unique(), 100);
         assert_eq!(unknown_type, None);
     }
 
@@ -648,17 +649,17 @@ mod tests {
     fn test_meteora_pool_parser_integration() {
         // Test that the parser can handle different data types
         let parser = MeteoraPoolParser;
-        
+
         // Test Dynamic AMM data identification
         let dynamic_data = vec![0u8; DYNAMIC_AMM_POOL_STATE_SIZE];
         let dynamic_type = MeteoraPoolParser::identify_pool_type_from_data(&dynamic_data);
         assert_eq!(dynamic_type, Some(MeteoraPoolType::DynamicAmm));
-        
+
         // Test DLMM data identification
         let dlmm_data = vec![0u8; DLMM_LB_PAIR_STATE_SIZE];
         let dlmm_type = MeteoraPoolParser::identify_pool_type_from_data(&dlmm_data);
         assert_eq!(dlmm_type, Some(MeteoraPoolType::Dlmm));
-        
+
         // Test parser program ID
         assert_eq!(parser.get_program_id(), METEORA_DYNAMIC_AMM_PROGRAM_ID);
     }
@@ -672,14 +673,17 @@ mod tests {
     #[test]
     fn test_pool_type_detection() {
         let client = MeteoraClient::new();
-        
+
         // Test Dynamic AMM pool (no tick_spacing)
         let dynamic_pool = PoolInfo {
             tick_spacing: None,
             dex_type: DexType::Meteora,
             ..Default::default()
         };
-        assert_eq!(client.get_pool_type(&dynamic_pool), MeteoraPoolType::DynamicAmm);
+        assert_eq!(
+            client.get_pool_type(&dynamic_pool),
+            MeteoraPoolType::DynamicAmm
+        );
 
         // Test DLMM pool (has tick_spacing)
         let dlmm_pool = PoolInfo {
@@ -694,18 +698,18 @@ mod tests {
     fn test_sample_pools_creation() {
         let client = MeteoraClient::new();
         let pools = client.create_sample_pools();
-        
+
         // Should create 2 sample pools
         assert_eq!(pools.len(), 2);
-        
+
         // First should be Dynamic AMM (no tick_spacing)
         assert_eq!(client.get_pool_type(&pools[0]), MeteoraPoolType::DynamicAmm);
         assert!(pools[0].tick_spacing.is_none());
-        
+
         // Second should be DLMM (has tick_spacing)
         assert_eq!(client.get_pool_type(&pools[1]), MeteoraPoolType::Dlmm);
         assert!(pools[1].tick_spacing.is_some());
-        
+
         // Both should be Meteora DEX type
         assert_eq!(pools[0].dex_type, DexType::Meteora);
         assert_eq!(pools[1].dex_type, DexType::Meteora);

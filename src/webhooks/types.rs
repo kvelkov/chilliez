@@ -119,22 +119,22 @@ pub struct DexPrograms;
 impl DexPrograms {
     // Orca Whirlpool Program
     pub const ORCA_WHIRLPOOL: &'static str = "whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc";
-    
+
     // Raydium AMM Program
     pub const RAYDIUM_AMM: &'static str = "675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8";
-    
+
     // Raydium CLMM Program
     pub const RAYDIUM_CLMM: &'static str = "CAMMCzo5YL8w4VFF8KVHrK22GGUsp5VTaW7grrKgrWqK";
-    
+
     // Meteora DLMM Program
     pub const METEORA_DLMM: &'static str = "LBUZKhRxPF3XUpBCjp4YzTKgLccjZhTSDM9YuVaPwxo";
-    
+
     // Meteora Dynamic AMM Program
     pub const METEORA_AMM: &'static str = "Eo7WjKq67rjJQSZxS6z3YkapzY3eMj6Xy8X5EQVn5UaB";
-    
+
     // Lifinity Program
     pub const LIFINITY: &'static str = "EewxydAPCCVuNEyrVN68PuSYdQ7wKn27RLAAEwqEEKLw";
-    
+
     // Serum DEX Program
     pub const SERUM_DEX: &'static str = "9xQeWvG816bUx9EPjHmaT23yvVM2ZWbrrpZb9PusVFin";
 

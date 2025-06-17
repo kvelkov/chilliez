@@ -55,12 +55,14 @@ impl Metrics {
 
     /// Increments the `opportunities_executed_success` counter.
     pub fn increment_opportunities_executed_success(&self) {
-        self.opportunities_executed_success.fetch_add(1, Ordering::SeqCst);
+        self.opportunities_executed_success
+            .fetch_add(1, Ordering::SeqCst);
     }
 
     /// Increments the `opportunities_executed_failure` counter.
     pub fn increment_opportunities_executed_failure(&self) {
-        self.opportunities_executed_failure.fetch_add(1, Ordering::SeqCst);
+        self.opportunities_executed_failure
+            .fetch_add(1, Ordering::SeqCst);
     }
 
     /// Increments the `execution_count` counter.
@@ -75,7 +77,8 @@ impl Metrics {
 
     /// Increments the `dynamic_threshold_updates` counter.
     pub fn increment_dynamic_threshold_updates(&self) {
-        self.dynamic_threshold_updates.fetch_add(1, Ordering::SeqCst);
+        self.dynamic_threshold_updates
+            .fetch_add(1, Ordering::SeqCst);
     }
 
     /// Adds to the `total_profit` value.
@@ -105,14 +108,35 @@ impl Metrics {
     pub fn log_metrics(&self) {
         info!("Current Metrics:");
         info!("  New Pools: {}", self.pools_new.load(Ordering::SeqCst));
-        info!("  Updated Pools: {}", self.pools_updated.load(Ordering::SeqCst));
+        info!(
+            "  Updated Pools: {}",
+            self.pools_updated.load(Ordering::SeqCst)
+        );
         info!("  Total Pools: {}", self.total_pools.load(Ordering::SeqCst));
-        info!("  Opportunities Detected: {}", self.opportunities_detected.load(Ordering::SeqCst));
-        info!("  Opportunities Executed (Success): {}", self.opportunities_executed_success.load(Ordering::SeqCst));
-        info!("  Opportunities Executed (Failure): {}", self.opportunities_executed_failure.load(Ordering::SeqCst));
-        info!("  Execution Count: {}", self.execution_count.load(Ordering::SeqCst));
-        info!("  Total Execution Time (ms): {}", self.total_execution_ms.load(Ordering::SeqCst));
-        info!("  Dynamic Threshold Updates: {}", self.dynamic_threshold_updates.load(Ordering::SeqCst));
+        info!(
+            "  Opportunities Detected: {}",
+            self.opportunities_detected.load(Ordering::SeqCst)
+        );
+        info!(
+            "  Opportunities Executed (Success): {}",
+            self.opportunities_executed_success.load(Ordering::SeqCst)
+        );
+        info!(
+            "  Opportunities Executed (Failure): {}",
+            self.opportunities_executed_failure.load(Ordering::SeqCst)
+        );
+        info!(
+            "  Execution Count: {}",
+            self.execution_count.load(Ordering::SeqCst)
+        );
+        info!(
+            "  Total Execution Time (ms): {}",
+            self.total_execution_ms.load(Ordering::SeqCst)
+        );
+        info!(
+            "  Dynamic Threshold Updates: {}",
+            self.dynamic_threshold_updates.load(Ordering::SeqCst)
+        );
         let total_profit = self.total_profit.lock().unwrap();
         info!("  Total Profit: {}", *total_profit);
     }

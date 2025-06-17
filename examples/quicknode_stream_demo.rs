@@ -1,54 +1,53 @@
 // examples/quicknode_stream_demo.rs
 //! QuickNode Stream Filter Demo
-//! 
+//!
 //! This example demonstrates how to use the Solana stream filter
 //! with QuickNode streams to detect arbitrage opportunities.
 
-use solana_arb_bot::streams::{SolanaStreamFilter, StreamData, FilteredStreamResult};
-use serde_json::{json, Value};
-use std::time::{SystemTime, UNIX_EPOCH};
 use log::{info, warn};
+use serde_json::{json, Value};
+use solana_arb_bot::streams::{FilteredStreamResult, SolanaStreamFilter, StreamData};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::init();
-    
+
     info!("🚀 QuickNode Stream Filter Demo");
     info!("================================");
-    
+
     // Initialize the stream filter
     let mut filter = SolanaStreamFilter::new();
-    
+
     // Add custom addresses to monitor (e.g., your wallet or specific pools)
-    let custom_addresses = vec![
-        "YOUR_WALLET_ADDRESS_HERE",
-        "SPECIFIC_POOL_ADDRESS_HERE",
-    ];
-    
+    let custom_addresses = vec!["YOUR_WALLET_ADDRESS_HERE", "SPECIFIC_POOL_ADDRESS_HERE"];
+
     for address in custom_addresses {
         if let Err(e) = filter.add_watched_address(address) {
             warn!("Failed to add address {}: {}", address, e);
         }
     }
-    
+
     info!("📊 Filter configured to monitor:");
     info!("  • DEX Programs: Orca, Raydium, Jupiter, Meteora, Lifinity");
     info!("  • Token Mints: SOL, USDC, USDT, mSOL, stSOL");
     info!("  • Custom addresses added");
-    
+
     // Demo with mock stream data
     demo_transaction_filtering(&filter).await?;
     demo_account_change_filtering(&filter).await?;
-    
+
     info!("✅ Stream filter demo completed!");
     Ok(())
 }
 
 /// Demonstrate transaction filtering
-async fn demo_transaction_filtering(filter: &SolanaStreamFilter) -> Result<(), Box<dyn std::error::Error>> {
+async fn demo_transaction_filtering(
+    filter: &SolanaStreamFilter,
+) -> Result<(), Box<dyn std::error::Error>> {
     info!("\n🔄 Testing Transaction Filtering");
     info!("===============================");
-    
+
     // Mock Orca Whirlpool swap transaction
     let mock_orca_transaction = create_mock_orca_transaction();
     let stream_data = StreamData {
@@ -60,7 +59,7 @@ async fn demo_transaction_filtering(filter: &SolanaStreamFilter) -> Result<(), B
         accounts: None,
         block: None,
     };
-    
+
     match filter.filter_stream(stream_data)? {
         Some(result) => {
             info!("✅ Orca transaction detected!");
@@ -70,7 +69,7 @@ async fn demo_transaction_filtering(filter: &SolanaStreamFilter) -> Result<(), B
             warn!("❌ No matches found for Orca transaction");
         }
     }
-    
+
     // Mock Jupiter swap transaction
     let mock_jupiter_transaction = create_mock_jupiter_transaction();
     let stream_data = StreamData {
@@ -82,7 +81,7 @@ async fn demo_transaction_filtering(filter: &SolanaStreamFilter) -> Result<(), B
         accounts: None,
         block: None,
     };
-    
+
     match filter.filter_stream(stream_data)? {
         Some(result) => {
             info!("✅ Jupiter transaction detected!");
@@ -92,15 +91,17 @@ async fn demo_transaction_filtering(filter: &SolanaStreamFilter) -> Result<(), B
             warn!("❌ No matches found for Jupiter transaction");
         }
     }
-    
+
     Ok(())
 }
 
 /// Demonstrate account change filtering
-async fn demo_account_change_filtering(filter: &SolanaStreamFilter) -> Result<(), Box<dyn std::error::Error>> {
+async fn demo_account_change_filtering(
+    filter: &SolanaStreamFilter,
+) -> Result<(), Box<dyn std::error::Error>> {
     info!("\n👁️  Testing Account Change Filtering");
     info!("==================================");
-    
+
     // Mock pool account change
     let mock_pool_change = create_mock_pool_account_change();
     let stream_data = StreamData {
@@ -112,7 +113,7 @@ async fn demo_account_change_filtering(filter: &SolanaStreamFilter) -> Result<()
         accounts: None,
         block: None,
     };
-    
+
     match filter.filter_stream(stream_data)? {
         Some(result) => {
             info!("✅ Pool account change detected!");
@@ -122,7 +123,7 @@ async fn demo_account_change_filtering(filter: &SolanaStreamFilter) -> Result<()
             warn!("❌ No matches found for pool account change");
         }
     }
-    
+
     Ok(())
 }
 
@@ -260,18 +261,25 @@ fn print_filter_result(result: &FilteredStreamResult) {
         info!("  Slot: {}", slot);
     }
     info!("  Transactions: {}", result.metadata.total_transactions);
-    info!("  Account Changes: {}", result.metadata.total_account_changes);
+    info!(
+        "  Account Changes: {}",
+        result.metadata.total_account_changes
+    );
     info!("  Instructions: {}", result.metadata.total_instructions);
     info!("  DEX Interactions: {}", result.metadata.dex_interactions);
     info!("  Token Transfers: {}", result.metadata.token_transfers);
-    
+
     if !result.matching_instructions.is_empty() {
         info!("  🔍 Matching Instructions:");
         for instruction in &result.matching_instructions {
-            info!("    • {} ({}): {}", 
-                instruction.index, 
+            info!(
+                "    • {} ({}): {}",
+                instruction.index,
                 instruction.program_id,
-                instruction.instruction_type.as_ref().unwrap_or(&"Unknown".to_string())
+                instruction
+                    .instruction_type
+                    .as_ref()
+                    .unwrap_or(&"Unknown".to_string())
             );
             if instruction.is_inner {
                 info!("      └─ Inner instruction");
@@ -293,16 +301,16 @@ fn current_timestamp() -> u64 {
 async fn quicknode_integration_example() -> Result<(), Box<dyn std::error::Error>> {
     /*
     // This is how you would integrate with actual QuickNode streams:
-    
+
     use tokio_tungstenite::{connect_async, tungstenite::Message};
     use futures_util::{SinkExt, StreamExt};
-    
+
     let filter = SolanaStreamFilter::new();
     let ws_url = "wss://little-convincing-borough.solana-mainnet.quiknode.pro/2c994d6eb71f3f58812833ce0783ae95f75e1820";
-    
+
     let (ws_stream, _) = connect_async(ws_url).await?;
     let (mut write, mut read) = ws_stream.split();
-    
+
     // Subscribe to account changes for DEX programs
     let subscribe_msg = json!({
         "jsonrpc": "2.0",
@@ -316,16 +324,16 @@ async fn quicknode_integration_example() -> Result<(), Box<dyn std::error::Error
             }
         ]
     });
-    
+
     write.send(Message::Text(subscribe_msg.to_string())).await?;
-    
+
     while let Some(msg) = read.next().await {
         match msg? {
             Message::Text(text) => {
                 if let Ok(data) = serde_json::from_str::<Value>(&text) {
                     // Convert QuickNode message to StreamData format
                     let stream_data = convert_quicknode_to_stream_data(data);
-                    
+
                     // Filter the stream data
                     if let Ok(Some(result)) = filter.filter_stream(stream_data) {
                         // Process the filtered result for arbitrage opportunities
@@ -337,7 +345,7 @@ async fn quicknode_integration_example() -> Result<(), Box<dyn std::error::Error
         }
     }
     */
-    
+
     Ok(())
 }
 
@@ -347,15 +355,18 @@ fn convert_quicknode_to_stream_data(quicknode_data: Value) -> StreamData {
     // Implementation would depend on QuickNode's specific message format
     StreamData {
         timestamp: Some(current_timestamp()),
-        slot: quicknode_data.get("result")
+        slot: quicknode_data
+            .get("result")
             .and_then(|r| r.get("context"))
             .and_then(|c| c.get("slot"))
             .and_then(|s| s.as_u64()),
-        transaction: quicknode_data.get("params")
+        transaction: quicknode_data
+            .get("params")
             .and_then(|p| p.get("result"))
             .cloned(),
         transactions: None,
-        account: quicknode_data.get("params")
+        account: quicknode_data
+            .get("params")
             .and_then(|p| p.get("result"))
             .cloned(),
         accounts: None,
@@ -365,27 +376,33 @@ fn convert_quicknode_to_stream_data(quicknode_data: Value) -> StreamData {
 
 /// Process filtered result for arbitrage opportunities
 #[allow(dead_code)]
-async fn process_arbitrage_opportunity(result: FilteredStreamResult) -> Result<(), Box<dyn std::error::Error>> {
+async fn process_arbitrage_opportunity(
+    result: FilteredStreamResult,
+) -> Result<(), Box<dyn std::error::Error>> {
     info!("🎯 Processing potential arbitrage opportunity:");
     info!("  DEX interactions: {}", result.metadata.dex_interactions);
     info!("  Token transfers: {}", result.metadata.token_transfers);
-    
+
     // Here you would:
     // 1. Analyze the transaction data for price impacts
     // 2. Check for cross-DEX arbitrage opportunities
     // 3. Calculate potential profits
     // 4. Execute arbitrage if profitable
-    
+
     for instruction in &result.matching_instructions {
-        info!("  Analyzing {} instruction: {}", 
-            instruction.instruction_type.as_ref().unwrap_or(&"Unknown".to_string()),
+        info!(
+            "  Analyzing {} instruction: {}",
+            instruction
+                .instruction_type
+                .as_ref()
+                .unwrap_or(&"Unknown".to_string()),
             instruction.program_id
         );
-        
+
         // Decode and analyze instruction data
         // Calculate arbitrage opportunities
         // Execute trades if profitable
     }
-    
+
     Ok(())
 }

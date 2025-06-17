@@ -1,11 +1,11 @@
 //! Timing utilities for performance monitoring
-//! 
+//!
 //! This module provides utilities for measuring and logging execution times
 //! of various bot operations.
 
-use log::{info, debug, warn};
-use std::time::{Duration, Instant};
+use log::{debug, info, warn};
 use std::collections::HashMap;
+use std::time::{Duration, Instant};
 
 /// A timer for measuring operation durations
 #[derive(Debug)]
@@ -20,7 +20,7 @@ impl Timer {
     pub fn start(operation_name: &str) -> Self {
         let start_time = Instant::now();
         debug!("⏱️ Starting timer for: {}", operation_name);
-        
+
         Self {
             start_time,
             operation_name: operation_name.to_string(),
@@ -32,21 +32,28 @@ impl Timer {
     pub fn checkpoint(&mut self, checkpoint_name: &str) {
         let now = Instant::now();
         self.checkpoints.push((checkpoint_name.to_string(), now));
-        
+
         let elapsed = now.duration_since(self.start_time);
-        debug!("📍 {} - {}: {:.2}ms", 
-               self.operation_name, checkpoint_name, elapsed.as_millis());
+        debug!(
+            "📍 {} - {}: {:.2}ms",
+            self.operation_name,
+            checkpoint_name,
+            elapsed.as_millis()
+        );
     }
 
     /// Finish the timer and log the total duration
     pub fn finish(self) -> Duration {
         let total_duration = self.start_time.elapsed();
-        
+
         // Log checkpoints if any
         if !self.checkpoints.is_empty() {
-            info!("🕐 {} completed in {:.2}ms with checkpoints:", 
-                  self.operation_name, total_duration.as_millis());
-            
+            info!(
+                "🕐 {} completed in {:.2}ms with checkpoints:",
+                self.operation_name,
+                total_duration.as_millis()
+            );
+
             let mut last_time = self.start_time;
             for (name, time) in &self.checkpoints {
                 let segment_duration = time.duration_since(last_time);
@@ -54,8 +61,11 @@ impl Timer {
                 last_time = *time;
             }
         } else {
-            info!("🕐 {} completed in {:.2}ms", 
-                  self.operation_name, total_duration.as_millis());
+            info!(
+                "🕐 {} completed in {:.2}ms",
+                self.operation_name,
+                total_duration.as_millis()
+            );
         }
 
         total_duration
@@ -64,12 +74,15 @@ impl Timer {
     /// Finish with a warning if the operation took too long
     pub fn finish_with_threshold(self, threshold_ms: u64) -> Duration {
         let total_duration = self.start_time.elapsed();
-        
+
         // Log checkpoints if any
         if !self.checkpoints.is_empty() {
-            info!("🕐 {} completed in {:.2}ms with checkpoints:", 
-                  self.operation_name, total_duration.as_millis());
-            
+            info!(
+                "🕐 {} completed in {:.2}ms with checkpoints:",
+                self.operation_name,
+                total_duration.as_millis()
+            );
+
             let mut last_time = self.start_time;
             for (name, time) in &self.checkpoints {
                 let segment_duration = time.duration_since(last_time);
@@ -77,15 +90,22 @@ impl Timer {
                 last_time = *time;
             }
         } else {
-            info!("🕐 {} completed in {:.2}ms", 
-                  self.operation_name, total_duration.as_millis());
+            info!(
+                "🕐 {} completed in {:.2}ms",
+                self.operation_name,
+                total_duration.as_millis()
+            );
         }
-        
+
         if total_duration.as_millis() > threshold_ms as u128 {
-            warn!("⚠️ {} took {:.2}ms (exceeds threshold of {}ms)", 
-                  self.operation_name, total_duration.as_millis(), threshold_ms);
+            warn!(
+                "⚠️ {} took {:.2}ms (exceeds threshold of {}ms)",
+                self.operation_name,
+                total_duration.as_millis(),
+                threshold_ms
+            );
         }
-        
+
         total_duration
     }
 }
@@ -114,7 +134,8 @@ impl PerformanceTracker {
 
     /// Record a completed operation
     pub fn record_operation(&mut self, operation_name: &str, duration: Duration) {
-        let stats = self.operation_stats
+        let stats = self
+            .operation_stats
             .entry(operation_name.to_string())
             .or_insert_with(|| OperationStats {
                 count: 0,
@@ -127,7 +148,7 @@ impl PerformanceTracker {
         stats.count += 1;
         stats.total_duration += duration;
         stats.last_duration = duration;
-        
+
         if duration < stats.min_duration {
             stats.min_duration = duration;
         }
@@ -138,9 +159,9 @@ impl PerformanceTracker {
 
     /// Get average duration for an operation
     pub fn get_average_duration(&self, operation_name: &str) -> Option<Duration> {
-        self.operation_stats.get(operation_name).map(|stats| {
-            stats.total_duration / stats.count as u32
-        })
+        self.operation_stats
+            .get(operation_name)
+            .map(|stats| stats.total_duration / stats.count as u32)
     }
 
     /// Print performance summary
@@ -157,12 +178,14 @@ impl PerformanceTracker {
         for (operation, stats) in &self.operation_stats {
             let avg_ms = (stats.total_duration.as_millis() as f64) / (stats.count as f64);
             info!("📈 {}: ", operation);
-            info!("   Count: {} | Avg: {:.2}ms | Min: {:.2}ms | Max: {:.2}ms | Last: {:.2}ms",
-                  stats.count,
-                  avg_ms,
-                  stats.min_duration.as_millis(),
-                  stats.max_duration.as_millis(),
-                  stats.last_duration.as_millis());
+            info!(
+                "   Count: {} | Avg: {:.2}ms | Min: {:.2}ms | Max: {:.2}ms | Last: {:.2}ms",
+                stats.count,
+                avg_ms,
+                stats.min_duration.as_millis(),
+                stats.max_duration.as_millis(),
+                stats.last_duration.as_millis()
+            );
         }
     }
 

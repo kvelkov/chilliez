@@ -2,25 +2,14 @@
 //! Demo of event-driven balance monitoring integrated with webhook system and wallet management
 
 use anyhow::Result;
+use log::{info, warn};
 use solana_arb_bot::{
-    solana::{
-        EventDrivenBalanceMonitor, 
-        EventDrivenBalanceConfig, 
-        BalanceMonitorConfig,
-    },
-    webhooks::{
-        processor::PoolUpdateProcessor,
-    },
-    wallet::{
-        WalletPool,
-        WalletPoolConfig,
-        WalletJitoIntegration,
-        WalletJitoConfig,
-    },
     arbitrage::JitoClientConfig,
+    solana::{BalanceMonitorConfig, EventDrivenBalanceConfig, EventDrivenBalanceMonitor},
+    wallet::{WalletJitoConfig, WalletJitoIntegration, WalletPool, WalletPoolConfig},
+    webhooks::processor::PoolUpdateProcessor,
 };
 use solana_client::nonblocking::rpc_client::RpcClient;
-use log::{info, warn};
 use solana_sdk::{pubkey::Pubkey, signature::Keypair, signer::Signer};
 use std::{sync::Arc, time::Duration};
 use tokio::time::sleep;
@@ -92,7 +81,9 @@ async fn demo_basic_event_driven_balance() -> Result<()> {
     let additional_accounts = vec![
         "So11111111111111111111111111111111111111112".parse::<Pubkey>()?, // WSOL mint
     ];
-    balance_monitor.add_monitored_accounts(additional_accounts).await?;
+    balance_monitor
+        .add_monitored_accounts(additional_accounts)
+        .await?;
 
     // Simulate some time passing
     sleep(Duration::from_secs(2)).await;
@@ -102,12 +93,20 @@ async fn demo_basic_event_driven_balance() -> Result<()> {
     info!("📊 Balance monitor stats: {:?}", stats);
 
     // Get balance for an account
-    if let Some(balance) = balance_monitor.get_account_balance(sample_accounts[0]).await {
-        info!("💰 Balance for {}: {} lamports", sample_accounts[0], balance);
+    if let Some(balance) = balance_monitor
+        .get_account_balance(sample_accounts[0])
+        .await
+    {
+        info!(
+            "💰 Balance for {}: {} lamports",
+            sample_accounts[0], balance
+        );
     }
 
     // Force refresh accounts
-    balance_monitor.force_refresh_accounts(sample_accounts.clone()).await?;
+    balance_monitor
+        .force_refresh_accounts(sample_accounts.clone())
+        .await?;
 
     info!("✅ Basic event-driven balance monitoring demo completed");
     Ok(())
@@ -141,21 +140,25 @@ async fn demo_integrated_balance_monitoring() -> Result<()> {
 
     // Create webhook components (simplified for demo)
     let webhook_processor = Arc::new(PoolUpdateProcessor::new());
-    
+
     // Create a simplified event-driven monitor for demo purposes
     let mut event_monitor = EventDrivenBalanceMonitor::new(config);
     event_monitor.start().await?;
-    
+
     // Register with webhook processor
-    event_monitor.register_with_webhook_processor(&webhook_processor).await?;
-    
+    event_monitor
+        .register_with_webhook_processor(&webhook_processor)
+        .await?;
+
     info!("✅ Event-driven balance monitor with webhook integration started");
 
     // Add more accounts dynamically
     let additional_accounts = vec![
         "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v".parse::<Pubkey>()?, // USDC mint
     ];
-    event_monitor.add_monitored_accounts(additional_accounts).await?;
+    event_monitor
+        .add_monitored_accounts(additional_accounts)
+        .await?;
 
     // Simulate balance events
     simulate_balance_events(&event_monitor).await?;
@@ -165,10 +168,15 @@ async fn demo_integrated_balance_monitoring() -> Result<()> {
     info!("📊 Event-driven monitoring stats:");
     info!("   - Total webhook events: {}", stats.total_webhook_events);
     info!("   - Balance events: {}", stats.balance_triggering_events);
-    info!("   - Native transfer events: {}", stats.native_transfer_events);
+    info!(
+        "   - Native transfer events: {}",
+        stats.native_transfer_events
+    );
 
     // Force refresh all monitored accounts
-    event_monitor.force_refresh_accounts(trading_accounts.clone()).await?;
+    event_monitor
+        .force_refresh_accounts(trading_accounts.clone())
+        .await?;
 
     // Check individual account balances
     for account in &trading_accounts {
@@ -194,18 +202,22 @@ async fn demo_real_time_balance_tracking() -> Result<()> {
         monitored_accounts: vec![
             "11111111111111111111111111111112".parse::<Pubkey>()?,
             "So11111111111111111111111111111111111111112".parse::<Pubkey>()?,
-        ].into_iter().collect(),
+        ]
+        .into_iter()
+        .collect(),
         balance_change_threshold: 100, // Very low threshold for demo
         track_token_accounts: true,
         enable_webhook_integration: true,
     };
 
     let webhook_processor = Arc::new(PoolUpdateProcessor::new());
-    
+
     let mut system = EventDrivenBalanceMonitor::new(config);
     system.start().await?;
-    system.register_with_webhook_processor(&webhook_processor).await?;
-    
+    system
+        .register_with_webhook_processor(&webhook_processor)
+        .await?;
+
     info!("✅ Real-time balance tracking system started");
 
     // Simulate rapid balance changes
@@ -214,15 +226,18 @@ async fn demo_real_time_balance_tracking() -> Result<()> {
         "11111111111111111111111111111112".parse::<Pubkey>()?,
         "So11111111111111111111111111111111111111112".parse::<Pubkey>()?,
     ];
-    
+
     for i in 0..5 {
         // Force refresh to simulate balance queries
         system.force_refresh_accounts(test_accounts.clone()).await?;
-        
+
         let stats = system.get_stats().await;
-        info!("📊 Iteration {}: {} balance events processed", 
-            i + 1, stats.balance_triggering_events);
-        
+        info!(
+            "📊 Iteration {}: {} balance events processed",
+            i + 1,
+            stats.balance_triggering_events
+        );
+
         sleep(Duration::from_millis(500)).await;
     }
 
@@ -236,10 +251,22 @@ async fn demo_real_time_balance_tracking() -> Result<()> {
     // Final statistics
     let final_stats = system.get_stats().await;
     info!("📈 Final monitoring statistics:");
-    info!("   - Total webhook events: {}", final_stats.total_webhook_events);
-    info!("   - Balance triggering events: {}", final_stats.balance_triggering_events);
-    info!("   - Native transfer events: {}", final_stats.native_transfer_events);
-    info!("   - Token transfer events: {}", final_stats.token_transfer_events);
+    info!(
+        "   - Total webhook events: {}",
+        final_stats.total_webhook_events
+    );
+    info!(
+        "   - Balance triggering events: {}",
+        final_stats.balance_triggering_events
+    );
+    info!(
+        "   - Native transfer events: {}",
+        final_stats.native_transfer_events
+    );
+    info!(
+        "   - Token transfer events: {}",
+        final_stats.token_transfer_events
+    );
 
     info!("✅ Real-time balance tracking simulation completed");
     Ok(())
@@ -261,9 +288,9 @@ async fn demo_wallet_integrated_balance_monitoring() -> Result<()> {
 
     // Configure wallet pool for trading
     let wallet_config = WalletPoolConfig {
-        wallet_ttl_secs: 300,           // 5 minutes
+        wallet_ttl_secs: 300,             // 5 minutes
         sweep_threshold_lamports: 10_000, // 0.00001 SOL
-        fee_reserve_lamports: 5_000,    // 0.000005 SOL
+        fee_reserve_lamports: 5_000,      // 0.000005 SOL
         max_pool_size: 20,
         auto_cleanup: true,
     };
@@ -277,7 +304,11 @@ async fn demo_wallet_integrated_balance_monitoring() -> Result<()> {
     for i in 0..3 {
         let wallet = wallet_pool.get_signing_wallet();
         monitored_wallets.push(wallet.pubkey());
-        info!("🔑 Generated ephemeral wallet {}: {}", i + 1, wallet.pubkey());
+        info!(
+            "🔑 Generated ephemeral wallet {}: {}",
+            i + 1,
+            wallet.pubkey()
+        );
     }
 
     // Configure balance monitoring for our ephemeral wallets
@@ -298,14 +329,17 @@ async fn demo_wallet_integrated_balance_monitoring() -> Result<()> {
     // Create and start balance monitor
     let mut balance_monitor = EventDrivenBalanceMonitor::new(balance_config);
     balance_monitor.start().await?;
-    info!("✅ Balance monitor started for {} ephemeral wallets", monitored_wallets.len());
+    info!(
+        "✅ Balance monitor started for {} ephemeral wallets",
+        monitored_wallets.len()
+    );
 
     // Simulate monitoring the wallets
     for (i, wallet_addr) in monitored_wallets.iter().enumerate() {
         match balance_monitor.get_account_balance(*wallet_addr).await {
             Some(balance) => {
                 info!("💰 Wallet {} balance: {} lamports", i + 1, balance);
-                
+
                 // Check if wallet should be swept
                 if wallet_pool.should_sweep_wallet(balance) {
                     info!("🧹 Wallet {} is eligible for sweep", i + 1);
@@ -318,7 +352,9 @@ async fn demo_wallet_integrated_balance_monitoring() -> Result<()> {
     }
 
     // Add collector wallet to monitoring
-    balance_monitor.add_monitored_accounts(vec![collector_pubkey]).await?;
+    balance_monitor
+        .add_monitored_accounts(vec![collector_pubkey])
+        .await?;
     info!("🎯 Added collector wallet to monitoring");
 
     // Get comprehensive statistics
@@ -327,8 +363,14 @@ async fn demo_wallet_integrated_balance_monitoring() -> Result<()> {
 
     info!("📊 Integrated Statistics:");
     info!("   Balance Monitor:");
-    info!("     - Total webhook events: {}", balance_stats.total_webhook_events);
-    info!("     - Balance updates: {}", balance_stats.balance_updates_processed);
+    info!(
+        "     - Total webhook events: {}",
+        balance_stats.total_webhook_events
+    );
+    info!(
+        "     - Balance updates: {}",
+        balance_stats.balance_updates_processed
+    );
     info!("   Wallet Pool:");
     info!("     - Total wallets: {}", pool_stats.total_wallets);
     info!("     - Active wallets: {}", pool_stats.active_wallets);
@@ -373,19 +415,22 @@ async fn demo_complete_arbitrage_workflow() -> Result<()> {
     };
 
     // Create the integrated system
-    let mut integrated_system = WalletJitoIntegration::new(
-        integrated_config,
-        collector_pubkey,
-        rpc_client.clone(),
-    );
+    let mut integrated_system =
+        WalletJitoIntegration::new(integrated_config, collector_pubkey, rpc_client.clone());
 
     info!("🎯 Integrated arbitrage system initialized");
 
     // Get wallets from the integrated system for monitoring
     let initial_stats = integrated_system.get_comprehensive_stats().await;
     info!("📊 Initial system state:");
-    info!("   - Wallet pool: {} wallets", initial_stats.wallet_stats.total_wallets);
-    info!("   - Jito client: {} bundles submitted", initial_stats.jito_stats.total_bundles_submitted);
+    info!(
+        "   - Wallet pool: {} wallets",
+        initial_stats.wallet_stats.total_wallets
+    );
+    info!(
+        "   - Jito client: {} bundles submitted",
+        initial_stats.jito_stats.total_bundles_submitted
+    );
 
     // Simulate the complete arbitrage workflow
     info!("\n🔄 Simulating Complete Arbitrage Workflow:");
@@ -397,14 +442,17 @@ async fn demo_complete_arbitrage_workflow() -> Result<()> {
     // Step 2: Check profit threshold
     if expected_profit >= 50_000 {
         info!("✅ Profit threshold met: {} lamports", expected_profit);
-        
+
         // Step 3: Simulate trade execution (mock transactions)
         let mock_trade_txs = create_mock_arbitrage_transactions();
         info!("📝 Created {} arbitrage transactions", mock_trade_txs.len());
 
         // Step 4: Execute through integrated system (simulation mode)
         info!("🎭 Note: Demo uses unfunded wallets - transaction failures are expected");
-        match integrated_system.execute_arbitrage_trade(mock_trade_txs, expected_profit).await {
+        match integrated_system
+            .execute_arbitrage_trade(mock_trade_txs, expected_profit)
+            .await
+        {
             Ok(bundle_id) => {
                 info!("✅ Arbitrage executed successfully!");
                 info!("📦 Bundle ID: {}", bundle_id);
@@ -426,14 +474,32 @@ async fn demo_complete_arbitrage_workflow() -> Result<()> {
     let final_stats = integrated_system.get_comprehensive_stats().await;
     info!("\n📈 Final System Statistics:");
     info!("   Wallet Pool:");
-    info!("     - Total wallets: {}", final_stats.wallet_stats.total_wallets);
-    info!("     - Total sweeps: {}", final_stats.wallet_stats.total_sweeps);
+    info!(
+        "     - Total wallets: {}",
+        final_stats.wallet_stats.total_wallets
+    );
+    info!(
+        "     - Total sweeps: {}",
+        final_stats.wallet_stats.total_sweeps
+    );
     info!("   Jito Bundles:");
-    info!("     - Total submitted: {}", final_stats.jito_stats.total_bundles_submitted);
-    info!("     - Success rate: {:.2}%", integrated_system.get_success_rate());
+    info!(
+        "     - Total submitted: {}",
+        final_stats.jito_stats.total_bundles_submitted
+    );
+    info!(
+        "     - Success rate: {:.2}%",
+        integrated_system.get_success_rate()
+    );
     info!("   Integration:");
-    info!("     - Total trades: {}", final_stats.integration_stats.total_trades_executed);
-    info!("     - Total fees: {} lamports", final_stats.integration_stats.total_fees_paid);
+    info!(
+        "     - Total trades: {}",
+        final_stats.integration_stats.total_trades_executed
+    );
+    info!(
+        "     - Total fees: {} lamports",
+        final_stats.integration_stats.total_fees_paid
+    );
 
     info!("✅ Complete arbitrage workflow simulation completed");
     Ok(())
@@ -444,28 +510,25 @@ fn create_mock_arbitrage_transactions() -> Vec<solana_sdk::transaction::Transact
     // In a real implementation, these would be actual swap instructions
     // For demo purposes, we'll create minimal transactions that demonstrate the structure
     // Note: These transactions will fail in demo mode due to unfunded wallets
-    
+
     use solana_sdk::{
+        hash::Hash, message::Message, signature::Keypair, system_instruction,
         transaction::Transaction,
-        message::Message,
-        signature::Keypair,
-        system_instruction,
-        hash::Hash,
     };
-    
+
     // Create a simple mock transaction (will fail without funding)
     let from_keypair = Keypair::new();
     let to_pubkey = Keypair::new().pubkey();
-    
+
     let instruction = system_instruction::transfer(
         &from_keypair.pubkey(),
         &to_pubkey,
         1000, // 0.000001 SOL
     );
-    
+
     let message = Message::new(&[instruction], Some(&from_keypair.pubkey()));
     let transaction = Transaction::new(&[&from_keypair], message, Hash::default());
-    
+
     vec![transaction]
 }
 
@@ -480,7 +543,11 @@ async fn simulate_balance_events(monitor: &EventDrivenBalanceMonitor) -> Result<
     ];
 
     for (i, account) in test_accounts.iter().enumerate() {
-        info!("📨 Simulating balance event {} for account {}", i + 1, account);
+        info!(
+            "📨 Simulating balance event {} for account {}",
+            i + 1,
+            account
+        );
         monitor.force_refresh_accounts(vec![*account]).await?;
         sleep(Duration::from_millis(200)).await;
     }
@@ -498,13 +565,13 @@ fn print_configuration_options() {
     info!("   - max_balance_age_ms: Maximum age for balance data");
     info!("   - enable_emergency_pause: Enable automatic emergency pause");
     info!("   - balance_check_interval_ms: Reduced polling interval (event-driven)");
-    
+
     info!("\n2. Event-Driven Configuration:");
     info!("   - monitored_accounts: Set of accounts to monitor for changes");
     info!("   - track_token_accounts: Enable token account balance tracking");
     info!("   - balance_change_threshold: Minimum change to trigger update");
     info!("   - enable_webhook_integration: Enable webhook event processing");
-    
+
     info!("\n3. Integration Benefits:");
     info!("   - Real-time event-driven updates instead of polling");
     info!("   - Webhook integration for external event sources");
@@ -515,26 +582,26 @@ fn print_configuration_options() {
 /// Enhanced configuration demonstration
 fn demonstrate_enhanced_configuration() {
     info!("\n=== Enhanced Configuration Options ===");
-    
+
     info!("🏦 Wallet Pool Configuration:");
     info!("   - wallet_ttl_secs: Lifetime of ephemeral wallets");
     info!("   - sweep_threshold_lamports: Minimum balance to trigger sweep");
     info!("   - fee_reserve_lamports: Amount to reserve for transaction fees");
     info!("   - max_pool_size: Maximum number of wallets in pool");
     info!("   - auto_cleanup: Automatic cleanup of expired wallets");
-    
+
     info!("\n🎯 Jito Configuration:");
     info!("   - default_tip_lamports: Base tip amount for validators");
     info!("   - max_bundle_size: Maximum transactions per bundle");
     info!("   - submission_timeout: Bundle submission timeout");
     info!("   - max_retries: Maximum retry attempts");
     info!("   - dynamic_tips: Enable dynamic tip calculation");
-    
+
     info!("\n🔗 Integration Configuration:");
     info!("   - auto_sweep_profits: Enable automatic profit sweeping");
     info!("   - min_profit_threshold: Minimum profit to execute trades");
     info!("   - optimize_bundles: Combine trades with sweeps in bundles");
-    
+
     info!("\n📊 Monitoring Benefits:");
     info!("   - Real-time balance tracking of all ephemeral wallets");
     info!("   - Automatic profit detection and sweeping");
@@ -546,35 +613,35 @@ fn demonstrate_enhanced_configuration() {
 /// Demonstrate production setup guidance
 fn demonstrate_production_setup() {
     info!("\n=== Production Setup Guidance ===");
-    
+
     info!("🏭 For Production Deployment:");
     info!("   1. Wallet Funding:");
     info!("      - Fund collector wallet with initial SOL for fees");
     info!("      - Set up automatic funding mechanism for ephemeral wallets");
     info!("      - Monitor wallet balances and trigger refills");
-    
+
     info!("\n   2. Network Configuration:");
     info!("      - Use devnet/testnet for testing: 'https://api.devnet.solana.com'");
     info!("      - Configure mainnet RPC: 'https://api.mainnet-beta.solana.com'");
     info!("      - Consider premium RPC providers for better reliability");
-    
+
     info!("\n   3. Jito Configuration:");
     info!("      - Register with Jito Labs for production access");
     info!("      - Configure appropriate tip amounts based on market conditions");
     info!("      - Set up Jito endpoint: 'https://mainnet.block-engine.jito.wtf'");
-    
+
     info!("\n   4. Security Best Practices:");
     info!("      - Store collector wallet keys securely (HSM, secure vault)");
     info!("      - Use ephemeral wallets with limited TTL");
     info!("      - Implement proper error handling and recovery");
     info!("      - Monitor system health and performance");
-    
+
     info!("\n   5. Demo vs Production Differences:");
     info!("      - Demo: Uses unfunded wallets → transaction failures expected");
     info!("      - Production: Requires funded wallets for successful transactions");
     info!("      - Demo: Uses mock transactions for demonstration");
     info!("      - Production: Uses real swap instructions from DEX protocols");
-    
+
     info!("\n💡 To run with funded wallets:");
     info!("      export SOLANA_RPC_URL='https://api.devnet.solana.com'");
     info!("      # Fund your collector wallet with devnet SOL");

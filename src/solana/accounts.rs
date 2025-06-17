@@ -1,5 +1,5 @@
-use anyhow::{anyhow, Result};
 use crate::solana::rpc::SolanaRpcClient; // Changed to use our HA client
+use anyhow::{anyhow, Result};
 use solana_sdk::pubkey::Pubkey;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -63,19 +63,22 @@ impl TokenMetadataCache {
     }
 
     /// Fetch token metadata from RPC (or token list as fallback)
-    async fn fetch_token_metadata(mint: &Pubkey, rpc_client: &SolanaRpcClient) -> Result<TokenMetadata> {
+    async fn fetch_token_metadata(
+        mint: &Pubkey,
+        rpc_client: &SolanaRpcClient,
+    ) -> Result<TokenMetadata> {
         let _ = rpc_client; // Suppress unused variable warning
-        // Illustrative: If metadata were in an account, you'd fetch and parse it.
-        // match rpc_client.get_account_data(mint).await {
-        //     Ok(account_data) => {
-        //         // TODO: Parse account_data to extract actual metadata
-        //         // For now, we continue with the placeholder logic.
-        //         log::debug!("Successfully fetched account data for mint {}, len: {}. Placeholder parsing follows.", mint, account_data.len());
-        //     }
-        //     Err(e) => {
-        //         log::warn!("Failed to fetch account data for mint {}: {}. Using placeholder.", mint, e);
-        //     }
-        // }
+                            // Illustrative: If metadata were in an account, you'd fetch and parse it.
+                            // match rpc_client.get_account_data(mint).await {
+                            //     Ok(account_data) => {
+                            //         // TODO: Parse account_data to extract actual metadata
+                            //         // For now, we continue with the placeholder logic.
+                            //         log::debug!("Successfully fetched account data for mint {}, len: {}. Placeholder parsing follows.", mint, account_data.len());
+                            //     }
+                            //     Err(e) => {
+                            //         log::warn!("Failed to fetch account data for mint {}: {}. Using placeholder.", mint, e);
+                            //     }
+                            // }
 
         // In a real implementation, we would fetch metadata from on-chain program
         // For now, we'll use a simplified approach with hardcoded values for common tokens

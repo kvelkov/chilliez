@@ -1,33 +1,30 @@
 //! Core Arbitrage Orchestrator Structure
-//! 
+//!
 //! This module contains the main orchestrator struct definition and core functionality.
 
 use crate::{
     arbitrage::{
-        strategy::ArbitrageStrategy,
-        analysis::{DynamicThresholdUpdater, AdvancedArbitrageMath},
+        analysis::{AdvancedArbitrageMath, DynamicThresholdUpdater},
+        execution::{BatchExecutor, HftExecutor},
         opportunity::MultiHopArbOpportunity,
-        execution::{HftExecutor, BatchExecutor},
+        strategy::ArbitrageStrategy,
     },
     config::settings::Config,
-    dex::{DexClient, PoolValidationConfig, BannedPairsManager},
+    dex::{BannedPairsManager, DexClient, PoolValidationConfig},
     error::ArbError,
     local_metrics::Metrics,
-    solana::{rpc::SolanaRpcClient, websocket::SolanaWebsocketManager, BalanceMonitor},
-    utils::{PoolInfo, DexType},
     paper_trading::{
-        SimulatedExecutionEngine, 
-        PaperTradingConfig, 
-        SafeVirtualPortfolio, 
-        PaperTradingAnalytics, 
-        PaperTradingReporter
+        PaperTradingAnalytics, PaperTradingConfig, PaperTradingReporter, SafeVirtualPortfolio,
+        SimulatedExecutionEngine,
     },
+    solana::{rpc::SolanaRpcClient, websocket::SolanaWebsocketManager, BalanceMonitor},
+    utils::{DexType, PoolInfo},
 };
 
 use crate::performance::PerformanceManager;
 
 use dashmap::DashMap;
-use log::{info, warn, debug};
+use log::{debug, info, warn};
 use solana_sdk::pubkey::Pubkey;
 use std::{
     collections::HashMap,
@@ -37,9 +34,7 @@ use std::{
     },
     time::{Duration, Instant},
 };
-use tokio::{
-    sync::{Mutex, RwLock, mpsc, Semaphore},
-};
+use tokio::sync::{mpsc, Mutex, RwLock, Semaphore};
 
 // =============================================================================
 // Core Orchestrator Struct
@@ -51,26 +46,26 @@ pub struct ArbitrageOrchestrator {
     pub hot_cache: Arc<DashMap<Pubkey, Arc<PoolInfo>>>,
     pub config: Arc<Config>,
     pub metrics: Arc<Mutex<Metrics>>,
-    
+
     // Network and communication
     pub rpc_client: Option<Arc<SolanaRpcClient>>,
     pub ws_manager: Option<Arc<Mutex<SolanaWebsocketManager>>>,
-    
+
     // Execution components
     pub executor: Option<Arc<HftExecutor>>,
     pub batch_execution_engine: Option<Arc<BatchExecutor>>,
     pub dex_providers: Vec<Arc<dyn DexClient>>,
-    
+
     // Strategy and analysis
     pub detector: Arc<Mutex<ArbitrageStrategy>>,
     pub advanced_math: Arc<Mutex<AdvancedArbitrageMath>>,
     pub dynamic_threshold_updater: Option<Arc<DynamicThresholdUpdater>>,
     pub price_aggregator: Option<Arc<crate::arbitrage::price_aggregator::PriceAggregator>>,
-    
+
     // Configuration and validation
     pub pool_validation_config: PoolValidationConfig,
     pub banned_pairs_manager: Arc<BannedPairsManager>,
-    
+
     // State management
     pub degradation_mode: Arc<AtomicBool>,
     pub execution_enabled: Arc<AtomicBool>,
@@ -78,25 +73,25 @@ pub struct ArbitrageOrchestrator {
     pub health_check_interval: Duration,
     pub ws_reconnect_attempts: Arc<AtomicU64>,
     pub max_ws_reconnect_attempts: u64,
-    
+
     // Async communication
     pub opportunity_sender: Option<mpsc::UnboundedSender<MultiHopArbOpportunity>>,
-    
+
     // Paper trading components
     pub paper_trading_engine: Option<Arc<SimulatedExecutionEngine>>,
     pub paper_trading_portfolio: Option<Arc<SafeVirtualPortfolio>>,
     pub paper_trading_analytics: Option<Arc<Mutex<PaperTradingAnalytics>>>,
     pub paper_trading_reporter: Option<Arc<PaperTradingReporter>>,
-    
+
     // Balance monitoring
     pub balance_monitor: Option<Arc<BalanceMonitor>>,
-    
+
     // Thread-safe concurrency controls
     pub trading_pairs_locks: Arc<DashMap<(DexType, Pubkey, Pubkey), Arc<Mutex<()>>>>,
     pub execution_semaphore: Arc<Semaphore>,
     pub concurrent_executions: Arc<AtomicUsize>,
     pub max_concurrent_executions: usize,
-    
+
     // Performance optimization system
     pub performance_manager: Option<Arc<PerformanceManager>>,
 }
@@ -129,12 +124,16 @@ impl ArbitrageOrchestrator {
         banned_pairs_manager: Arc<BannedPairsManager>,
     ) -> Self {
         let detector = Arc::new(Mutex::new(ArbitrageStrategy::new_from_config(&config)));
-        let health_check_interval = Duration::from_secs(config.health_check_interval_secs.unwrap_or(60));
+        let health_check_interval =
+            Duration::from_secs(config.health_check_interval_secs.unwrap_or(60));
         let max_ws_reconnect_attempts = config.max_ws_reconnect_attempts.unwrap_or(5) as u64;
-        
+
         // Initialize dynamic threshold updater if configured
         let dynamic_threshold_updater = if config.volatility_tracker_window.is_some() {
-            Some(Arc::new(DynamicThresholdUpdater::new(&config, Arc::clone(&metrics))))
+            Some(Arc::new(DynamicThresholdUpdater::new(
+                &config,
+                Arc::clone(&metrics),
+            )))
         } else {
             None
         };
@@ -150,35 +149,42 @@ impl ArbitrageOrchestrator {
         let (opportunity_sender, _opportunity_receiver) = mpsc::unbounded_channel();
 
         // Initialize paper trading components if enabled
-        let (paper_trading_engine, paper_trading_portfolio, paper_trading_analytics, paper_trading_reporter) = 
-            if config.paper_trading {
-                info!("📄 Paper trading mode ENABLED - initializing simulation components");
-                
-                let paper_config = PaperTradingConfig::default();
-                
-                // Create initial balances for paper trading
-                let mut initial_balances = HashMap::new();
-                let sol_mint = solana_sdk::system_program::id();
-                let usdc_mint = Pubkey::new_unique();
-                initial_balances.insert(sol_mint, 1_000_000_000); // 1 SOL in lamports
-                initial_balances.insert(usdc_mint, 10_000_000_000); // 10000 USDC in micro-units
-                
-                let mut paper_config_with_balances = paper_config.clone();
-                paper_config_with_balances.initial_balances = initial_balances.clone();
-                
-                let portfolio = Arc::new(SafeVirtualPortfolio::new(initial_balances));
-                let analytics = Arc::new(Mutex::new(PaperTradingAnalytics::new()));
-                let reporter = PaperTradingReporter::new("./paper_trading_logs")
-                    .map_err(|e| warn!("Failed to create paper trading reporter: {}", e))
-                    .ok()
-                    .map(Arc::new);
-                let engine = Arc::new(SimulatedExecutionEngine::new(paper_config_with_balances, portfolio.clone()));
-                
-                (Some(engine), Some(portfolio), Some(analytics), reporter)
-            } else {
-                info!("💰 Live trading mode ENABLED");
-                (None, None, None, None)
-            };
+        let (
+            paper_trading_engine,
+            paper_trading_portfolio,
+            paper_trading_analytics,
+            paper_trading_reporter,
+        ) = if config.paper_trading {
+            info!("📄 Paper trading mode ENABLED - initializing simulation components");
+
+            let paper_config = PaperTradingConfig::default();
+
+            // Create initial balances for paper trading
+            let mut initial_balances = HashMap::new();
+            let sol_mint = solana_sdk::system_program::id();
+            let usdc_mint = Pubkey::new_unique();
+            initial_balances.insert(sol_mint, 1_000_000_000); // 1 SOL in lamports
+            initial_balances.insert(usdc_mint, 10_000_000_000); // 10000 USDC in micro-units
+
+            let mut paper_config_with_balances = paper_config.clone();
+            paper_config_with_balances.initial_balances = initial_balances.clone();
+
+            let portfolio = Arc::new(SafeVirtualPortfolio::new(initial_balances));
+            let analytics = Arc::new(Mutex::new(PaperTradingAnalytics::new()));
+            let reporter = PaperTradingReporter::new("./paper_trading_logs")
+                .map_err(|e| warn!("Failed to create paper trading reporter: {}", e))
+                .ok()
+                .map(Arc::new);
+            let engine = Arc::new(SimulatedExecutionEngine::new(
+                paper_config_with_balances,
+                portfolio.clone(),
+            ));
+
+            (Some(engine), Some(portfolio), Some(analytics), reporter)
+        } else {
+            info!("💰 Live trading mode ENABLED");
+            (None, None, None, None)
+        };
 
         // Initialize balance monitor if RPC client is available
         let balance_monitor = if rpc_client.is_some() {
@@ -196,12 +202,20 @@ impl ArbitrageOrchestrator {
         info!("   ⚡ Batch execution: available");
         info!("   📊 Advanced metrics: enabled");
         info!("   🔄 Async execution pipeline: ready");
-        info!("   📄 Paper trading: {}", if config.paper_trading { "enabled" } else { "disabled" });
+        info!(
+            "   📄 Paper trading: {}",
+            if config.paper_trading {
+                "enabled"
+            } else {
+                "disabled"
+            }
+        );
 
         // Initialize price aggregator with Jupiter fallback if enabled
         let price_aggregator = if config.jupiter_fallback_enabled {
             // Find Jupiter client among DEX providers
-            let jupiter_client = dex_providers.iter()
+            let jupiter_client = dex_providers
+                .iter()
                 .find(|_client| _client.get_name().to_lowercase().contains("jupiter"))
                 .and_then(|_client| {
                     // Try to downcast to JupiterClient
@@ -215,7 +229,7 @@ impl ArbitrageOrchestrator {
                 &config,
                 Arc::clone(&metrics),
             );
-            
+
             info!("🪐 Price aggregator with Jupiter fallback: enabled");
             Some(Arc::new(aggregator))
         } else {
@@ -251,7 +265,9 @@ impl ArbitrageOrchestrator {
             paper_trading_reporter,
             balance_monitor,
             trading_pairs_locks: Arc::new(DashMap::new()),
-            execution_semaphore: Arc::new(Semaphore::new(config.max_concurrent_executions.unwrap_or(10))),
+            execution_semaphore: Arc::new(Semaphore::new(
+                config.max_concurrent_executions.unwrap_or(10),
+            )),
             concurrent_executions: Arc::new(AtomicUsize::new(0)),
             max_concurrent_executions: config.max_concurrent_executions.unwrap_or(10),
             performance_manager: None, // Initialize performance manager as None
@@ -262,7 +278,7 @@ impl ArbitrageOrchestrator {
     pub async fn get_status(&self) -> OrchestratorStatus {
         let _metrics = self.metrics.lock().await;
         let last_health_check = *self.last_health_check.read().await;
-        
+
         OrchestratorStatus {
             is_running: !self.degradation_mode.load(Ordering::Relaxed),
             execution_enabled: self.execution_enabled.load(Ordering::Relaxed),
@@ -283,7 +299,10 @@ impl ArbitrageOrchestrator {
     }
 
     /// Execute opportunities with routing - placeholder for compatibility  
-    pub async fn execute_opportunities_with_routing(&self, opportunities: Vec<MultiHopArbOpportunity>) -> Result<Vec<()>, ArbError> {
+    pub async fn execute_opportunities_with_routing(
+        &self,
+        opportunities: Vec<MultiHopArbOpportunity>,
+    ) -> Result<Vec<()>, ArbError> {
         // The execution manager returns Result<(), ArbError>, but we need Result<Vec<()>, ArbError>
         // So we'll create a compatibility wrapper
         let count = opportunities.len();
@@ -293,9 +312,12 @@ impl ArbitrageOrchestrator {
     }
 
     /// Execute arbitrage opportunities - basic implementation
-    pub async fn execute_opportunities(&self, opportunities: Vec<MultiHopArbOpportunity>) -> Result<(), ArbError> {
+    pub async fn execute_opportunities(
+        &self,
+        opportunities: Vec<MultiHopArbOpportunity>,
+    ) -> Result<(), ArbError> {
         info!("🎯 Executing {} opportunities", opportunities.len());
-        
+
         for _opportunity in opportunities {
             // Basic execution logic - placeholder for now
             if self.execution_enabled.load(Ordering::Relaxed) {
@@ -303,10 +325,12 @@ impl ArbitrageOrchestrator {
                 debug!("⚡ Processing opportunity");
             } else {
                 warn!("⏸️ Execution disabled, skipping opportunity");
-                return Err(ArbError::ExecutionDisabled("Execution is disabled".to_string()));
+                return Err(ArbError::ExecutionDisabled(
+                    "Execution is disabled".to_string(),
+                ));
             }
         }
-        
+
         Ok(())
     }
 
@@ -346,7 +370,10 @@ impl ArbitrageOrchestrator {
         detector.get_min_profit_threshold_pct()
     }
 
-    pub async fn resolve_pools_for_opportunity(&self, opp: &MultiHopArbOpportunity) -> Result<(), ArbError> {
+    pub async fn resolve_pools_for_opportunity(
+        &self,
+        opp: &MultiHopArbOpportunity,
+    ) -> Result<(), ArbError> {
         // Use hot_cache or pools_map to check for pool existence
         for pool_addr in &opp.pool_path {
             if !self.hot_cache.contains_key(pool_addr) {
@@ -360,7 +387,12 @@ impl ArbitrageOrchestrator {
         Ok(()) // stub
     }
 
-    pub async fn with_pool_guard_async<F, Fut>(&self, _label: &str, _exclusive: bool, f: F) -> Result<(), ArbError>
+    pub async fn with_pool_guard_async<F, Fut>(
+        &self,
+        _label: &str,
+        _exclusive: bool,
+        f: F,
+    ) -> Result<(), ArbError>
     where
         F: FnOnce(&DashMap<Pubkey, Arc<PoolInfo>>) -> Fut + Send,
         Fut: std::future::Future<Output = Result<(), ArbError>> + Send,
@@ -368,7 +400,10 @@ impl ArbitrageOrchestrator {
         f(&self.hot_cache).await
     }
 
-    pub async fn update_pools(&self, _pools: HashMap<Pubkey, Arc<PoolInfo>>) -> Result<(), ArbError> {
+    pub async fn update_pools(
+        &self,
+        _pools: HashMap<Pubkey, Arc<PoolInfo>>,
+    ) -> Result<(), ArbError> {
         Ok(()) // stub
     }
 
@@ -401,7 +436,9 @@ impl ArbitrageOrchestrator {
                 Ok(quote) => {
                     let aggregated_quote = crate::arbitrage::price_aggregator::AggregatedQuote {
                         quote,
-                        source: crate::arbitrage::price_aggregator::QuoteSource::Primary(client.get_name().to_string()),
+                        source: crate::arbitrage::price_aggregator::QuoteSource::Primary(
+                            client.get_name().to_string(),
+                        ),
                         confidence: 0.8,
                         latency_ms: 0,
                     };
@@ -413,8 +450,10 @@ impl ArbitrageOrchestrator {
                 }
             }
         }
-        
-        Err(ArbError::DexError("No quotes available from any DEX client".to_string()))
+
+        Err(ArbError::DexError(
+            "No quotes available from any DEX client".to_string(),
+        ))
     }
 }
 

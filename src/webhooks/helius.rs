@@ -60,9 +60,9 @@ pub struct TransactionEvent;
 
 /// Types of transactions that can occur
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum TransactionType { 
-    Transfer, 
-    Swap 
+pub enum TransactionType {
+    Transfer,
+    Swap,
 }
 
 /// Source of the transaction
@@ -156,12 +156,15 @@ impl HeliusManager {
     /// Initialize the Helius client (stub implementation)
     pub async fn initialize(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         log::info!("🔌 Initializing Helius SDK (stub implementation)");
-        log::info!("📡 API Key: {}...", &self.config.api_key[..8.min(self.config.api_key.len())]);
+        log::info!(
+            "📡 API Key: {}...",
+            &self.config.api_key[..8.min(self.config.api_key.len())]
+        );
         log::info!("🌐 Cluster: {}", self.config.cluster);
-        
+
         // In a real implementation, this would initialize the actual Helius client
         self.client = Some(Helius);
-        
+
         log::info!("✅ Helius SDK initialized successfully (stub)");
         Ok(())
     }
@@ -173,32 +176,38 @@ impl HeliusManager {
         _webhook_url: String,
     ) -> Result<Webhook, Box<dyn std::error::Error>> {
         log::info!("📋 Creating webhook (stub implementation)");
-        
+
         self.webhook_count += 1;
-        
+
         let webhook = Webhook {
             id: format!("webhook_{}", self.webhook_count),
             url: self.config.webhook_url.clone().unwrap_or_default(),
             webhook_type: "enhanced".to_string(),
         };
-        
+
         log::info!("✅ Webhook created: {} (stub)", webhook.id);
         Ok(webhook)
     }
 
     /// Get account information using enhanced RPC (stub implementation)
-    pub async fn get_account_info(&self, _address: &str) -> Result<Option<String>, Box<dyn std::error::Error>> {
+    pub async fn get_account_info(
+        &self,
+        _address: &str,
+    ) -> Result<Option<String>, Box<dyn std::error::Error>> {
         log::debug!("🔍 Getting account info (stub implementation)");
-        
+
         // In a real implementation, this would use Helius enhanced RPC
         // to get account information with additional metadata
         Ok(Some("stub_account_data".to_string()))
     }
 
     /// Parse transaction for enhanced details (stub implementation)
-    pub async fn parse_transaction(&self, signature: &str) -> Result<EnhancedTransaction, Box<dyn std::error::Error>> {
+    pub async fn parse_transaction(
+        &self,
+        signature: &str,
+    ) -> Result<EnhancedTransaction, Box<dyn std::error::Error>> {
         log::debug!("🔍 Parsing transaction {} (stub implementation)", signature);
-        
+
         // In a real implementation, this would use Helius to get enhanced transaction details
         let enhanced_tx = EnhancedTransaction {
             signature: signature.to_string(),
@@ -216,7 +225,7 @@ impl HeliusManager {
             instructions: vec![],
             events: TransactionEvent,
         };
-        
+
         Ok(enhanced_tx)
     }
 
@@ -227,18 +236,21 @@ impl HeliusManager {
         _limit: Option<usize>,
     ) -> Result<Vec<EnhancedTransaction>, Box<dyn std::error::Error>> {
         log::debug!("📜 Getting transaction history (stub implementation)");
-        
+
         // In a real implementation, this would return enhanced transaction history
         Ok(vec![])
     }
 
     /// Delete a webhook (stub implementation)
-    pub async fn delete_webhook(&mut self, webhook_id: &str) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn delete_webhook(
+        &mut self,
+        webhook_id: &str,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         log::info!("🗑️ Deleting webhook {} (stub implementation)", webhook_id);
-        
+
         // In a real implementation, this would delete the webhook via Helius API
         self.webhook_count = self.webhook_count.saturating_sub(1);
-        
+
         log::info!("✅ Webhook deleted successfully (stub)");
         Ok(())
     }
@@ -268,19 +280,19 @@ pub fn create_config_from_env() -> Result<HeliusConfig, Box<dyn std::error::Erro
     let api_key = std::env::var("HELIUS_API_KEY")
         .or_else(|_| std::env::var("RPC_URL"))
         .map_err(|_| "HELIUS_API_KEY or RPC_URL environment variable not set")?;
-    
+
     let mut config = HeliusConfig::new(api_key);
-    
+
     // Set cluster from environment if available
     if let Ok(cluster) = std::env::var("SOLANA_CLUSTER") {
         config = config.with_cluster(cluster);
     }
-    
+
     // Set webhook URL from environment if available
     if let Ok(webhook_url) = std::env::var("WEBHOOK_URL") {
         config = config.with_webhook_url(webhook_url);
     }
-    
+
     Ok(config)
 }
 
@@ -290,28 +302,28 @@ pub fn parse_transaction_source(program_id: &str) -> Source {
         // Jupiter
         "JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4" => Source::Jupiter,
         "JUP4Fb2cqiRUcaTHdrPC8h2gNsA2ETXiPDD33WcGuJB" => Source::Jupiter,
-        
+
         // Raydium
         "675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8" => Source::Raydium,
         "5quBtoiQqxF9Jv6KYKctB59NT3gtJD2CoMz1fKV5kJNa" => Source::Raydium,
-        
+
         // Orca & Whirlpool
         "9W959DqEETiGZocYWCQPaJ6sBmUzgfxXfqGeTEdp3aQP" => Source::Orca,
         "whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc" => Source::Whirlpool,
-        
+
         // Meteora
         "Eo7WjKq67rjJQSZxS6z3YkapzY3eMj6Xy8X5EQVn5UaB" => Source::Meteora,
         "LBUZKhRxPF3XUpBCjp4YzTKgLccjZhTSDM9YuVaPwxo" => Source::Meteora,
-        
+
         // Lifinity
         "EewxydAPCCVuNEyrVN68PuSYdQ7wKn27V9Gjeoi8dy3S" => Source::Lifinity,
-        
+
         // Phoenix
         "PhoeNiXZ8ByJGLkxNfZRnkUfjvmuYqLR89jjFHGqdXY" => Source::Phoenix,
-        
+
         // Pump.fun
         "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P" => Source::Pump,
-        
+
         _ => Source::Unknown,
     }
 }
@@ -332,15 +344,18 @@ mod tests {
     fn test_helius_config_with_webhook() {
         let config = HeliusConfig::new("test_key".to_string())
             .with_webhook_url("http://localhost:8080/webhook".to_string());
-        
-        assert_eq!(config.webhook_url, Some("http://localhost:8080/webhook".to_string()));
+
+        assert_eq!(
+            config.webhook_url,
+            Some("http://localhost:8080/webhook".to_string())
+        );
     }
 
     #[tokio::test]
     async fn test_helius_manager_creation() {
         let config = HeliusConfig::new("test_key".to_string());
         let manager = HeliusManager::new(config);
-        
+
         assert!(!manager.is_initialized());
         assert_eq!(manager.webhook_count(), 0);
     }
@@ -349,7 +364,7 @@ mod tests {
     async fn test_helius_manager_initialization() {
         let config = HeliusConfig::new("test_key".to_string());
         let mut manager = HeliusManager::new(config);
-        
+
         let result = manager.initialize().await;
         assert!(result.is_ok());
         assert!(manager.is_initialized());
@@ -357,9 +372,21 @@ mod tests {
 
     #[test]
     fn test_parse_transaction_source() {
-        assert!(matches!(parse_transaction_source("JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4"), Source::Jupiter));
-        assert!(matches!(parse_transaction_source("675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8"), Source::Raydium));
-        assert!(matches!(parse_transaction_source("9W959DqEETiGZocYWCQPaJ6sBmUzgfxXfqGeTEdp3aQP"), Source::Orca));
-        assert!(matches!(parse_transaction_source("unknown_program"), Source::Unknown));
+        assert!(matches!(
+            parse_transaction_source("JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4"),
+            Source::Jupiter
+        ));
+        assert!(matches!(
+            parse_transaction_source("675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8"),
+            Source::Raydium
+        ));
+        assert!(matches!(
+            parse_transaction_source("9W959DqEETiGZocYWCQPaJ6sBmUzgfxXfqGeTEdp3aQP"),
+            Source::Orca
+        ));
+        assert!(matches!(
+            parse_transaction_source("unknown_program"),
+            Source::Unknown
+        ));
     }
 }

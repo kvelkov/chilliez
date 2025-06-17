@@ -107,12 +107,12 @@ impl QuickNodeEvent {
     /// Extract DEX swap events from QuickNode webhook data
     pub fn extract_dex_swaps(&self) -> Vec<DexSwapEvent> {
         let mut swaps = Vec::new();
-        
+
         // DEX program IDs to monitor
         let dex_programs = [
             "9xQeWvG816bUx9EPjHmaT23yvVM2ZWbrrpZb9PusVFin", // Orca
             "675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8", // Raydium
-            "whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc", // Whirlpool
+            "whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc",  // Whirlpool
             "Eo7WjKq67rjJQSZxS6z3YkapzY3eMj6Xy8X5EQVn5UaB", // Meteora
             "CAMMCzo5YL8w4VFF8KVHrK22GGUsp5VTaW7grrKgrWqK", // Raydium CLMM
         ];
@@ -132,16 +132,12 @@ impl QuickNodeEvent {
                         let program_id_index = instruction.program_id_index as usize;
                         if program_id_index < tx_data.message.account_keys.len() {
                             let program_id = &tx_data.message.account_keys[program_id_index];
-                            
+
                             if dex_programs.contains(&program_id.as_str()) {
                                 // Extract swap data
-                                if let Some(swap) = self.parse_dex_swap(
-                                    block,
-                                    tx,
-                                    tx_data,
-                                    program_id,
-                                    instruction
-                                ) {
+                                if let Some(swap) =
+                                    self.parse_dex_swap(block, tx, tx_data, program_id, instruction)
+                                {
                                     swaps.push(swap);
                                 }
                             }
@@ -191,7 +187,7 @@ impl QuickNodeEvent {
         // Simplified token amount calculation
         // In a real implementation, you'd parse the instruction data and log messages
         // to get exact token amounts
-        
+
         let mut token_a_before = 0;
         let mut token_a_after = 0;
         let mut token_b_before = 0;
@@ -231,7 +227,8 @@ impl DexSwapEvent {
 
     /// Check if this swap represents a significant price movement
     pub fn is_significant_price_change(&self, threshold_bps: u64) -> bool {
-        let token_a_change = if self.token_amounts.token_a_after > self.token_amounts.token_a_before {
+        let token_a_change = if self.token_amounts.token_a_after > self.token_amounts.token_a_before
+        {
             self.token_amounts.token_a_after - self.token_amounts.token_a_before
         } else {
             self.token_amounts.token_a_before - self.token_amounts.token_a_after

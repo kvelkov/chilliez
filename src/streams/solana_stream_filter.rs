@@ -2,12 +2,12 @@
 //! Solana Stream Filter for QuickNode Streams
 //! Filters transactions and account changes for arbitrage opportunities
 
+use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use solana_sdk::pubkey::Pubkey;
 use std::collections::HashSet;
 use std::str::FromStr;
-use anyhow::Result;
 
 /// Known DEX program IDs to monitor
 pub const DEX_PROGRAMS: &[&str] = &[
@@ -20,7 +20,7 @@ pub const DEX_PROGRAMS: &[&str] = &[
 
 /// Important token mints to monitor
 pub const MONITORED_TOKENS: &[&str] = &[
-    "So11111111111111111111111111111111111111112", // SOL
+    "So11111111111111111111111111111111111111112",  // SOL
     "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", // USDC
     "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB", // USDT
     "mSoLzYCxHdYgdzU16g5QSh3i5K3z3KZK7ytfqcJm7So",  // mSOL
@@ -181,9 +181,10 @@ impl SolanaStreamFilter {
         }
 
         // Check if we have any matches
-        if matching_transactions.is_empty() 
-            && matching_account_changes.is_empty() 
-            && matching_instructions.is_empty() {
+        if matching_transactions.is_empty()
+            && matching_account_changes.is_empty()
+            && matching_instructions.is_empty()
+        {
             return Ok(None);
         }
 
@@ -229,7 +230,9 @@ impl SolanaStreamFilter {
                             ""
                         };
 
-                        if !account_str.is_empty() && self.watched_addresses.contains(&account_str.to_lowercase()) {
+                        if !account_str.is_empty()
+                            && self.watched_addresses.contains(&account_str.to_lowercase())
+                        {
                             matches = true;
                             if self.dex_programs.contains(&account_str.to_lowercase()) {
                                 is_dex_interaction = true;
@@ -244,9 +247,15 @@ impl SolanaStreamFilter {
                 // Check instructions
                 if let Some(instructions) = message.get("instructions").and_then(|v| v.as_array()) {
                     for (index, instruction) in instructions.iter().enumerate() {
-                        if let Some(program_id_index) = instruction.get("programIdIndex").and_then(|v| v.as_u64()) {
-                            if let Some(account_keys) = message.get("accountKeys").and_then(|v| v.as_array()) {
-                                if let Some(program_account) = account_keys.get(program_id_index as usize) {
+                        if let Some(program_id_index) =
+                            instruction.get("programIdIndex").and_then(|v| v.as_u64())
+                        {
+                            if let Some(account_keys) =
+                                message.get("accountKeys").and_then(|v| v.as_array())
+                            {
+                                if let Some(program_account) =
+                                    account_keys.get(program_id_index as usize)
+                                {
                                     let program_id = if let Some(s) = program_account.as_str() {
                                         s
                                     } else if let Some(obj) = program_account.as_object() {
@@ -255,24 +264,36 @@ impl SolanaStreamFilter {
                                         ""
                                     };
 
-                                    if !program_id.is_empty() && self.dex_programs.contains(&program_id.to_lowercase()) {
+                                    if !program_id.is_empty()
+                                        && self.dex_programs.contains(&program_id.to_lowercase())
+                                    {
                                         matches = true;
                                         is_dex_interaction = true;
 
                                         matching_instructions.push(InstructionMatch {
                                             index: index.to_string(),
                                             program_id: program_id.to_string(),
-                                            accounts: instruction.get("accounts").and_then(|v| v.as_array()).map(|arr| {
-                                                arr.iter().filter_map(|v| v.as_u64().map(|n| n as u8)).collect()
-                                            }),
-                                            data: instruction.get("data").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                                            accounts: instruction
+                                                .get("accounts")
+                                                .and_then(|v| v.as_array())
+                                                .map(|arr| {
+                                                    arr.iter()
+                                                        .filter_map(|v| v.as_u64().map(|n| n as u8))
+                                                        .collect()
+                                                }),
+                                            data: instruction
+                                                .get("data")
+                                                .and_then(|v| v.as_str())
+                                                .map(|s| s.to_string()),
                                             is_inner: false,
-                                            transaction_signature: tx_data.get("signatures")
+                                            transaction_signature: tx_data
+                                                .get("signatures")
                                                 .and_then(|v| v.as_array())
                                                 .and_then(|arr| arr.get(0))
                                                 .and_then(|v| v.as_str())
                                                 .map(|s| s.to_string()),
-                                            instruction_type: self.identify_instruction_type(program_id, instruction),
+                                            instruction_type: self
+                                                .identify_instruction_type(program_id, instruction),
                                         });
                                     }
                                 }
@@ -284,42 +305,85 @@ impl SolanaStreamFilter {
 
             // Check meta for inner instructions
             if let Some(meta) = transaction.get("meta") {
-                if let Some(inner_instructions) = meta.get("innerInstructions").and_then(|v| v.as_array()) {
+                if let Some(inner_instructions) =
+                    meta.get("innerInstructions").and_then(|v| v.as_array())
+                {
                     for inner_group in inner_instructions {
-                        if let Some(group_index) = inner_group.get("index").and_then(|v| v.as_u64()) {
-                            if let Some(instructions) = inner_group.get("instructions").and_then(|v| v.as_array()) {
+                        if let Some(group_index) = inner_group.get("index").and_then(|v| v.as_u64())
+                        {
+                            if let Some(instructions) =
+                                inner_group.get("instructions").and_then(|v| v.as_array())
+                            {
                                 for (inner_index, instruction) in instructions.iter().enumerate() {
-                                    if let Some(program_id_index) = instruction.get("programIdIndex").and_then(|v| v.as_u64()) {
+                                    if let Some(program_id_index) =
+                                        instruction.get("programIdIndex").and_then(|v| v.as_u64())
+                                    {
                                         if let Some(message) = tx_data.get("message") {
-                                            if let Some(account_keys) = message.get("accountKeys").and_then(|v| v.as_array()) {
-                                                if let Some(program_account) = account_keys.get(program_id_index as usize) {
-                                                    let program_id = if let Some(s) = program_account.as_str() {
-                                                        s
-                                                    } else if let Some(obj) = program_account.as_object() {
-                                                        obj.get("pubkey").and_then(|v| v.as_str()).unwrap_or("")
-                                                    } else {
-                                                        ""
-                                                    };
+                                            if let Some(account_keys) = message
+                                                .get("accountKeys")
+                                                .and_then(|v| v.as_array())
+                                            {
+                                                if let Some(program_account) =
+                                                    account_keys.get(program_id_index as usize)
+                                                {
+                                                    let program_id =
+                                                        if let Some(s) = program_account.as_str() {
+                                                            s
+                                                        } else if let Some(obj) =
+                                                            program_account.as_object()
+                                                        {
+                                                            obj.get("pubkey")
+                                                                .and_then(|v| v.as_str())
+                                                                .unwrap_or("")
+                                                        } else {
+                                                            ""
+                                                        };
 
-                                                    if !program_id.is_empty() && self.dex_programs.contains(&program_id.to_lowercase()) {
+                                                    if !program_id.is_empty()
+                                                        && self
+                                                            .dex_programs
+                                                            .contains(&program_id.to_lowercase())
+                                                    {
                                                         matches = true;
                                                         is_dex_interaction = true;
 
-                                                        matching_instructions.push(InstructionMatch {
-                                                            index: format!("inner_{}_{}", group_index, inner_index),
-                                                            program_id: program_id.to_string(),
-                                                            accounts: instruction.get("accounts").and_then(|v| v.as_array()).map(|arr| {
-                                                                arr.iter().filter_map(|v| v.as_u64().map(|n| n as u8)).collect()
-                                                            }),
-                                                            data: instruction.get("data").and_then(|v| v.as_str()).map(|s| s.to_string()),
-                                                            is_inner: true,
-                                                            transaction_signature: tx_data.get("signatures")
-                                                                .and_then(|v| v.as_array())
-                                                                .and_then(|arr| arr.get(0))
-                                                                .and_then(|v| v.as_str())
-                                                                .map(|s| s.to_string()),
-                                                            instruction_type: self.identify_instruction_type(program_id, instruction),
-                                                        });
+                                                        matching_instructions.push(
+                                                            InstructionMatch {
+                                                                index: format!(
+                                                                    "inner_{}_{}",
+                                                                    group_index, inner_index
+                                                                ),
+                                                                program_id: program_id.to_string(),
+                                                                accounts: instruction
+                                                                    .get("accounts")
+                                                                    .and_then(|v| v.as_array())
+                                                                    .map(|arr| {
+                                                                        arr.iter()
+                                                                            .filter_map(|v| {
+                                                                                v.as_u64().map(
+                                                                                    |n| n as u8,
+                                                                                )
+                                                                            })
+                                                                            .collect()
+                                                                    }),
+                                                                data: instruction
+                                                                    .get("data")
+                                                                    .and_then(|v| v.as_str())
+                                                                    .map(|s| s.to_string()),
+                                                                is_inner: true,
+                                                                transaction_signature: tx_data
+                                                                    .get("signatures")
+                                                                    .and_then(|v| v.as_array())
+                                                                    .and_then(|arr| arr.get(0))
+                                                                    .and_then(|v| v.as_str())
+                                                                    .map(|s| s.to_string()),
+                                                                instruction_type: self
+                                                                    .identify_instruction_type(
+                                                                        program_id,
+                                                                        instruction,
+                                                                    ),
+                                                            },
+                                                        );
                                                     }
                                                 }
                                             }
@@ -332,7 +396,8 @@ impl SolanaStreamFilter {
                 }
 
                 // Check token balances
-                if let Some(pre_balances) = meta.get("preTokenBalances").and_then(|v| v.as_array()) {
+                if let Some(pre_balances) = meta.get("preTokenBalances").and_then(|v| v.as_array())
+                {
                     for balance in pre_balances {
                         if let Some(mint) = balance.get("mint").and_then(|v| v.as_str()) {
                             if self.monitored_tokens.contains(&mint.to_lowercase()) {
@@ -343,7 +408,9 @@ impl SolanaStreamFilter {
                     }
                 }
 
-                if let Some(post_balances) = meta.get("postTokenBalances").and_then(|v| v.as_array()) {
+                if let Some(post_balances) =
+                    meta.get("postTokenBalances").and_then(|v| v.as_array())
+                {
                     for balance in post_balances {
                         if let Some(mint) = balance.get("mint").and_then(|v| v.as_str()) {
                             if self.monitored_tokens.contains(&mint.to_lowercase()) {
@@ -436,15 +503,17 @@ mod tests {
     fn test_add_watched_address() {
         let mut filter = SolanaStreamFilter::new();
         let test_address = "11111111111111111111111111111111";
-        
+
         assert!(filter.add_watched_address(test_address).is_ok());
-        assert!(filter.watched_addresses.contains(&test_address.to_lowercase()));
+        assert!(filter
+            .watched_addresses
+            .contains(&test_address.to_lowercase()));
     }
 
     #[test]
     fn test_filter_dex_transaction() {
         let filter = SolanaStreamFilter::new();
-        
+
         let mock_transaction = json!({
             "transaction": {
                 "message": {
@@ -470,7 +539,7 @@ mod tests {
 
         let result = filter.filter_stream(stream_data).unwrap();
         assert!(result.is_some());
-        
+
         let filtered = result.unwrap();
         assert_eq!(filtered.matching_transactions.len(), 1);
         assert_eq!(filtered.metadata.dex_interactions, 1);

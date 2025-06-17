@@ -23,6 +23,9 @@ async fn main() -> Result<()> {
 
     info!("🔄 Balance Monitor Upgrade: From Polling to Event-Driven Demo");
 
+    // Display upgrade benefits overview
+    display_upgrade_benefits();
+
     // Demo the upgrade path from polling to event-driven
     demo_upgrade_path().await?;
 

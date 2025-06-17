@@ -316,6 +316,38 @@
                         <span class="dex-logo">🎯 Aldrin</span>
                         <div class="toggle-switch" onclick="toggleDex('aldrin')"></div>
                     </div>
+                    <div class="dex-item" data-dex="saber">
+                        <span class="dex-logo">⚔️ Saber</span>
+                        <div class="toggle-switch" onclick="toggleDex('saber')"></div>
+                    </div>
+                    <div class="dex-item" data-dex="serum">
+                        <span class="dex-logo">📊 Serum</span>
+                        <div class="toggle-switch" onclick="toggleDex('serum')"></div>
+                    </div>
+                    <div class="dex-item" data-dex="openbook">
+                        <span class="dex-logo">📖 OpenBook</span>
+                        <div class="toggle-switch" onclick="toggleDex('openbook')"></div>
+                    </div>
+                    <div class="dex-item" data-dex="whirlpool">
+                        <span class="dex-logo">🌀 Whirlpool</span>
+                        <div class="toggle-switch" onclick="toggleDex('whirlpool')"></div>
+                    </div>
+                    <div class="dex-item" data-dex="stepn">
+                        <span class="dex-logo">👟 StepN</span>
+                        <div class="toggle-switch" onclick="toggleDex('stepn')"></div>
+                    </div>
+                    <div class="dex-item" data-dex="cropper">
+                        <span class="dex-logo">🌾 Cropper</span>
+                        <div class="toggle-switch" onclick="toggleDex('cropper')"></div>
+                    </div>
+                    <div class="dex-item" data-dex="marinade">
+                        <span class="dex-logo">🥩 Marinade</span>
+                        <div class="toggle-switch" onclick="toggleDex('marinade')"></div>
+                    </div>
+                    <div class="dex-item" data-dex="mercurial">
+                        <span class="dex-logo">☿️ Mercurial</span>
+                        <div class="toggle-switch" onclick="toggleDex('mercurial')"></div>
+                    </div>
                 </div>
             </div>
 
@@ -329,10 +361,10 @@
                 <div class="slider-container">
                     <div class="slider-label">
                         <span>Profit Threshold</span>
-                        <span class="value-display" id="profitValue">€5.0</span>
+                        <span class="value-display" id="profitValue">€0.20</span>
                     </div>
-                    <input type="range" min="1" max="10" value="5" class="slider" id="profitSlider" oninput="updateProfit(this.value)">
-                    <small style="color: #666;">1 = €1 minimum | 10 = €50 minimum</small>
+                    <input type="range" min="1" max="100" value="20" class="slider" id="profitSlider" oninput="updateProfit(this.value)">
+                    <small style="color: #666;">1 = €0.10 minimum | 100 = €10.00 minimum</small>
                 </div>
 
                 <div class="slider-container">
@@ -441,7 +473,7 @@
             <h3>📋 Generated Configuration</h3>
             <pre id="configOutput">{
   "dexClients": ["orca"],
-  "profitThreshold": 5.0,
+  "profitThreshold": 0.20,
   "speedRate": 3,
   "tradingMode": "paper",
   "aggressiveMode": false
@@ -453,7 +485,7 @@
         // Configuration state
         let config = {
             dexClients: ['orca'],
-            profitThreshold: 5.0,
+            profitThreshold: 0.20,
             speedRate: 3,
             tradeSize: 20,
             walletBalance: 38.0,
@@ -487,9 +519,9 @@
 
         // Slider Update Functions
         function updateProfit(value) {
-            const profit = value * 5; // 1-10 -> €5-€50
+            const profit = value * 0.1; // 1-100 -> €0.10-€10.00
             config.profitThreshold = profit;
-            document.getElementById('profitValue').textContent = `€${profit}.0`;
+            document.getElementById('profitValue').textContent = `€${profit.toFixed(2)}`;
             updateConfigDisplay();
         }
 

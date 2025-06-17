@@ -1,0 +1,17 @@
+{
+  "dexClients": [
+    "orca",
+    "jupiter",
+    "meteora"
+  ],
+  "profitThreshold": 5,
+  "speedRate": 4,
+  "tradeSize": 18,
+  "walletBalance": 38,
+  "riskLevel": 4,
+  "slippageTolerance": 1.2,
+  "executionMode": "paper",
+  "aggressiveMode": false,
+  "autoExecute": true,
+  "maxConcurrentTrades": 4
+}

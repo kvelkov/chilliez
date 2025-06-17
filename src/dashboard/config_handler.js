@@ -5,7 +5,7 @@ class DashboardConfigHandler {
   constructor() {
     this.defaultConfig = {
       dexClients: ['orca'],
-      profitThreshold: 5.0,
+      profitThreshold: 0.20,
       speedRate: 3,
       tradeSize: 20,
       walletBalance: 38.0,
@@ -28,7 +28,15 @@ class DashboardConfigHandler {
         raydium: dashboardConfig.dexClients.includes('raydium'),
         lifinity: dashboardConfig.dexClients.includes('lifinity'),
         meteora: dashboardConfig.dexClients.includes('meteora'),
-        aldrin: dashboardConfig.dexClients.includes('aldrin')
+        aldrin: dashboardConfig.dexClients.includes('aldrin'),
+        saber: dashboardConfig.dexClients.includes('saber'),
+        serum: dashboardConfig.dexClients.includes('serum'),
+        openbook: dashboardConfig.dexClients.includes('openbook'),
+        whirlpool: dashboardConfig.dexClients.includes('whirlpool'),
+        stepn: dashboardConfig.dexClients.includes('stepn'),
+        cropper: dashboardConfig.dexClients.includes('cropper'),
+        marinade: dashboardConfig.dexClients.includes('marinade'),
+        mercurial: dashboardConfig.dexClients.includes('mercurial')
       },
 
       // Trading Parameters (converted from dashboard values)
@@ -219,8 +227,8 @@ class DashboardConfigHandler {
       errors.push('Wallet balance must be at least 1 SOL');
     }
 
-    if (dashboardConfig.profitThreshold < 1 || dashboardConfig.profitThreshold > 10) {
-      errors.push('Profit threshold must be between 1-10');
+    if (dashboardConfig.profitThreshold < 0.1 || dashboardConfig.profitThreshold > 10) {
+      errors.push('Profit threshold must be between €0.10-€10.00');
     }
 
     // Check warnings

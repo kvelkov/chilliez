@@ -13,9 +13,6 @@ use solana_sdk::{
 use std::time::{Duration, Instant};
 use std::collections::VecDeque;
 use log::{info, warn, debug};
-use crate::error::ArbError;
-
-type Result<T> = std::result::Result<T, ArbError>;
 
 /// Configuration for the wallet pool
 #[derive(Debug, Clone)]

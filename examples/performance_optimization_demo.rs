@@ -14,12 +14,7 @@ use tokio::time::sleep;
 use log::{info, warn};
 
 use solana_arb_bot::{
-    PerformanceManager, PerformanceConfig, ParallelExecutor,
-    CacheManager, MetricsCollector, BenchmarkRunner,
-    arbitrage::routing::{SmartRouter, SmartRouterConfig, RouteRequest, RoutingPriority},
-    arbitrage::routing::RoutingGraph,
-    arbitrage::analysis::fee::FeeEstimator,
-    config::Config,
+    PerformanceManager, PerformanceConfig,
 };
 
 #[tokio::main]
@@ -308,7 +303,7 @@ async fn main() -> Result<()> {
     // === PART 8: FINAL METRICS SUMMARY ===
     info!("\n📊 === FINAL PERFORMANCE SUMMARY ===");
     
-    let final_report = performance_manager.get_performance_report().await;
+    let _final_report = performance_manager.get_performance_report().await;
     let metrics_summary = {
         let collector = metrics_collector.read().await;
         collector.get_summary()

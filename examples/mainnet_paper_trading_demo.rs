@@ -55,13 +55,13 @@ async fn main() -> Result<()> {
     
     // Initialize enhanced error handling
     info!("🛡️ Initializing enhanced error handling...");
-    let mut helius_handler = EnhancedApiErrorHandler::new("helius".to_string());
-    let mut raydium_handler = EnhancedApiErrorHandler::new("raydium".to_string());
-    let mut orca_handler = EnhancedApiErrorHandler::new("orca".to_string());
-    let mut jupiter_handler = EnhancedApiErrorHandler::new("jupiter".to_string());
+    let _helius_handler = EnhancedApiErrorHandler::new("helius".to_string());
+    let _raydium_handler = EnhancedApiErrorHandler::new("raydium".to_string());
+    let _orca_handler = EnhancedApiErrorHandler::new("orca".to_string());
+    let _jupiter_handler = EnhancedApiErrorHandler::new("jupiter".to_string());
     
     // Create retry executors
-    let mut helius_executor = EnhancedRetryExecutor::new("helius".to_string(), 3);
+    let _helius_executor = EnhancedRetryExecutor::new("helius".to_string(), 3);
     let mut raydium_executor = EnhancedRetryExecutor::new("raydium".to_string(), 3);
     let mut orca_executor = EnhancedRetryExecutor::new("orca".to_string(), 3);
     let mut jupiter_executor = EnhancedRetryExecutor::new("jupiter".to_string(), 3);
@@ -180,7 +180,7 @@ async fn main() -> Result<()> {
     
     // Initialize paper trading portfolio
     let portfolio = SafeVirtualPortfolio::from_config(&config).await?;
-    let engine = SimulatedExecutionEngine::new(config.clone(), portfolio.clone());
+    let _engine = SimulatedExecutionEngine::new(config.clone(), portfolio.clone());
     
     info!("✅ Paper trading engine initialized with {} SOL starting balance", 
           config.default_sol_balance as f64 / 1_000_000_000.0);

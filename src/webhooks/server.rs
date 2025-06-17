@@ -10,10 +10,12 @@ use crate::webhooks::types::{HeliusWebhookNotification, DexPrograms};
 use crate::webhooks::processor::PoolUpdateProcessor;
 use crate::webhooks::integration::{PoolEvent, PoolEventType};
 use crate::webhooks::helius_sdk_stub::EnhancedTransaction;
+// Temporarily disabled QuickNode integration while fixing imports
+// use crate::streams::quicknode::{QuickNodeEvent, DexSwapEvent};
 use axum::{
     extract::{Path, State},
-    http::StatusCode,
-    response::Json,
+    http::{StatusCode, HeaderMap},
+    response::{Json, IntoResponse},
     routing::{get, post},
     Router,
 };
@@ -27,6 +29,66 @@ use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
 use tokio::sync::{mpsc, RwLock};
+
+// ================================================================================================
+// AUTHENTICATION UTILITIES
+// ================================================================================================
+
+/// Validate webhook authentication using password header
+fn validate_webhook_auth(headers: &HeaderMap) -> Result<(), StatusCode> {
+    // Get expected password from environment
+    let expected_password = match std::env::var("WEBHOOK_AUTH_PASSWORD") {
+        Ok(password) => password,
+        Err(_) => {
+            warn!("⚠️ WEBHOOK_AUTH_PASSWORD not set - allowing all requests (insecure)");
+            return Ok(());
+        }
+    };
+
+    // Check authHeader (Helius specific header format)
+    if let Some(auth_header) = headers.get("authheader") {
+        if let Ok(auth_value) = auth_header.to_str() {
+            if auth_value == expected_password {
+                debug!("✅ Webhook authenticated via authHeader");
+                return Ok(());
+            }
+        }
+    }
+
+    // Check Authorization header (standard format)
+    if let Some(auth_header) = headers.get("authorization") {
+        if let Ok(auth_value) = auth_header.to_str() {
+            // Support Bearer token format: "Bearer heligo567"
+            if let Some(token) = auth_value.strip_prefix("Bearer ") {
+                if token == expected_password {
+                    debug!("✅ Webhook authenticated via Authorization Bearer");
+                    return Ok(());
+                }
+            }
+            // Support direct password format
+            if auth_value == expected_password {
+                debug!("✅ Webhook authenticated via Authorization");
+                return Ok(());
+            }
+        }
+    }
+
+    // Check X-Webhook-Password header (alternative)
+    if let Some(password_header) = headers.get("x-webhook-password") {
+        if let Ok(password_value) = password_header.to_str() {
+            if password_value == expected_password {
+                debug!("✅ Webhook authenticated via X-Webhook-Password");
+                return Ok(());
+            }
+        }
+    }
+
+    // Log available headers for debugging
+    debug!("🔍 Available headers: {:?}", headers.keys().collect::<Vec<_>>());
+
+    error!("❌ Webhook authentication failed - invalid or missing credentials");
+    Err(StatusCode::UNAUTHORIZED)
+}
 
 // ================================================================================================
 // BASIC WEBHOOK SERVER
@@ -85,13 +147,20 @@ impl WebhookServer {
     }
 }
 
-/// Main webhook handler for Helius notifications
+/// Main webhook handler for Helius notifications with authentication
 async fn handle_webhook(
+    headers: HeaderMap,
     State(state): State<WebhookState>,
     Json(payload): Json<Value>,
 ) -> Result<Json<Value>, StatusCode> {
+    // Validate authentication
+    if let Err(status) = validate_webhook_auth(&headers) {
+        warn!("❌ Webhook authentication failed");
+        return Err(status);
+    }
+
     // Log the incoming webhook for debugging
-    info!("📡 Received webhook notification");
+    info!("📡 Received authenticated webhook notification");
 
     // Parse the Helius notification
     let notification: HeliusWebhookNotification = match serde_json::from_value(payload.clone()) {
@@ -239,11 +308,18 @@ impl EnhancedWebhookServer {
     }
 }
 
-/// Enhanced webhook handler
+/// Enhanced webhook handler with authentication
 async fn handle_enhanced_webhook(
+    headers: HeaderMap,
     State(state): State<EnhancedServerState>,
     Json(payload): Json<HeliusWebhookPayload>,
 ) -> Result<Json<Value>, StatusCode> {
+    // Validate authentication
+    if let Err(status) = validate_webhook_auth(&headers) {
+        warn!("❌ Enhanced webhook authentication failed");
+        return Err(status);
+    }
+
     let mut stats = state.stats.write().await;
     stats.total_requests += 1;
     stats.last_request_time = Some(std::time::Instant::now());
@@ -275,11 +351,12 @@ async fn handle_enhanced_webhook(
 /// Enhanced webhook handler with ID
 async fn handle_enhanced_webhook_with_id(
     Path(id): Path<String>,
+    headers: HeaderMap,
     State(state): State<EnhancedServerState>,
     Json(payload): Json<HeliusWebhookPayload>,
 ) -> Result<Json<Value>, StatusCode> {
     info!("📡 Enhanced webhook received with ID {}: {}", id, payload.signature);
-    handle_enhanced_webhook(State(state), Json(payload)).await
+    handle_enhanced_webhook(headers, State(state), Json(payload)).await
 }
 
 /// Enhanced health check
@@ -557,4 +634,21 @@ mod tests {
         assert_eq!(manager.api_key, "test_api_key");
         assert_eq!(manager.webhook_endpoint, "http://localhost:8080/webhook");
     }
+}
+
+/// QuickNode webhook handler
+async fn handle_quicknode_simple(
+    Json(payload): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    info!("📡 Received QuickNode webhook");
+    debug!("QuickNode payload: {}", payload);
+    (StatusCode::OK, "OK")
+}
+
+/// Update the router to include QuickNode endpoint
+pub fn create_webhook_router() -> Router<WebhookState> {
+    Router::new()
+        .route("/webhook", post(handle_webhook)) // Existing Helius webhook
+        .route("/quicknode", post(handle_quicknode_simple)) // New QuickNode webhook
+        .route("/health", get(health_check))
 }

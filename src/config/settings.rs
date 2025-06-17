@@ -91,6 +91,12 @@ impl Config {
 
     pub fn from_env() -> Self {
         dotenv::dotenv().ok();
+        Self::from_env_without_loading()
+    }
+
+    /// Create Config from environment variables without loading .env file
+    /// This allows external control of which environment file to load
+    pub fn from_env_without_loading() -> Self {
         Config {
             rpc_url: env::var("RPC_URL").expect("RPC_URL must be set"),
             rpc_url_secondary: env::var("RPC_URL_SECONDARY").ok(),
@@ -255,67 +261,114 @@ impl Config {
     }
 
     pub fn validate_and_log(&self) {
-        log::info!("Application Configuration Loaded: {:?}", self);
-        if self.rpc_url.is_empty() {
-            log::error!("CRITICAL: RPC_URL environment variable is not set or empty.");
-        }
-        if self.rpc_url_secondary.is_some() {
-            log::info!("Secondary RPC URL (RPC_URL_SECONDARY) is configured.");
+        log::info!("╔════════════════════════════════════════════════════════════════════════════╗");
+        log::info!("║                      🤖 SOLANA ARBITRAGE BOT CONFIGURATION                   ║");
+        log::info!("╚════════════════════════════════════════════════════════════════════════════╝");
+        
+        // Trading Mode
+        if self.paper_trading {
+            log::info!("🎯 TRADING MODE: 📄 Paper Trading (Virtual Funds)");
         } else {
-            log::info!("Secondary RPC URL (RPC_URL_SECONDARY) is not configured. Only primary RPC will be used.");
+            log::info!("🎯 TRADING MODE: 💰 Real Trading (Live Funds)");
         }
-        if self.trader_wallet_keypair_path.as_ref().map_or(true, |s| s.is_empty()) {
-            if !self.paper_trading {
-                log::error!("CRITICAL: TRADER_WALLET_KEYPAIR_PATH environment variable is not set or empty.");
+        
+        // Connection Configuration
+        log::info!("🌐 NETWORK CONFIGURATION:");
+        log::info!("   • Primary RPC: {}", self.rpc_url);
+        if let Some(secondary) = &self.rpc_url_secondary {
+            log::info!("   • Secondary RPC: {}", secondary);
+        } else {
+            log::info!("   • Secondary RPC: Not configured");
+        }
+        log::info!("   • WebSocket: {}", self.ws_url);
+        
+        // Wallet Configuration
+        log::info!("💼 WALLET CONFIGURATION:");
+        if let Some(wallet_path) = &self.trader_wallet_keypair_path {
+            if !wallet_path.is_empty() {
+                log::info!("   • Trader Wallet: ✅ Configured ({})", wallet_path);
             } else {
-                log::info!("📄 Paper trading mode: Wallet not required (using virtual funds).");
+                if self.paper_trading {
+                    log::info!("   • Trader Wallet: ➖ Not required (Paper Trading)");
+                } else {
+                    log::error!("   • Trader Wallet: ❌ MISSING - Required for real trading!");
+                }
+            }
+        } else {
+            if self.paper_trading {
+                log::info!("   • Trader Wallet: ➖ Not required (Paper Trading)");
+            } else {
+                log::error!("   • Trader Wallet: ❌ MISSING - Required for real trading!");
             }
         }
-        if self.min_profit_pct <= 0.0 || self.min_profit_pct >= 1.0 {
-            log::warn!("MIN_PROFIT_PCT ({}) is outside the typical range (0.0 to 1.0, exclusive of 0). Ensure it's a fraction (e.g., 0.001 for 0.1%).", self.min_profit_pct);
+        
+        // Trading Parameters
+        log::info!("📊 TRADING PARAMETERS:");
+        log::info!("   • Min Profit Threshold: {:.4}% ({:.1} bps)", 
+                  self.min_profit_pct * 100.0, self.min_profit_pct * 10000.0);
+        if let Some(usd_threshold) = self.min_profit_usd_threshold {
+            log::info!("   • Min Profit (USD): ${:.4}", usd_threshold);
         }
-        if self.enable_fixed_input_arb_detection && self.fixed_input_arb_amount.is_none() {
-            log::warn!("ENABLE_FIXED_INPUT_ARB_DETECTION is true but FIXED_INPUT_ARB_AMOUNT is not set.");
-        }
-        if self.transaction_priority_fee_lamports > 0 {
-            log::info!("Transaction priority fee lamports set to: {}", self.transaction_priority_fee_lamports);
-        } else {
-            log::warn!("TRANSACTION_PRIORITY_FEE_LAMPORTS is set to 0. This might lead to slow transaction processing.");
-        }
-        log::info!("Pool refresh interval set to: {} seconds.", self.pool_refresh_interval_secs);
-        if let Some(level) = &self.log_level {
-            log::info!("Log level configured to: {}", level);
-        }
-        if let Some(factor) = self.volatility_threshold_factor {
-            log::info!("Volatility threshold factor set to: {}", factor);
-        }
-        if let Some(fee) = self.max_tx_fee_lamports_for_acceptance {
-            log::info!("Max transaction fee for acceptance (lamports) set to: {}", fee);
-        }
-        if let Some(score) = self.max_risk_score_for_acceptance {
-            log::info!("Max risk score for acceptance set to: {}", score);
-        }
-        if let Some(hops) = self.max_hops {
-            log::info!("Max hops for arbitrage pathfinding set to: {}", hops);
-        }
-        if let Some(pools) = self.max_pools_per_hop {
-            log::info!("Max pools per hop for arbitrage pathfinding set to: {}", pools);
-        }
+        log::info!("   • Max Slippage: {:.2}% ({:.0} bps)", 
+                  self.max_slippage_pct * 100.0, self.max_slippage_pct * 10000.0);
+        log::info!("   • Priority Fee: {} lamports ({:.6} SOL)", 
+                  self.transaction_priority_fee_lamports, 
+                  self.transaction_priority_fee_lamports as f64 / 1e9);
+        
+        // Performance Settings
+        log::info!("⚡ PERFORMANCE SETTINGS:");
+        log::info!("   • Pool Refresh: {} seconds", self.pool_refresh_interval_secs);
         if let Some(concurrent) = self.max_concurrent_executions {
-            log::info!("Max concurrent executions set to: {}", concurrent);
+            log::info!("   • Max Concurrent: {} operations", concurrent);
         }
         if let Some(timeout) = self.execution_timeout_secs {
-            log::info!("Execution timeout (seconds) set to: {}", timeout);
+            log::info!("   • Execution Timeout: {} seconds", timeout);
         }
-        if self.simulation_mode {
-            log::info!("Simulation mode is ENABLED.");
+        if let Some(cu_limit) = self.transaction_cu_limit {
+            log::info!("   • Compute Units: {} CU limit", cu_limit);
         }
-        if let Some(val) = &self.congestion_update_interval_secs {
-            log::info!("  Congestion Update Interval Secs: {}", val);
+        
+        // Webhook Configuration
+        if self.enable_webhooks {
+            log::info!("🔗 WEBHOOK INTEGRATION:");
+            if let Some(port) = self.webhook_port {
+                log::info!("   • Status: ✅ Enabled (Port: {})", port);
+            } else {
+                log::info!("   • Status: ✅ Enabled");
+            }
+            if let Some(url) = &self.webhook_url {
+                log::info!("   • Endpoint: {}", url);
+            }
+        } else {
+            log::info!("🔗 WEBHOOK INTEGRATION: ➖ Disabled");
         }
-        if let Some(val) = &self.transaction_cu_limit {
-            log::info!("  Transaction CU Limit: {}", val);
+        
+        // Jupiter Integration
+        if self.jupiter_fallback_enabled {
+            log::info!("🪐 JUPITER INTEGRATION:");
+            log::info!("   • Status: ✅ Enabled");
+            log::info!("   • API Timeout: {}ms", self.jupiter_api_timeout_ms);
+            log::info!("   • Max Retries: {}", self.jupiter_max_retries);
+            log::info!("   • Min Profit: {:.4}%", self.jupiter_fallback_min_profit_pct * 100.0);
+            if self.jupiter_cache_enabled {
+                log::info!("   • Cache: ✅ Enabled (TTL: {}s, Max: {} entries)", 
+                          self.jupiter_cache_ttl_seconds, self.jupiter_cache_max_entries);
+            }
+        } else {
+            log::info!("🪐 JUPITER INTEGRATION: ➖ Disabled");
         }
+        
+        // Validation Warnings
+        if self.min_profit_pct <= 0.0 || self.min_profit_pct >= 1.0 {
+            log::warn!("⚠️  MIN_PROFIT_PCT ({:.4}%) is outside typical range (0.001% - 99.999%)", 
+                      self.min_profit_pct * 100.0);
+        }
+        
+        if self.transaction_priority_fee_lamports == 0 {
+            log::warn!("⚠️  Priority fee is 0 - transactions may be slow");
+        }
+        
+        log::info!("════════════════════════════════════════════════════════════════════════════");
     }
 }
 

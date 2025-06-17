@@ -210,6 +210,22 @@ impl SafeVirtualPortfolio {
             inner: Arc::new(RwLock::new(VirtualPortfolio::new(initial_balances))),
         }
     }
+
+    /// Create a new thread-safe virtual portfolio from config
+    pub async fn from_config(config: &crate::paper_trading::config::PaperTradingConfig) -> Result<Arc<Self>> {
+        let mut initial_balances = config.initial_balances.clone();
+        
+        // If no initial balances specified, use defaults
+        if initial_balances.is_empty() {
+            let sol_mint: Pubkey = "So11111111111111111111111111111111111111112".parse()
+                .expect("Invalid SOL mint");
+            initial_balances.insert(sol_mint, config.default_sol_balance);
+        }
+        
+        Ok(Arc::new(Self {
+            inner: Arc::new(RwLock::new(VirtualPortfolio::new(initial_balances))),
+        }))
+    }
     
     /// Get current balance for a token
     pub fn get_balance(&self, mint: &Pubkey) -> u64 {

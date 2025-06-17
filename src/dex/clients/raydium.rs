@@ -528,6 +528,7 @@ fn derive_market_vault_signer(market_id: &Pubkey) -> Result<Pubkey, crate::error
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LiquidityFile {
     pub official: Vec<AmmPool>,
+    #[serde(default)]
     pub un_official: Vec<AmmPool>,
 }
 

@@ -45,7 +45,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize components
     let portfolio = Arc::new(SafeVirtualPortfolio::new(initial_balances));
     let analytics = Arc::new(Mutex::new(PaperTradingAnalytics::new()));
-    let engine = SimulatedExecutionEngine::new(config);
+    let engine = SimulatedExecutionEngine::new(config, portfolio.clone());
     let reporter = PaperTradingReporter::new("./demo_paper_logs")?;
     
     println!("💰 Initial Portfolio:");

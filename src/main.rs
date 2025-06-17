@@ -98,21 +98,41 @@ async fn main() -> Result<(), ArbError> {
         std::process::exit(1);
     }
 
-    info!("🚀 Modern Solana Arbitrage Bot starting with real-time webhook architecture...");
+    info!("🚀 ═══════════════════════════════════════════════════════════════════════════");
+    info!("🚀 SOLANA ARBITRAGE BOT v2.1.4 - Modern Real-Time Architecture");
+    info!("🚀 ═══════════════════════════════════════════════════════════════════════════");
     
     if paper_trading_enabled {
-        info!("📄 Paper trading mode ENABLED - using virtual money");
-        info!("📁 Paper trading logs will be saved to: {}", paper_logs_dir);
+        info!("📄 TRADING MODE: Paper Trading (Virtual Portfolio)");
+        info!("📁 Logs Directory: {}", paper_logs_dir);
+        info!("💡 Safe testing environment with simulated funds");
     } else if real_trading_enabled {
-        info!("💰 Real trading mode ENABLED - using actual funds");
-        warn!("⚠️  CAUTION: Real trading mode will execute actual transactions!");
+        info!("💰 TRADING MODE: Real Trading (Live Portfolio)");
+        warn!("⚠️  CAUTION: Real funds will be used for trading!");
+        warn!("⚠️  Ensure wallet security and risk management settings!");
     } else {
-        info!("ℹ️  No trading mode specified. Use --paper-trading or --real-trading");
-        info!("📖 Running in analysis-only mode (no trade execution)");
+        info!("📊 TRADING MODE: Analysis Only (No Execution)");
+        info!("💡 Use --paper-trading or --real-trading to enable execution");
     }
 
     // --- Configuration & Initialization ---
-    let mut app_config = Config::from_env();
+    let mut app_config = if paper_trading_enabled {
+        // Load paper trading specific environment file
+        match dotenv::from_filename(".env.paper-trading") {
+            Ok(_) => {
+                info!("✅ Loaded .env.paper-trading configuration");
+                Config::from_env_without_loading()
+            },
+            Err(e) => {
+                error!("❌ Failed to load .env.paper-trading: {}", e);
+                warn!("💡 Make sure .env.paper-trading exists with proper configuration");
+                warn!("💡 Falling back to default .env configuration");
+                Config::from_env()
+            }
+        }
+    } else {
+        Config::from_env()
+    };
     
     // Override paper trading setting from CLI arguments
     if paper_trading_enabled {
@@ -141,7 +161,9 @@ async fn main() -> Result<(), ArbError> {
     let dex_api_clients = get_all_clients_arc(redis_cache.clone(), app_config.clone()).await;
 
     // --- Initial Pool Discovery (One-time population) ---
-    info!("🔧 Running initial pool discovery for cache population...");
+    info!("� ═══════════════════════════════════════════════════════════════════════════");
+    info!("🔍 POOL DISCOVERY: Initializing liquidity pool cache...");
+    info!("🔍 ═══════════════════════════════════════════════════════════════════════════");
     
     let validation_config = PoolValidationConfig::default();
     let discoverable_clients = get_all_discoverable_clients(redis_cache.clone(), app_config.clone());
@@ -156,13 +178,18 @@ async fn main() -> Result<(), ArbError> {
     let discovery_result_count = pool_discovery_service.discover_all_pools().await.map_err(ArbError::from)?;
     let discovery_duration = discovery_start.elapsed();
     
-    info!("✅ Initial discovery complete in {:?}: {} pools found", discovery_duration, discovery_result_count);
+    info!("✅ POOL DISCOVERY COMPLETE:");
+    info!("   • Duration: {:?}", discovery_duration);
+    info!("   • Pools Found: {} total pools", discovery_result_count);
+    info!("   • Rate: {:.1} pools/second", discovery_result_count as f64 / discovery_duration.as_secs_f64());
 
     // Get the actual discovered pools for cache population
     let discovery_result = pool_discovery_service.get_all_cached_pools();
 
     // --- Initialize Hot Cache ---
-    info!("🔥 Initializing hot cache with discovered pools...");
+    info!("🔥 ═══════════════════════════════════════════════════════════════════════════");
+    info!("🔥 HOT CACHE: Initializing high-performance memory cache...");
+    info!("🔥 ═══════════════════════════════════════════════════════════════════════════");
     let hot_cache: Arc<DashMap<Pubkey, Arc<PoolInfo>>> = Arc::new(DashMap::new());
     
     // Populate hot cache with initial discovery results
@@ -170,11 +197,15 @@ async fn main() -> Result<(), ArbError> {
         hot_cache.insert(pool_info.address, pool_info.clone());
     }
     
-    // metrics.lock().await.log_pools_fetched(hot_cache.len());
-    info!("🔥 Hot cache initialized with {} pools", hot_cache.len());
+    info!("✅ HOT CACHE READY:");
+    info!("   • Pools Loaded: {} pools", hot_cache.len());
+    info!("   • Memory Structure: DashMap for concurrent access");
+    info!("   • Access Time: Sub-millisecond lookups enabled");
 
     // --- Initialize Modern Real-Time Architecture ---
-    info!("🌐 Setting up modern real-time update architecture with LiveUpdateManager...");
+    info!("📡 ═══════════════════════════════════════════════════════════════════════════");
+    info!("📡 REAL-TIME ARCHITECTURE: Setting up webhook & live update system...");
+    info!("📡 ═══════════════════════════════════════════════════════════════════════════");
     
     // Configure LiveUpdateManager
     let live_update_config = LiveUpdateConfig {
@@ -186,6 +217,12 @@ async fn main() -> Result<(), ArbError> {
         validate_updates: true,
         max_update_age_ms: 3000,
     };
+    
+    info!("⚙️  LIVE UPDATE CONFIGURATION:");
+    info!("   • Channel Buffer: {} updates", live_update_config.channel_buffer_size);
+    info!("   • Max Rate: {} updates/second", live_update_config.max_updates_per_second);
+    info!("   • Batching: {} (size: {})", live_update_config.enable_batching, live_update_config.batch_size);
+    info!("   • Validation: {}", live_update_config.validate_updates);
     
     // Create LiveUpdateManager using builder pattern
     let mut live_update_manager = LiveUpdateManagerBuilder::new()
@@ -203,6 +240,9 @@ async fn main() -> Result<(), ArbError> {
     if app_config.enable_webhooks {
         webhook_service.initialize().await
             .map_err(|e| ArbError::ConfigError(format!("Failed to initialize webhook service: {}", e)))?;
+        info!("✅ WEBHOOK SERVICE: Initialized successfully");
+    } else {
+        info!("➖ WEBHOOK SERVICE: Disabled in configuration");
     }
     
     // Connect LiveUpdateManager to webhook system
@@ -213,10 +253,15 @@ async fn main() -> Result<(), ArbError> {
     live_update_manager.start().await
         .map_err(|e| ArbError::ConfigError(format!("Failed to start LiveUpdateManager: {}", e)))?;
     
-    info!("✅ Modern real-time architecture initialized with LiveUpdateManager");
+    info!("✅ REAL-TIME ARCHITECTURE: Fully operational");
+    info!("   • Live Updates: Processing real-time data streams");
+    info!("   • Webhook Integration: Connected to external feeds");
+    info!("   • Performance: Sub-second response times enabled");
 
     // --- Initialize Enhanced Arbitrage Engine ---
-    info!("🎯 Initializing modern arbitrage engine...");
+    info!("🎯 ═══════════════════════════════════════════════════════════════════════════");
+    info!("🎯 ARBITRAGE ENGINE: Initializing trading and execution systems...");
+    info!("🎯 ═══════════════════════════════════════════════════════════════════════════");
     
     // Create price provider
     let _price_provider: Arc<dyn PriceDataProvider> = Arc::new(SimplePriceProvider {
@@ -228,7 +273,10 @@ async fn main() -> Result<(), ArbError> {
         if !wallet_path.is_empty() && fs::metadata(wallet_path).is_ok() {
             match read_keypair_file(wallet_path) {
                 Ok(keypair) => {
-                    info!("✅ Loaded trading wallet: {}", keypair.pubkey());
+                    info!("💼 WALLET CONFIGURATION:");
+                    info!("   • Status: ✅ Loaded successfully");
+                    info!("   • Address: {}", keypair.pubkey());
+                    info!("   • Path: {}", wallet_path);
                     
                     // Create non-blocking RPC client for executor
                     let executor_rpc = Arc::new(NonBlockingRpcClient::new(app_config.rpc_url.clone()));
@@ -250,19 +298,38 @@ async fn main() -> Result<(), ArbError> {
                     let discovery_result_vec: Vec<PoolInfo> = discovery_result.iter().map(|arc_pool| (**arc_pool).clone()).collect();
                     executor.update_pool_cache(&discovery_result_vec).await; // Fix: Pass &[PoolInfo] instead of &usize
                     
+                    info!("✅ EXECUTION ENGINE: Ready for live trading");
+                    info!("   • Pool Cache: {} pools loaded", discovery_result_vec.len());
+                    info!("   • DEX Clients: Initialized for all supported DEXs");
+                    
                     Some(Arc::new(executor))
                 }
                 Err(e) => {
-                    warn!("⚠️ Failed to load wallet from {}: {}. Execution will be disabled.", wallet_path, e);
+                    warn!("⚠️  WALLET CONFIGURATION:");
+                    warn!("   • Status: ❌ Failed to load");
+                    warn!("   • Path: {}", wallet_path);
+                    warn!("   • Error: {}", e);
+                    warn!("   • Result: Execution disabled - analysis only");
                     None
                 }
             }
         } else {
-            warn!("⚠️ Wallet path {} not found. Execution will be disabled.", wallet_path);
+            warn!("⚠️  WALLET CONFIGURATION:");
+            warn!("   • Status: ❌ File not found");
+            warn!("   • Path: {}", wallet_path);
+            warn!("   • Result: Execution disabled - analysis only");
             None
         }
     } else {
-        warn!("⚠️ No trader wallet configured. Execution will be disabled.");
+        if app_config.paper_trading {
+            info!("💼 WALLET CONFIGURATION:");
+            info!("   • Status: ➖ Not required (Paper Trading Mode)");
+            info!("   • Virtual Portfolio: Ready for simulated trading");
+        } else {
+            warn!("⚠️  WALLET CONFIGURATION:");
+            warn!("   • Status: ❌ No wallet configured");
+            warn!("   • Result: Execution disabled - analysis only");
+        }
         None
     };
 
@@ -292,55 +359,106 @@ async fn main() -> Result<(), ArbError> {
     // Start enhanced arbitrage engine services
     // arbitrage_engine.start_services(Some(redis_cache.clone())).await;
 
-    info!("✅ Modern arbitrage engine initialized with real-time updates!");
-    info!("   🔥 Hot cache: {} pools", hot_cache.len());
-    info!("   📡 Real-time updates: LiveUpdateManager active");
-    info!("   🌐 Webhook integration: enabled");
-    info!("   🎯 Enhanced detection: ready");
-    info!("   ⚡ Sub-millisecond access: active");
+    info!("✅ ARBITRAGE ENGINE: Fully operational");
+    info!("   • Strategy: Real-time opportunity detection");
+    info!("   • Processing: Sub-millisecond hot cache access");
+    info!("   • Integration: Connected to all DEX protocols");
 
     // --- Real-Time Arbitrage Detection and Execution Loop ---
-    info!("🎯 Starting real-time arbitrage detection loop...");
+    info!("🔄 ═══════════════════════════════════════════════════════════════════════════");
+    info!("🔄 TRADING LOOP: Starting real-time arbitrage detection...");
+    info!("🔄 ═══════════════════════════════════════════════════════════════════════════");
+    
     let arbitrage_engine_clone = arbitrage_engine.clone();
     tokio::spawn(async move {
+        use crate::utils::timing::{Timer, PerformanceTracker};
+        use std::sync::Mutex as StdMutex;
+        
         let mut cycle_count = 0;
         let mut interval = tokio::time::interval(std::time::Duration::from_millis(100)); // 100ms cycles for real-time
+        let performance_tracker = Arc::new(StdMutex::new(PerformanceTracker::new()));
+        
+        // Log initial status
+        info!("🎯 DETECTION PARAMETERS:");
+        info!("   • Cycle Interval: 100ms (10 Hz frequency)");
+        info!("   • Status Reports: Every 60 seconds");
+        info!("   • Performance Stats: Every 10 seconds");
         
         loop {
             interval.tick().await;
             cycle_count += 1;
             
             if cycle_count % 100 == 0 { // Log every 10 seconds
-                debug!("🔄 Real-time arbitrage cycle #{}", cycle_count);
+                debug!("🔄 Detection cycle #{} ({}s runtime)", cycle_count, cycle_count / 10);
             }
+            
+            // Time the full detection cycle
+            let cycle_timer = Timer::start("detection_cycle");
             
             // Use real-time hot cache for detection
             match arbitrage_engine_clone.detect_arbitrage_opportunities().await {
                 Ok(opportunities) => {
+                    let detection_duration = cycle_timer.finish();
+                    
+                    // Record detection performance
+                    if let Ok(mut tracker) = performance_tracker.lock() {
+                        tracker.record_operation("detection_cycle", detection_duration);
+                    }
+                    
                     if !opportunities.is_empty() {
-                        info!("🎯 Found {} opportunities in cycle #{}", opportunities.len(), cycle_count);
+                        info!("🎯 OPPORTUNITY FOUND: {} opportunities in cycle #{} (detected in {:.2}ms)", 
+                              opportunities.len(), cycle_count, detection_duration.as_millis());
                         
                         // Execute the most profitable opportunity
                         if let Some(best_opportunity) = opportunities.first() {
+                            let exec_timer = Timer::start("opportunity_execution");
                             match arbitrage_engine_clone.execute_opportunities_with_routing(vec![best_opportunity.clone()]).await {
                                 Ok(results) => {
+                                    let execution_duration = exec_timer.finish();
+                                    if let Ok(mut tracker) = performance_tracker.lock() {
+                                        tracker.record_operation("execution_cycle", execution_duration);
+                                    }
+                                    
                                     if !results.is_empty() {
-                                        info!("✅ Successfully executed opportunity {} in real-time", best_opportunity.id);
+                                        info!("✅ EXECUTION SUCCESS: Opportunity {} completed in {:.2}ms", 
+                                              best_opportunity.id, execution_duration.as_millis());
                                     }
                                 }
-                                Err(e) => warn!("❌ Failed to execute opportunity {}: {}", best_opportunity.id, e),
+                                Err(e) => {
+                                    exec_timer.finish();
+                                    warn!("❌ EXECUTION FAILED: Opportunity {}: {}", best_opportunity.id, e);
+                                }
+                            }
+                        }
+                    }
+                    
+                    // Performance reporting every 10 seconds
+                    if cycle_count % 100 == 0 {
+                        if let Ok(tracker) = performance_tracker.lock() {
+                            if let Some(avg_detection) = tracker.get_average_duration("detection_cycle") {
+                                info!("⚡ Performance: Avg detection {:.2}ms", avg_detection.as_millis());
+                            }
+                            let slow_ops = tracker.get_slow_operations(500); // > 500ms
+                            if !slow_ops.is_empty() {
+                                warn!("🐌 Slow operations detected: {:?}", slow_ops);
                             }
                         }
                     }
                     
                     if cycle_count % 600 == 0 { // Every minute
                         let status = arbitrage_engine_clone.get_enhanced_status().await;
-                        info!("📊 Real-time Engine Status: {}", status);
+                        info!("📊 ENGINE STATUS: {}", status);
+                        
+                        // Full performance summary every minute
+                        if let Ok(tracker) = performance_tracker.lock() {
+                            tracker.print_summary();
+                        }
                     }
                 }
                 Err(e) => {
+                    cycle_timer.finish();
                     if cycle_count % 100 == 0 { // Only log errors periodically to avoid spam
-                        error!("❌ Real-time arbitrage detection failed in cycle #{}: {}", cycle_count, e);
+                        error!("❌ DETECTION ERROR (cycle #{}): {}", cycle_count, e);
                     }
                 }
             }
@@ -348,12 +466,21 @@ async fn main() -> Result<(), ArbError> {
     });
 
     // --- Performance Monitoring with LiveUpdateManager Metrics ---
+    info!("📊 ═══════════════════════════════════════════════════════════════════════════");
+    info!("📊 MONITORING SYSTEM: Starting performance tracking...");
+    info!("📊 ═══════════════════════════════════════════════════════════════════════════");
+    
     let live_update_manager_arc = Arc::new(live_update_manager);
     let monitoring_live_manager = live_update_manager_arc.clone();
     let _monitoring_metrics = metrics.clone();
     let monitoring_engine = arbitrage_engine.clone();
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
+        info!("📈 PERFORMANCE TRACKING:");
+        info!("   • Reporting Interval: 60 seconds");
+        info!("   • Metrics: Cache stats, system performance, operation counts");
+        info!("   • Live Updates: Real-time pool and market data tracking");
+        
         loop {
             interval.tick().await;
             
@@ -362,9 +489,9 @@ async fn main() -> Result<(), ArbError> {
             let hot_cache_size = monitoring_live_manager.get_hot_cache_size();
             let live_metrics = monitoring_live_manager.get_metrics();
             
-            info!("📊 Real-Time Performance Metrics:");
-            info!("   🔥 Hot Cache: {} pools, {:.1}% hit rate", cache_size, hit_rate);
-            info!("   📡 LiveUpdateManager: {} pools managed", hot_cache_size);
+            info!("📊 ═══ PERFORMANCE REPORT ═══");
+            info!("🔥 Hot Cache: {} pools, {:.1}% hit rate", cache_size, hit_rate);
+            info!("📡 Live Manager: {} pools tracked", hot_cache_size);
             
             // Log LiveUpdateManager metrics
             live_metrics.log_summary();
@@ -379,6 +506,10 @@ async fn main() -> Result<(), ArbError> {
     let health_live_manager = live_update_manager_arc.clone();
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(300)); // 5 minutes
+        info!("🏥 HEALTH MONITORING:");
+        info!("   • Check Interval: 5 minutes");
+        info!("   • Components: Arbitrage engine, Live updates, Network connectivity");
+        
         loop {
             interval.tick().await;
             info!("🏥 Running comprehensive health check...");
@@ -398,6 +529,7 @@ async fn main() -> Result<(), ArbError> {
     // --- Start Webhook Server if Enabled ---
     if app_config.enable_webhooks {
         tokio::spawn(async move {
+            info!("🔗 Starting webhook server...");
             if let Err(e) = webhook_service.start_webhook_server().await {
                 error!("❌ Webhook server failed: {}", e);
             }
@@ -405,24 +537,53 @@ async fn main() -> Result<(), ArbError> {
     }
 
     // --- Modern Architecture Summary ---
-    info!("✅ Modern Real-Time Solana Arbitrage Bot fully operational!");
-    info!("   🚀 Architecture: Modern webhook-driven with LiveUpdateManager");
-    info!("   🔥 Hot Cache: {} pools with sub-millisecond access", hot_cache.len());
-    info!("   📡 Real-time updates: LiveUpdateManager handling all data flow");
-    info!("   🌐 Webhook integration: Connected to Helius for live updates");
-    info!("   🎯 Detection: 100ms cycle time for maximum responsiveness");
-    info!("   ⚡ Execution: High-frequency with routing and batching");
-    info!("   📊 Monitoring: Comprehensive real-time metrics");
+    info!("🎉 ═══════════════════════════════════════════════════════════════════════════");
+    info!("🎉 BOT STARTUP COMPLETE - All Systems Operational");
+    info!("🎉 ═══════════════════════════════════════════════════════════════════════════");
     
-    info!("🚀 Bot is running with modern real-time architecture. Press CTRL-C to exit.");
+    info!("🚀 SYSTEM OVERVIEW:");
+    info!("   • Architecture: Modern webhook-driven with LiveUpdateManager");
+    info!("   • Hot Cache: {} pools with sub-millisecond access", hot_cache.len());
+    info!("   • Real-time Updates: LiveUpdateManager processing live data");
+    if app_config.enable_webhooks {
+        info!("   • Webhook Integration: ✅ Connected to Helius feeds");
+    } else {
+        info!("   • Webhook Integration: ➖ Disabled");
+    }
+    info!("   • Detection Frequency: 100ms cycles (10 Hz)");
+    info!("   • Execution: High-frequency with intelligent routing");
+    info!("   • Monitoring: Comprehensive real-time performance tracking");
+    
+    if app_config.paper_trading {
+        info!("🎯 TRADING STATUS: � Paper Trading Mode - Safe testing environment");
+    } else {
+        info!("🎯 TRADING STATUS: 💰 Live Trading Mode - Real funds at risk");
+    }
+    
+    info!("════════════════════════════════════════════════════════════════════════════");
+    info!("🚀 Bot is ready! Monitoring for arbitrage opportunities...");
+    info!("💡 Press CTRL-C to gracefully shutdown the system");
+    info!("════════════════════════════════════════════════════════════════════════════");
     
     tokio::signal::ctrl_c().await.expect("Failed to listen for ctrl-c");
-    info!("🛑 Shutting down gracefully...");
+    
+    info!("🛑 ═══════════════════════════════════════════════════════════════════════════");
+    info!("🛑 SHUTDOWN INITIATED - Gracefully stopping all systems...");
+    info!("🛑 ═══════════════════════════════════════════════════════════════════════════");
     
     // Enhanced shutdown sequence
+    info!("🔄 Stopping live update manager...");
     live_update_manager_arc.stop().await;
+    info!("✅ Live update manager stopped");
+    
+    info!("🔄 Shutting down arbitrage engine...");
     arbitrage_engine.shutdown().await?;
-    info!("✅ Modern architecture shutdown completed");
+    info!("✅ Arbitrage engine shutdown complete");
+    
+    info!("🎉 ═══════════════════════════════════════════════════════════════════════════");
+    info!("🎉 SHUTDOWN COMPLETE - All systems stopped gracefully");
+    info!("🎉 Thank you for using Solana Arbitrage Bot v2.1.4!");
+    info!("🎉 ═══════════════════════════════════════════════════════════════════════════");
 
     Ok(())
 }

@@ -1,5 +1,7 @@
 //! Common utility structures, enums, traits, and functions used throughout the arbitrage application.
 
+pub mod timing; // Add timing module
+
 use solana_sdk::{pubkey::Pubkey, signature::Keypair};
 use solana_sdk::signature::read_keypair_file;
 use serde::{Deserialize, Serialize};
@@ -8,6 +10,7 @@ use std::error::Error as StdError;
 use async_trait::async_trait;
 use crate::solana::rpc::SolanaRpcClient;
 use anyhow::Result;
+use chrono;
 use std::sync::Arc;
 use std::fmt;
 
@@ -103,8 +106,14 @@ pub fn setup_logging() -> Result<(), fern::InitError> {
         .format(|out, message, record| {
             out.finish(format_args!(
                 "[{}][{}] {}",
-                record.level(),
-                record.target(),
+                chrono::Local::now().format("%H:%M:%S%.3f"),
+                match record.level() {
+                    log::Level::Error => "❌ ERROR",
+                    log::Level::Warn => "⚠️  WARN ",
+                    log::Level::Info => "ℹ️  INFO ",
+                    log::Level::Debug => "🔍 DEBUG",
+                    log::Level::Trace => "🔬 TRACE",
+                },
                 message
             ))
         })
@@ -113,7 +122,7 @@ pub fn setup_logging() -> Result<(), fern::InitError> {
         .level_for("solana_runtime::message_processor", log::LevelFilter::Warn)
         .chain(std::io::stdout())
         .apply()?;
-    info!("Logging initialized.");
+    info!("🚀 Logging system initialized with enhanced formatting");
     Ok(())
 }
 

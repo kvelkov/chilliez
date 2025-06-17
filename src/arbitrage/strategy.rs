@@ -53,10 +53,8 @@ impl MarketGraph {
             if liquidity > 0 {
                 let rate_a_to_b = self.calculate_exchange_rate(pool, true);
                 let rate_b_to_a = self.calculate_exchange_rate(pool, false);
-                println!("[add_pool] {}-{}: rate_a_to_b = {}, rate_b_to_a = {}", pool.token_a.symbol, pool.token_b.symbol, rate_a_to_b, rate_b_to_a);
                 if rate_a_to_b > 0.0 {
                     let weight_a_to_b = -rate_a_to_b.ln();
-                    println!("[add_pool] Adding edge {} -> {} (weight: {}, rate: {})", pool.token_a.symbol, pool.token_b.symbol, weight_a_to_b, rate_a_to_b);
                     self.graph.add_edge(node_a, node_b, EdgeWeight {
                         weight: weight_a_to_b,
                         exchange_rate: rate_a_to_b,
@@ -64,11 +62,10 @@ impl MarketGraph {
                         _liquidity: Some(liquidity),
                     });
                 } else {
-                    println!("[add_pool] Skipping edge {} -> {} due to zero rate", pool.token_a.symbol, pool.token_b.symbol);
+                    // Skip zero rate edges
                 }
                 if rate_b_to_a > 0.0 {
                     let weight_b_to_a = -rate_b_to_a.ln();
-                    println!("[add_pool] Adding edge {} -> {} (weight: {}, rate: {})", pool.token_b.symbol, pool.token_a.symbol, weight_b_to_a, rate_b_to_a);
                     self.graph.add_edge(node_b, node_a, EdgeWeight {
                         weight: weight_b_to_a,
                         exchange_rate: rate_b_to_a,
@@ -76,10 +73,10 @@ impl MarketGraph {
                         _liquidity: Some(liquidity),
                     });
                 } else {
-                    println!("[add_pool] Skipping edge {} -> {} due to zero rate", pool.token_b.symbol, pool.token_a.symbol);
+                    // Skip zero rate edges
                 }
             } else {
-                println!("[add_pool] Skipping pool {}-{} due to zero liquidity", pool.token_a.symbol, pool.token_b.symbol);
+                // Skip pools with zero liquidity
             }
         }
     }
@@ -118,7 +115,6 @@ impl MarketGraph {
                         }
                     };
                     let rate = rate_decimal.to_f64().unwrap_or(0.0);
-                    println!("[calculate_exchange_rate] {}-{} (CLMM): rate = {}", pool.token_a.symbol, pool.token_b.symbol, rate);
                     rate
                 } else {
                     // Fallback to basic AMM rate calculation using reserves
@@ -131,15 +127,12 @@ impl MarketGraph {
                             reserve_a / reserve_b
                         };
                         let rate = rate_decimal.to_f64().unwrap_or(0.0);
-                        println!("[calculate_exchange_rate] {}-{} (AMM): reserve_a = {}, reserve_b = {}, rate = {}", pool.token_a.symbol, pool.token_b.symbol, reserve_a, reserve_b, rate);
                         rate
                     } else {
-                        println!("[calculate_exchange_rate] Skipping due to zero reserves: {}-{}", pool.token_a.symbol, pool.token_b.symbol);
                         0.0
                     }
                 }
             } else {
-                println!("[calculate_exchange_rate] Skipping due to zero liquidity: {}-{}", pool.token_a.symbol, pool.token_b.symbol);
                 0.0
             }
         } else {
@@ -153,10 +146,8 @@ impl MarketGraph {
                     reserve_a / reserve_b
                 };
                 let rate = rate_decimal.to_f64().unwrap_or(0.0);
-                println!("[calculate_exchange_rate] {}-{} (AMM fallback): reserve_a = {}, reserve_b = {}, rate = {}", pool.token_a.symbol, pool.token_b.symbol, reserve_a, reserve_b, rate);
                 rate
             } else {
-                println!("[calculate_exchange_rate] Skipping due to zero reserves: {}-{}", pool.token_a.symbol, pool.token_b.symbol);
                 0.0
             }
         }
@@ -194,6 +185,9 @@ impl ArbitrageStrategy {
         pools: &HashMap<Pubkey, Arc<PoolInfo>>,
         _metrics: &Arc<Mutex<Metrics>>, // Metrics can be used for detailed performance tracking
     ) -> Result<Vec<MultiHopArbOpportunity>, ArbError> {
+        use crate::utils::timing::Timer;
+        
+        let mut timer = Timer::start("arbitrage_detection");
         info!("Strategy module: Starting opportunity detection across {} pools.", pools.len());
 
         if pools.is_empty() {
@@ -210,6 +204,7 @@ impl ArbitrageStrategy {
         for pool in pools.values() {
             graph.add_pool(pool);
         }
+        timer.checkpoint("market_graph_built");
         
         info!("Market graph built with {} tokens and {} edges", graph.node_count(), graph.edge_count());
         
@@ -223,17 +218,22 @@ impl ArbitrageStrategy {
         
         // Focus on major tokens as starting points (SOL, USDC, USDT, etc.)
         let major_tokens = self.get_major_tokens(&graph);
+        timer.checkpoint("major_tokens_identified");
         
         for &start_token in &major_tokens {
             if let Some(opportunities) = self.detect_cycles_from_token(&graph, start_token, pools)? {
                 all_opportunities.extend(opportunities);
             }
         }
+        timer.checkpoint("bellman_ford_complete");
 
         // 3. Filter and deduplicate opportunities
         all_opportunities = self.filter_opportunities(all_opportunities);
+        timer.checkpoint("opportunities_filtered");
 
-        info!("Strategy module: Detection complete. Found {} potential opportunities.", all_opportunities.len());
+        let duration = timer.finish_with_threshold(1000); // Warn if > 1 second
+        info!("Strategy module: Detection complete. Found {} potential opportunities in {:.2}ms.", 
+              all_opportunities.len(), duration.as_millis());
 
         Ok(all_opportunities)
     }
@@ -402,9 +402,7 @@ impl ArbitrageStrategy {
                     }
                 }
             }
-            println!("[extract_cycle_from_node] Cycle tokens: {:?}", cycle_tokens.iter().map(|t| self.get_token_symbol(t, pools).unwrap_or_else(|| t.to_string())).collect::<Vec<_>>());
-            println!("[extract_cycle_from_node] total_rate_fwd: {} gross_profit_pct_fwd: {}", total_rate_fwd, (total_rate_fwd - 1.0) * 100.0);
-            println!("[extract_cycle_from_node] total_rate_rev: {} gross_profit_pct_rev: {}", total_rate_rev, (total_rate_rev - 1.0) * 100.0);
+            // Debug info available in detailed logs if needed
             // Use the direction with the higher profit
             let (hops, total_rate, _): (Vec<crate::arbitrage::opportunity::ArbHop>, f64, f64) = if total_rate_fwd > total_rate_rev {
                 (hops_fwd, total_rate_fwd, (total_rate_fwd - 1.0) * 100.0)

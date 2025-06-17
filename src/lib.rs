@@ -15,6 +15,7 @@ pub mod monitoring; // Enhanced monitoring and alerting
 pub mod api; // NEW: Production API management (rate limiting, connection pooling, failover)
 pub mod wallet; // NEW: Wallet management features
 pub mod performance; // NEW: Performance optimization and monitoring
+pub mod streams; // NEW: Real-time data streams and processing
 
 // Re-export key testing components for easy access
 pub use testing::{

@@ -19,12 +19,15 @@ use std::{
 impl ArbitrageOrchestrator {
     /// Enhanced opportunity detection using hot cache
     pub async fn detect_arbitrage_opportunities(&self) -> Result<Vec<MultiHopArbOpportunity>, ArbError> {
-        let start_time = Instant::now();
+        use crate::utils::timing::Timer;
+        
+        let mut timer = Timer::start("enhanced_arbitrage_detection");
         info!("🔍 Starting enhanced arbitrage detection with hot cache...");
 
         // Get pools snapshot from hot cache
         let pools_snapshot = self.get_hot_cache_snapshot().await;
         let pool_count = pools_snapshot.len();
+        timer.checkpoint("hot_cache_snapshot");
         
         if pool_count == 0 {
             warn!("No pools available in hot cache for arbitrage detection");
@@ -36,6 +39,7 @@ impl ArbitrageOrchestrator {
         // Validate pools before detection
         let validated_pools = self.validate_hot_cache_pools(&pools_snapshot).await?;
         let validation_filtered = pool_count - validated_pools.len();
+        timer.checkpoint("pool_validation");
         
         if validation_filtered > 0 {
             warn!("🔍 Pool validation filtered out {} of {} pools ({:.1}% rejection rate)", 
@@ -50,9 +54,10 @@ impl ArbitrageOrchestrator {
                 validated_pools.iter().map(|pool| (pool.address, pool.clone())).collect();
             detector.detect_all_opportunities(&pools_map, &self.metrics).await?
         };
+        timer.checkpoint("opportunity_detection");
 
-        let detection_time = start_time.elapsed();
-        info!("⚡ Detection completed in {:.2}ms, found {} opportunities", 
+        let detection_time = timer.finish_with_threshold(2000); // Warn if > 2 seconds
+        info!("⚡ Enhanced detection completed in {:.2}ms, found {} opportunities", 
               detection_time.as_millis(), opportunities.len());
 
         // Update detection metrics

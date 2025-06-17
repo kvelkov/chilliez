@@ -1,0 +1,617 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>🚀 Solana Arbitrage Bot Dashboard</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .dashboard {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: rgba(255, 255, 255, 0.95);
+            border-radius: 20px;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
+            padding: 30px;
+        }
+
+        .header {
+            text-align: center;
+            margin-bottom: 40px;
+        }
+
+        .header h1 {
+            color: #333;
+            font-size: 2.5em;
+            margin-bottom: 10px;
+        }
+
+        .header p {
+            color: #666;
+            font-size: 1.1em;
+        }
+
+        .config-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
+            gap: 30px;
+            margin-bottom: 30px;
+        }
+
+        .config-section {
+            background: #f8f9fa;
+            border-radius: 15px;
+            padding: 25px;
+            border: 2px solid #e9ecef;
+            transition: all 0.3s ease;
+        }
+
+        .config-section:hover {
+            border-color: #667eea;
+            transform: translateY(-5px);
+        }
+
+        .section-title {
+            font-size: 1.4em;
+            color: #333;
+            margin-bottom: 20px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .dex-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 15px;
+        }
+
+        .dex-item {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 12px;
+            background: white;
+            border-radius: 8px;
+            border: 2px solid #e9ecef;
+            transition: all 0.3s ease;
+        }
+
+        .dex-item.active {
+            border-color: #28a745;
+            background: #f8fff9;
+        }
+
+        .dex-logo {
+            font-size: 1.2em;
+            font-weight: bold;
+        }
+
+        .toggle-switch {
+            position: relative;
+            width: 50px;
+            height: 25px;
+            background: #ccc;
+            border-radius: 25px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+
+        .toggle-switch.active {
+            background: #28a745;
+        }
+
+        .toggle-switch::after {
+            content: '';
+            position: absolute;
+            width: 21px;
+            height: 21px;
+            background: white;
+            border-radius: 50%;
+            top: 2px;
+            left: 2px;
+            transition: all 0.3s ease;
+        }
+
+        .toggle-switch.active::after {
+            left: 27px;
+        }
+
+        .slider-container {
+            margin: 15px 0;
+        }
+
+        .slider-label {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 8px;
+            font-weight: 600;
+        }
+
+        .slider {
+            width: 100%;
+            height: 8px;
+            border-radius: 5px;
+            background: #ddd;
+            outline: none;
+            opacity: 0.7;
+            transition: opacity 0.2s;
+        }
+
+        .slider:hover {
+            opacity: 1;
+        }
+
+        .slider::-webkit-slider-thumb {
+            appearance: none;
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            background: #667eea;
+            cursor: pointer;
+        }
+
+        .value-display {
+            color: #667eea;
+            font-weight: bold;
+        }
+
+        .input-group {
+            margin: 15px 0;
+        }
+
+        .input-group label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: 600;
+            color: #333;
+        }
+
+        .input-group input, .input-group select {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #e9ecef;
+            border-radius: 8px;
+            font-size: 1em;
+            transition: border-color 0.3s ease;
+        }
+
+        .input-group input:focus, .input-group select:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        .action-buttons {
+            display: flex;
+            gap: 15px;
+            justify-content: center;
+            margin-top: 30px;
+        }
+
+        .btn {
+            padding: 15px 30px;
+            font-size: 1.1em;
+            font-weight: bold;
+            border: none;
+            border-radius: 10px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            text-transform: uppercase;
+        }
+
+        .btn-primary {
+            background: #667eea;
+            color: white;
+        }
+
+        .btn-primary:hover {
+            background: #5a6fd8;
+            transform: translateY(-2px);
+        }
+
+        .btn-success {
+            background: #28a745;
+            color: white;
+        }
+
+        .btn-success:hover {
+            background: #218838;
+            transform: translateY(-2px);
+        }
+
+        .btn-danger {
+            background: #dc3545;
+            color: white;
+        }
+
+        .btn-danger:hover {
+            background: #c82333;
+            transform: translateY(-2px);
+        }
+
+        .status-bar {
+            background: #333;
+            color: white;
+            padding: 15px;
+            border-radius: 10px;
+            margin-top: 20px;
+            text-align: center;
+        }
+
+        .config-preview {
+            background: #f8f9fa;
+            border: 2px dashed #667eea;
+            border-radius: 10px;
+            padding: 20px;
+            margin-top: 20px;
+        }
+
+        .config-preview h3 {
+            color: #333;
+            margin-bottom: 15px;
+        }
+
+        .config-preview pre {
+            background: #333;
+            color: #00ff00;
+            padding: 15px;
+            border-radius: 8px;
+            overflow-x: auto;
+            font-family: 'Courier New', monospace;
+        }
+
+        .emoji {
+            font-size: 1.2em;
+        }
+    </style>
+</head>
+<body>
+    <div class="dashboard">
+        <div class="header">
+            <h1>🚀 Solana Arbitrage Bot Dashboard</h1>
+            <p>Configure your trading parameters with precision</p>
+        </div>
+
+        <div class="config-grid">
+            <!-- DEX Selection -->
+            <div class="config-section">
+                <h3 class="section-title">
+                    <span class="emoji">🔄</span>
+                    DEX Clients
+                </h3>
+                <div class="dex-grid">
+                    <div class="dex-item active" data-dex="orca">
+                        <span class="dex-logo">🌊 Orca</span>
+                        <div class="toggle-switch active" onclick="toggleDex('orca')"></div>
+                    </div>
+                    <div class="dex-item" data-dex="jupiter">
+                        <span class="dex-logo">🪐 Jupiter</span>
+                        <div class="toggle-switch" onclick="toggleDex('jupiter')"></div>
+                    </div>
+                    <div class="dex-item" data-dex="raydium">
+                        <span class="dex-logo">⚡ Raydium</span>
+                        <div class="toggle-switch" onclick="toggleDex('raydium')"></div>
+                    </div>
+                    <div class="dex-item" data-dex="lifinity">
+                        <span class="dex-logo">♾️ Lifinity</span>
+                        <div class="toggle-switch" onclick="toggleDex('lifinity')"></div>
+                    </div>
+                    <div class="dex-item" data-dex="meteora">
+                        <span class="dex-logo">☄️ Meteora</span>
+                        <div class="toggle-switch" onclick="toggleDex('meteora')"></div>
+                    </div>
+                    <div class="dex-item" data-dex="aldrin">
+                        <span class="dex-logo">🎯 Aldrin</span>
+                        <div class="toggle-switch" onclick="toggleDex('aldrin')"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Trading Parameters -->
+            <div class="config-section">
+                <h3 class="section-title">
+                    <span class="emoji">💰</span>
+                    Trading Parameters
+                </h3>
+                
+                <div class="slider-container">
+                    <div class="slider-label">
+                        <span>Profit Threshold</span>
+                        <span class="value-display" id="profitValue">€5.0</span>
+                    </div>
+                    <input type="range" min="1" max="10" value="5" class="slider" id="profitSlider" oninput="updateProfit(this.value)">
+                    <small style="color: #666;">1 = €1 minimum | 10 = €50 minimum</small>
+                </div>
+
+                <div class="slider-container">
+                    <div class="slider-label">
+                        <span>Speed Rate</span>
+                        <span class="value-display" id="speedValue">Medium (3)</span>
+                    </div>
+                    <input type="range" min="1" max="5" value="3" class="slider" id="speedSlider" oninput="updateSpeed(this.value)">
+                    <small style="color: #666;">1 = Slowest | 5 = Maximum speed (risk of kick)</small>
+                </div>
+
+                <div class="slider-container">
+                    <div class="slider-label">
+                        <span>Trade Size</span>
+                        <span class="value-display" id="tradeSizeValue">20% of wallet</span>
+                    </div>
+                    <input type="range" min="5" max="50" value="20" class="slider" id="tradeSizeSlider" oninput="updateTradeSize(this.value)">
+                    <small style="color: #666;">5% = Conservative | 50% = Aggressive</small>
+                </div>
+            </div>
+
+            <!-- Wallet & Risk -->
+            <div class="config-section">
+                <h3 class="section-title">
+                    <span class="emoji">💎</span>
+                    Wallet & Risk Management
+                </h3>
+                
+                <div class="input-group">
+                    <label for="walletBalance">Wallet Balance (SOL)</label>
+                    <input type="number" id="walletBalance" value="38.0" step="0.1" min="1" max="1000">
+                </div>
+
+                <div class="slider-container">
+                    <div class="slider-label">
+                        <span>Risk Level</span>
+                        <span class="value-display" id="riskValue">Medium</span>
+                    </div>
+                    <input type="range" min="1" max="5" value="3" class="slider" id="riskSlider" oninput="updateRisk(this.value)">
+                    <small style="color: #666;">1 = Very Safe | 5 = Maximum Risk</small>
+                </div>
+
+                <div class="slider-container">
+                    <div class="slider-label">
+                        <span>Slippage Tolerance</span>
+                        <span class="value-display" id="slippageValue">0.2%</span>
+                    </div>
+                    <input type="range" min="1" max="30" value="2" class="slider" id="slippageSlider" oninput="updateSlippage(this.value)">
+                    <small style="color: #666;">0.1% = Tight | 3.0% = Loose</small>
+                </div>
+            </div>
+
+            <!-- Execution Mode -->
+            <div class="config-section">
+                <h3 class="section-title">
+                    <span class="emoji">⚡</span>
+                    Execution Mode
+                </h3>
+                
+                <div class="input-group">
+                    <label for="executionMode">Trading Mode</label>
+                    <select id="executionMode" onchange="updateExecutionMode()">
+                        <option value="paper">📊 Paper Trading (Safe)</option>
+                        <option value="live">🚀 Live Trading (Real Money)</option>
+                        <option value="simulation">🎮 Simulation Mode</option>
+                    </select>
+                </div>
+
+                <div class="dex-item" style="margin: 15px 0;">
+                    <span>🔥 Aggressive Mode</span>
+                    <div class="toggle-switch" id="aggressiveToggle" onclick="toggleAggressive()"></div>
+                </div>
+
+                <div class="dex-item" style="margin: 15px 0;">
+                    <span>🤖 Auto-Execute</span>
+                    <div class="toggle-switch" id="autoExecuteToggle" onclick="toggleAutoExecute()"></div>
+                </div>
+
+                <div class="input-group">
+                    <label for="maxConcurrentTrades">Max Concurrent Trades</label>
+                    <input type="number" id="maxConcurrentTrades" value="3" min="1" max="10">
+                </div>
+            </div>
+        </div>
+
+        <!-- Action Buttons -->
+        <div class="action-buttons">
+            <button class="btn btn-primary" onclick="generateConfig()">
+                📋 Generate Config
+            </button>
+            <button class="btn btn-success" onclick="startBot()">
+                🚀 Start Bot
+            </button>
+            <button class="btn btn-danger" onclick="stopBot()">
+                🛑 Stop Bot
+            </button>
+        </div>
+
+        <!-- Status Bar -->
+        <div class="status-bar" id="statusBar">
+            🔴 Bot Status: Stopped | Ready to configure
+        </div>
+
+        <!-- Configuration Preview -->
+        <div class="config-preview">
+            <h3>📋 Generated Configuration</h3>
+            <pre id="configOutput">{
+  "dexClients": ["orca"],
+  "profitThreshold": 5.0,
+  "speedRate": 3,
+  "tradingMode": "paper",
+  "aggressiveMode": false
+}</pre>
+        </div>
+    </div>
+
+    <script>
+        // Configuration state
+        let config = {
+            dexClients: ['orca'],
+            profitThreshold: 5.0,
+            speedRate: 3,
+            tradeSize: 20,
+            walletBalance: 38.0,
+            riskLevel: 3,
+            slippageTolerance: 0.2,
+            executionMode: 'paper',
+            aggressiveMode: false,
+            autoExecute: false,
+            maxConcurrentTrades: 3
+        };
+
+        let botRunning = false;
+
+        // DEX Toggle Functions
+        function toggleDex(dexName) {
+            const dexItem = document.querySelector(`[data-dex="${dexName}"]`);
+            const toggle = dexItem.querySelector('.toggle-switch');
+            
+            if (toggle.classList.contains('active')) {
+                toggle.classList.remove('active');
+                dexItem.classList.remove('active');
+                config.dexClients = config.dexClients.filter(d => d !== dexName);
+            } else {
+                toggle.classList.add('active');
+                dexItem.classList.add('active');
+                config.dexClients.push(dexName);
+            }
+            
+            updateConfigDisplay();
+        }
+
+        // Slider Update Functions
+        function updateProfit(value) {
+            const profit = value * 5; // 1-10 -> €5-€50
+            config.profitThreshold = profit;
+            document.getElementById('profitValue').textContent = `€${profit}.0`;
+            updateConfigDisplay();
+        }
+
+        function updateSpeed(value) {
+            const speeds = ['Slowest (1)', 'Slow (2)', 'Medium (3)', 'Fast (4)', 'Maximum (5)'];
+            config.speedRate = parseInt(value);
+            document.getElementById('speedValue').textContent = speeds[value - 1];
+            updateConfigDisplay();
+        }
+
+        function updateTradeSize(value) {
+            config.tradeSize = parseInt(value);
+            document.getElementById('tradeSizeValue').textContent = `${value}% of wallet`;
+            updateConfigDisplay();
+        }
+
+        function updateRisk(value) {
+            const risks = ['Very Safe', 'Safe', 'Medium', 'High', 'Maximum'];
+            config.riskLevel = parseInt(value);
+            document.getElementById('riskValue').textContent = risks[value - 1];
+            updateConfigDisplay();
+        }
+
+        function updateSlippage(value) {
+            const slippage = value / 10; // 1-30 -> 0.1-3.0%
+            config.slippageTolerance = slippage;
+            document.getElementById('slippageValue').textContent = `${slippage.toFixed(1)}%`;
+            updateConfigDisplay();
+        }
+
+        function updateExecutionMode() {
+            config.executionMode = document.getElementById('executionMode').value;
+            updateConfigDisplay();
+        }
+
+        function toggleAggressive() {
+            const toggle = document.getElementById('aggressiveToggle');
+            config.aggressiveMode = !config.aggressiveMode;
+            toggle.classList.toggle('active');
+            updateConfigDisplay();
+        }
+
+        function toggleAutoExecute() {
+            const toggle = document.getElementById('autoExecuteToggle');
+            config.autoExecute = !config.autoExecute;
+            toggle.classList.toggle('active');
+            updateConfigDisplay();
+        }
+
+        // Update config display
+        function updateConfigDisplay() {
+            // Update wallet balance and concurrent trades from inputs
+            config.walletBalance = parseFloat(document.getElementById('walletBalance').value);
+            config.maxConcurrentTrades = parseInt(document.getElementById('maxConcurrentTrades').value);
+            
+            const output = {
+                dexClients: config.dexClients,
+                profitThreshold: config.profitThreshold,
+                speedRate: config.speedRate,
+                tradeSize: `${config.tradeSize}%`,
+                walletBalance: `${config.walletBalance} SOL`,
+                riskLevel: config.riskLevel,
+                slippageTolerance: `${config.slippageTolerance}%`,
+                executionMode: config.executionMode,
+                aggressiveMode: config.aggressiveMode,
+                autoExecute: config.autoExecute,
+                maxConcurrentTrades: config.maxConcurrentTrades
+            };
+            
+            document.getElementById('configOutput').textContent = JSON.stringify(output, null, 2);
+        }
+
+        // Action Functions
+        function generateConfig() {
+            const configData = JSON.stringify(config, null, 2);
+            
+            // Create and download config file
+            const blob = new Blob([configData], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'arbitrage_bot_config.json';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+            
+            updateStatus('✅ Configuration generated and downloaded!');
+        }
+
+        function startBot() {
+            if (config.dexClients.length === 0) {
+                alert('❌ Please select at least one DEX client!');
+                return;
+            }
+            
+            botRunning = true;
+            updateStatus(`🚀 Bot Started | Mode: ${config.executionMode.toUpperCase()} | DEXs: ${config.dexClients.join(', ').toUpperCase()}`);
+            
+            // Simulate bot activity
+            setTimeout(() => {
+                updateStatus(`🔍 Scanning for arbitrage opportunities... | Profit threshold: €${config.profitThreshold}`);
+            }, 2000);
+        }
+
+        function stopBot() {
+            botRunning = false;
+            updateStatus('🛑 Bot Stopped | Ready for new configuration');
+        }
+
+        function updateStatus(message) {
+            document.getElementById('statusBar').textContent = message;
+        }
+
+        // Initialize
+        document.addEventListener('DOMContentLoaded', function() {
+            updateConfigDisplay();
+            
+            // Add input event listeners
+            document.getElementById('walletBalance').addEventListener('input', updateConfigDisplay);
+            document.getElementById('maxConcurrentTrades').addEventListener('input', updateConfigDisplay);
+        });
+    </script>
+</body>
+</html>

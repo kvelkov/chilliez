@@ -12,14 +12,15 @@ class MultiHopArbitrageStream {
     this.ws = null;
     this.isConnected = false;
     
-    // Optimized for your 1.02GB usage pattern
+    // Optimized for your 1.02GB usage pattern - REDUCED LIMITS
     this.messageCount = 0;
     this.dataReceived = 0;
     this.startTime = Date.now();
-    this.maxMessagesPerMinute = 250; // Slightly higher based on your usage
-    this.maxDataPerHour = 120 * 1024 * 1024; // 120MB/hour (you're using more efficiently)
+    this.maxMessagesPerMinute = 150; // REDUCED from 250 to 150 to avoid rate limits
+    this.maxDataPerHour = 80 * 1024 * 1024; // REDUCED from 120MB to 80MB per hour
     this.messageBuffer = [];
     this.lastProcessTime = Date.now();
+    this.rateLimitBuffer = 10; // Add 10 message buffer for safety
     
     // Multi-hop detection settings
     this.minTransactionValue = 300; // Lower for multi-hop opportunities

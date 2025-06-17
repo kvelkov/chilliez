@@ -12,14 +12,15 @@ class EnhancedPaperTradingStream {
     this.ws = null;
     this.isConnected = false;
     
-    // INCREASED RATE LIMITS for better coverage
+    // REDUCED RATE LIMITS to avoid hitting QuickNode limits
     this.messageCount = 0;
     this.dataReceived = 0;
     this.startTime = Date.now();
-    this.maxMessagesPerMinute = 200; // INCREASED from 100 to 200
-    this.maxDataPerHour = 100 * 1024 * 1024; // INCREASED from 50MB to 100MB per hour
+    this.maxMessagesPerMinute = 120; // REDUCED from 200 to 120
+    this.maxDataPerHour = 70 * 1024 * 1024; // REDUCED from 100MB to 70MB per hour
     this.messageBuffer = [];
     this.lastProcessTime = Date.now();
+    this.rateLimitBuffer = 15; // Add safety buffer
     
     // Enhanced filtering settings
     this.minTransactionValue = 500; // LOWERED from $1000 to $500 (more opportunities)

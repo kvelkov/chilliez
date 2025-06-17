@@ -73,8 +73,8 @@ start_paper_trading() {
     fi
     
     # Start the paper trading process
-    info "Starting real environment paper trading demo..."
-    nohup cargo run --example real_environment_paper_trading > "$LOG_DIR/paper_trading_$(date +%Y%m%d_%H%M%S).log" 2>&1 &
+    info "Starting actual paper trading bot..."
+    nohup cargo run -- --paper-trading > "$LOG_DIR/paper_trading_$(date +%Y%m%d_%H%M%S).log" 2>&1 &
     echo $! > "$PID_FILE"
     
     sleep 2

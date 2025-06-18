@@ -10,13 +10,14 @@ use anyhow::{anyhow, Result as AnyhowResult};
 use async_trait::async_trait;
 use bytemuck::{Pod, Zeroable};
 use futures;
-use log::{debug, info, warn};
+use log::{info, warn};
 use solana_sdk::{
     instruction::{AccountMeta, Instruction},
     program_pack::Pack,
-    pubkey::Pubkey,
     system_program, sysvar,
 };
+use solana_sdk::pubkey::Pubkey;
+use solana_client::rpc_client::RpcClient;
 use spl_token::state::{Account as TokenAccount, Mint};
 use std::sync::Arc;
 
@@ -95,10 +96,10 @@ impl UtilsPoolParser for LifinityPoolParser {
         );
 
         // Parse token account data
-        let token_a_account_data = token_a_account_result?;
-        let token_b_account_data = token_b_account_result?;
-        let token_a_mint_data = token_a_mint_result?;
-        let token_b_mint_data = token_b_mint_result?;
+        let token_a_account_data = token_a_account_result.map_err(anyhow::Error::from)?;
+        let token_b_account_data = token_b_account_result.map_err(anyhow::Error::from)?;
+        let token_a_mint_data = token_a_mint_result.map_err(anyhow::Error::from)?;
+        let token_b_mint_data = token_b_mint_result.map_err(anyhow::Error::from)?;
 
         // Unpack token account data
         let token_a_data = TokenAccount::unpack(&token_a_account_data)?;
@@ -300,57 +301,27 @@ impl DexClient for LifinityClient {
 
     async fn discover_pools(&self) -> AnyhowResult<Vec<PoolInfo>> {
         info!("LifinityClient: Starting pool discovery...");
-
-        // Create enhanced sample pools with oracle integration
-        let mut pools = Vec::new();
-
-        // Enhanced USDC-SOL pool with oracle pricing
-        let usdc_sol_pool = PoolInfo {
-            address: Pubkey::new_unique(),
-            name: "Lifinity USDC-SOL Oracle Pool".to_string(),
-            token_a: PoolToken {
-                mint: solana_sdk::pubkey!("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"), // USDC
-                symbol: "USDC".to_string(),
-                decimals: 6,
-                reserve: 10_000_000_000, // 10M USDC
-            },
-            token_b: PoolToken {
-                mint: solana_sdk::pubkey!("So11111111111111111111111111111111111111112"), // SOL
-                symbol: "SOL".to_string(),
-                decimals: 9,
-                reserve: 50_000_000_000, // 50K SOL
-            },
-            token_a_vault: Pubkey::new_unique(),
-            token_b_vault: Pubkey::new_unique(),
-            fee_numerator: Some(20),
-            fee_denominator: Some(10000),
-            fee_rate_bips: Some(20), // 0.2%
-            last_update_timestamp: chrono::Utc::now().timestamp() as u64,
-            dex_type: DexType::Lifinity,
-            liquidity: Some(1_000_000_000_000),
-            sqrt_price: None,
-            tick_current_index: None,
-            tick_spacing: None,
-            tick_array_0: None,
-            tick_array_1: None,
-            tick_array_2: None,
-            oracle: Some(Pubkey::new_unique()),
-        };
-
-        // Test oracle price calculation
-        let oracle_price = self.calculate_oracle_price(&usdc_sol_pool);
-        debug!(
-            "Calculated oracle price for {}: {:?}",
-            usdc_sol_pool.name, oracle_price
-        );
-
-        pools.push(usdc_sol_pool);
-
-        info!(
-            "LifinityClient: Discovered {} pools with oracle integration",
-            pools.len()
-        );
-        Ok(pools)
+        let rpc_url = std::env::var("SOLANA_RPC_URL").unwrap_or_else(|_| "https://api.mainnet-beta.solana.com".to_string());
+        let _websocket_url = std::env::var("SOLANA_WS_URL").unwrap_or_else(|_| "wss://api.mainnet-beta.solana.com/".to_string());
+        let rpc_client = RpcClient::new(rpc_url);
+        // Fix: Handle Result from get_program_accounts before returning Vec
+        let accounts: Result<Vec<(Pubkey, solana_sdk::account::Account)>, _> = rpc_client.get_program_accounts(&LIFINITY_PROGRAM_ID);
+        match accounts {
+            Ok(accs) => {
+                info!("[REAL] LifinityClient: Found {} pool accounts on-chain", accs.len());
+                // TODO: Parse each account.data into PoolInfo using Lifinity's pool layout
+                // For now, just log the first few account pubkeys
+                for (i, (pubkey, _data)) in accs.iter().take(5).enumerate() {
+                    info!("[REAL] Lifinity pool #{} pubkey: {}", i + 1, pubkey);
+                }
+                // TODO: Return parsed PoolInfo list
+                Ok(vec![])
+            }
+            Err(e) => {
+                warn!("[REAL] LifinityClient: Failed to fetch pool accounts: {}", e);
+                Ok(vec![])
+            }
+        }
     }
 
     async fn health_check(&self) -> Result<DexHealthStatus, crate::error::ArbError> {

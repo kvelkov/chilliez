@@ -149,6 +149,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         result.input_amount,
                         result.fee_amount,
                         error_message_for_analytics.unwrap_or_default(),
+                        None,
+                        None,
                     );
                 }
 
@@ -163,6 +165,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     result.success,
                     error_message_for_log,
                     0,
+                    None,
+                    0, // rent_paid
+                    0, // account_creation_fees
                 );
 
                 if let Err(e) = reporter.log_trade(trade_entry) {
@@ -177,6 +182,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     (opportunity.input_amount * 1_000_000.0) as u64,
                     0,
                     format!("Simulation error: {}", e),
+                    None,
+                    None,
                 );
             }
         }

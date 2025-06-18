@@ -112,8 +112,6 @@ async fn reference_all_engine_methods_and_fields() {
     }); // Semicolon was missing here, added for correctness
     let metrics = Arc::new(Mutex::new(solana_arb_bot::local_metrics::Metrics::new()));
     let dex_api_clients: Vec<Arc<dyn DexClient>> = vec![];
-    let executor: Option<Arc<solana_arb_bot::arbitrage::execution::HftExecutor>> = None; // No executor for this test
-    let batch_engine: Option<Arc<solana_arb_bot::arbitrage::execution::BatchExecutor>> = None; // No batch engine for this test
     let banned_pairs_manager = dummy_banned_pairs_manager();
     let _engine = ArbitrageOrchestrator::new(
         pools,
@@ -122,8 +120,6 @@ async fn reference_all_engine_methods_and_fields() {
         config.clone(),
         metrics,
         dex_api_clients,
-        executor,
-        batch_engine,
         banned_pairs_manager,
         None, // No QuickNode opportunity receiver for this test
     );

@@ -333,7 +333,9 @@ impl DexClient for RaydiumClient {
         info!("RaydiumClient: Starting pool discovery from API...");
 
         let client = reqwest::Client::new();
+        info!("[DEBUG] RaydiumClient: Sent GET request to {}", RAYDIUM_LIQUIDITY_JSON_URL);
         let response = client.get(RAYDIUM_LIQUIDITY_JSON_URL).send().await?;
+        info!("[DEBUG] RaydiumClient: Response status: {}", response.status());
 
         if !response.status().is_success() {
             return Err(anyhow!(

@@ -292,10 +292,8 @@ mod tests {
                 config_arc.clone(),
                 metrics_arc.clone(),
                 dummy_dex_clients,
-                None,                         // executor
-                None,                         // batch_execution_engine
                 dummy_banned_pairs_manager(), // banned_pairs_manager
-                None,                         // quicknode_opportunity_receiver
+                None, // quicknode_opportunity_receiver
             ),
         );
 
@@ -379,8 +377,6 @@ mod tests {
             config,
             metrics_arc,
             dummy_dex_clients,
-            None,
-            None,
             dummy_banned_pairs_manager(), // banned_pairs_manager
             None, // quicknode_opportunity_receiver
         );
@@ -458,8 +454,6 @@ mod tests {
             config.clone(),
             metrics_arc,
             dummy_dex_clients,
-            None,
-            None,                         // batch_execution_engine
             dummy_banned_pairs_manager(), // banned_pairs_manager
             None, // quicknode_opportunity_receiver
         );
@@ -506,15 +500,12 @@ mod tests {
         let dex_clients: Vec<Arc<dyn DexClient>> = vec![mock_dex_client1, mock_dex_client2];
 
         let engine = ArbitrageOrchestrator::new(
-            // Renamed ArbitrageEngine to ArbitrageOrchestrator
             pools,
             None,
             None,
             config,
             metrics,
             dex_clients,
-            None,
-            None,
             dummy_banned_pairs_manager(),
             None, // quicknode_opportunity_receiver
         );
@@ -539,15 +530,12 @@ mod tests {
         let metrics_arc = dummy_metrics();
         let dummy_dex_clients: Vec<Arc<dyn DexClient>> = vec![Arc::new(MockDexClient::new("Mock"))];
         let engine = ArbitrageOrchestrator::new(
-            // Renamed ArbitrageEngine to ArbitrageOrchestrator
             pools_map.clone(),
             None,
             None,
             config,
             metrics_arc,
             dummy_dex_clients,
-            None,
-            None,
             dummy_banned_pairs_manager(), // banned_pairs_manager
             None, // quicknode_opportunity_receiver
         );

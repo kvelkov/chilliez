@@ -202,8 +202,6 @@ mod jupiter_fallback_integration_tests {
             config,
             metrics,
             dex_clients,
-            None, // No executor
-            None, // No batch executor
             banned_pairs_manager,
             None, // No quicknode_opportunity_receiver
         );
@@ -257,8 +255,6 @@ mod jupiter_fallback_integration_tests {
             config,
             metrics,
             dex_clients,
-            None, // No executor
-            None, // No batch executor
             banned_pairs_manager,
             None, // No quicknode_opportunity_receiver
         );

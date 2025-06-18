@@ -282,7 +282,7 @@ impl RouteSplitter {
         // Split for high priority trades or high impact trades
         match request.speed_priority {
             RoutingPriority::SpeedOptimized => true,
-            RoutingPriority::Balanced => has_high_impact || (request.amount as f64) > 10000.0,
+            RoutingPriority::Balanced => has_high_impact || (request.amount as f64) >= 10000.0,
             RoutingPriority::CostOptimized => has_high_impact || (request.amount as f64) > 50000.0,
             RoutingPriority::MevProtected => true, // Always split for MEV protection
         }
@@ -580,7 +580,8 @@ impl RouteSplitter {
             RoutingPriority::MevProtected => [0.25, 0.15, 0.35, 0.25],
         };
 
-        let output_score = path.expected_output / (request.amount as f64);
+        let output_score =
+            path.expected_output / path.steps.first().map(|s| s.amount_in).unwrap_or(1.0);
         let speed_score = 1.0
             / (path
                 .execution_time_estimate

@@ -506,6 +506,7 @@ impl JupiterClient {
     async fn execute_quote_request(&self, request: QuoteRequest) -> Result<QuoteResponse> {
         let url = format!("{}/{}", JUPITER_API_BASE, JUPITER_QUOTE_ENDPOINT);
 
+        debug!("[DEBUG] JupiterClient: Sent GET request to {} with params: {:?}", url, request);
         let response = self
             .client
             .get(&url)
@@ -516,6 +517,7 @@ impl JupiterClient {
                 self.record_api_failure();
                 anyhow!("Jupiter quote request failed: {}", e)
             })?;
+        debug!("[DEBUG] JupiterClient: Response status: {}", response.status());
 
         if !response.status().is_success() {
             self.record_api_failure();

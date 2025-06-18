@@ -1,0 +1,120 @@
+{
+  "session_start": "2025-06-18T14:55:47.032726Z",
+  "session_end": "2025-06-18T14:55:48.297496Z",
+  "total_trades": 5,
+  "successful_trades": 0,
+  "failed_trades": 5,
+  "total_profit_loss": 0,
+  "total_fees_paid": 25000,
+  "success_rate": 0.0,
+  "average_profit_per_trade": 0.0,
+  "largest_win": 0,
+  "largest_loss": 0,
+  "sharpe_ratio": 0.0,
+  "max_drawdown": 0.0,
+  "portfolio_value_start": 1000000000,
+  "portfolio_value_end": 15000000000,
+  "return_percentage": 1400.0,
+  "dex_breakdown": [],
+  "token_pair_breakdown": [
+    {
+      "token_in": "Token_SOL",
+      "token_out": "Token_USDC",
+      "trades": 5,
+      "total_profit_loss": -500000,
+      "success_rate": 0.0
+    }
+  ],
+  "percentile_metrics": {
+    "p95_slippage_bps": 0.0195,
+    "p99_slippage_bps": 0.0195,
+    "p95_pnl": -100000.0,
+    "p99_pnl": -100000.0,
+    "p95_execution_time_ms": 0.0,
+    "p99_execution_time_ms": 0.0
+  },
+  "top_trades": [
+    {
+      "timestamp": "2025-06-18T14:55:47.228125Z",
+      "profit_loss": -100000,
+      "slippage_bps": 0.0195,
+      "token_in": "Token_SOL",
+      "token_out": "Token_USDC",
+      "dex": "Pool_11111112cMQwSC9qirWGjZM6gLGwW69X22mqwLLGP"
+    },
+    {
+      "timestamp": "2025-06-18T14:55:47.418374Z",
+      "profit_loss": -100000,
+      "slippage_bps": 0.0153,
+      "token_in": "Token_SOL",
+      "token_out": "Token_USDC",
+      "dex": "Pool_11111112cMQwSC9qirWGjZM6gLGwW69X22mqwLLGP"
+    },
+    {
+      "timestamp": "2025-06-18T14:55:47.678353Z",
+      "profit_loss": -100000,
+      "slippage_bps": 0.013,
+      "token_in": "Token_SOL",
+      "token_out": "Token_USDC",
+      "dex": "Pool_11111112cMQwSC9qirWGjZM6gLGwW69X22mqwLLGP"
+    },
+    {
+      "timestamp": "2025-06-18T14:55:47.951874Z",
+      "profit_loss": -100000,
+      "slippage_bps": 0.0169,
+      "token_in": "Token_SOL",
+      "token_out": "Token_USDC",
+      "dex": "Pool_11111112cMQwSC9qirWGjZM6gLGwW69X22mqwLLGP"
+    },
+    {
+      "timestamp": "2025-06-18T14:55:48.195153Z",
+      "profit_loss": -100000,
+      "slippage_bps": 0.0101,
+      "token_in": "Token_SOL",
+      "token_out": "Token_USDC",
+      "dex": "Pool_11111112cMQwSC9qirWGjZM6gLGwW69X22mqwLLGP"
+    }
+  ],
+  "worst_trades": [
+    {
+      "timestamp": "2025-06-18T14:55:48.195153Z",
+      "profit_loss": -100000,
+      "slippage_bps": 0.0101,
+      "token_in": "Token_SOL",
+      "token_out": "Token_USDC",
+      "dex": "Pool_11111112cMQwSC9qirWGjZM6gLGwW69X22mqwLLGP"
+    },
+    {
+      "timestamp": "2025-06-18T14:55:47.951874Z",
+      "profit_loss": -100000,
+      "slippage_bps": 0.0169,
+      "token_in": "Token_SOL",
+      "token_out": "Token_USDC",
+      "dex": "Pool_11111112cMQwSC9qirWGjZM6gLGwW69X22mqwLLGP"
+    },
+    {
+      "timestamp": "2025-06-18T14:55:47.678353Z",
+      "profit_loss": -100000,
+      "slippage_bps": 0.013,
+      "token_in": "Token_SOL",
+      "token_out": "Token_USDC",
+      "dex": "Pool_11111112cMQwSC9qirWGjZM6gLGwW69X22mqwLLGP"
+    },
+    {
+      "timestamp": "2025-06-18T14:55:47.418374Z",
+      "profit_loss": -100000,
+      "slippage_bps": 0.0153,
+      "token_in": "Token_SOL",
+      "token_out": "Token_USDC",
+      "dex": "Pool_11111112cMQwSC9qirWGjZM6gLGwW69X22mqwLLGP"
+    },
+    {
+      "timestamp": "2025-06-18T14:55:47.228125Z",
+      "profit_loss": -100000,
+      "slippage_bps": 0.0195,
+      "token_in": "Token_SOL",
+      "token_out": "Token_USDC",
+      "dex": "Pool_11111112cMQwSC9qirWGjZM6gLGwW69X22mqwLLGP"
+    }
+  ]
+}

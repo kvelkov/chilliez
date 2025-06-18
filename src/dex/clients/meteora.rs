@@ -11,13 +11,12 @@ use async_trait::async_trait;
 use bytemuck::{Pod, Zeroable};
 use log::{debug, info, warn};
 use num_traits::ToPrimitive;
-use solana_sdk::{
-    instruction::{AccountMeta, Instruction},
-    pubkey::Pubkey,
-    system_program,
-};
-use std::str::FromStr;
+use solana_program::pubkey::Pubkey;
+use solana_client::rpc_client::RpcClient;
 use std::sync::Arc;
+use std::str::FromStr;
+use solana_sdk::instruction::{Instruction, AccountMeta};
+use solana_sdk::system_program;
 
 // Import our math functions for Meteora calculations
 use crate::dex::math::clmm::calculate_price_impact;
@@ -341,96 +340,6 @@ impl MeteoraClient {
             data: instruction_data,
         })
     }
-
-    /// Create sample pools for testing and demonstration
-    /// In production, this would be replaced by actual on-chain scanning
-    fn create_sample_pools(&self) -> Vec<PoolInfo> {
-        let mut pools = Vec::new();
-
-        // Sample Dynamic AMM pool
-        let dynamic_pool = PoolInfo {
-            address: Pubkey::new_unique(),
-            name: "Meteora USDC-SOL Dynamic AMM".to_string(),
-            token_a: PoolToken {
-                mint: solana_sdk::pubkey!("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"), // USDC
-                symbol: "USDC".to_string(),
-                decimals: 6,
-                reserve: 1_000_000_000, // 1M USDC
-            },
-            token_b: PoolToken {
-                mint: solana_sdk::pubkey!("So11111111111111111111111111111111111111112"), // SOL
-                symbol: "SOL".to_string(),
-                decimals: 9,
-                reserve: 5_000_000_000, // 5K SOL
-            },
-            token_a_vault: Pubkey::new_unique(),
-            token_b_vault: Pubkey::new_unique(),
-            fee_numerator: Some(25),
-            fee_denominator: Some(10000),
-            fee_rate_bips: Some(25), // 0.25%
-            last_update_timestamp: chrono::Utc::now().timestamp() as u64,
-            dex_type: DexType::Meteora,
-            liquidity: Some(500_000_000_000),
-            sqrt_price: None,
-            tick_current_index: None,
-            tick_spacing: None, // Dynamic AMM doesn't use ticks
-            tick_array_0: None,
-            tick_array_1: None,
-            tick_array_2: None,
-            oracle: Some(Pubkey::new_unique()),
-        };
-        pools.push(dynamic_pool);
-
-        // Sample DLMM pool
-        let dlmm_pool = PoolInfo {
-            address: Pubkey::new_unique(),
-            name: "Meteora USDT-USDC DLMM".to_string(),
-            token_a: PoolToken {
-                mint: solana_sdk::pubkey!("Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB"), // USDT
-                symbol: "USDT".to_string(),
-                decimals: 6,
-                reserve: 2_000_000_000, // 2M USDT
-            },
-            token_b: PoolToken {
-                mint: solana_sdk::pubkey!("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"), // USDC
-                symbol: "USDC".to_string(),
-                decimals: 6,
-                reserve: 2_000_000_000, // 2M USDC
-            },
-            token_a_vault: Pubkey::new_unique(),
-            token_b_vault: Pubkey::new_unique(),
-            fee_numerator: Some(10),
-            fee_denominator: Some(10000),
-            fee_rate_bips: Some(10), // 0.1%
-            last_update_timestamp: chrono::Utc::now().timestamp() as u64,
-            dex_type: DexType::Meteora,
-            liquidity: Some(1_000_000_000_000),
-            sqrt_price: None,
-            tick_current_index: Some(8388608), // Active bin ID
-            tick_spacing: Some(1),             // Bin step for DLMM
-            tick_array_0: None,
-            tick_array_1: None,
-            tick_array_2: None,
-            oracle: Some(Pubkey::new_unique()),
-        };
-        pools.push(dlmm_pool);
-
-        // Log pool types using our identification function
-        for pool in &pools {
-            let pool_type = self.get_pool_type(pool);
-            debug!(
-                "Created sample {} pool: {} ({})",
-                match pool_type {
-                    MeteoraPoolType::DynamicAmm => "Dynamic AMM",
-                    MeteoraPoolType::Dlmm => "DLMM",
-                },
-                pool.name,
-                pool.address
-            );
-        }
-
-        pools
-    }
 }
 
 #[async_trait]
@@ -537,12 +446,24 @@ impl DexClient for MeteoraClient {
 
     async fn discover_pools(&self) -> AnyhowResult<Vec<PoolInfo>> {
         info!("MeteoraClient: Starting pool discovery...");
-
-        // Create a mock pool for demonstration - in production this would scan on-chain
-        let mock_pools = self.create_sample_pools();
-
-        info!("MeteoraClient: Discovered {} pools", mock_pools.len());
-        Ok(mock_pools)
+        let rpc_url = std::env::var("SOLANA_RPC_URL").unwrap_or_else(|_| "https://api.mainnet-beta.solana.com".to_string());
+        let _websocket_url = std::env::var("SOLANA_WS_URL").unwrap_or_else(|_| "wss://api.mainnet-beta.solana.com/".to_string());
+        let rpc_client = RpcClient::new(rpc_url);
+        // Fix: Handle Result from get_program_accounts before returning Vec
+        let accounts = match rpc_client.get_program_accounts(&METEORA_DYNAMIC_AMM_PROGRAM_ID) {
+            Ok(accs) => accs,
+            Err(e) => {
+                warn!("[REAL] MeteoraClient: Failed to fetch pool accounts: {}", e);
+                vec![]
+            }
+        };
+        info!("[REAL] MeteoraClient: Found {} pool accounts on-chain", accounts.len());
+        // TODO: Parse each account.data into PoolInfo using Meteora's pool layout
+        for (i, (pubkey, _data)) in accounts.iter().take(5).enumerate() {
+            info!("[REAL] Meteora pool #{} pubkey: {}", i + 1, pubkey);
+        }
+        // TODO: Return parsed PoolInfo list
+        Ok(vec![])
     }
 
     async fn health_check(&self) -> Result<DexHealthStatus, crate::error::ArbError> {
@@ -557,7 +478,7 @@ impl DexClient for MeteoraClient {
             last_successful_request: Some(start_time),
             error_count: 0,
             response_time_ms: Some(response_time),
-            pool_count: Some(0), // Would be populated from actual discovery
+            pool_count: Some(0),
             status_message: "Meteora client operational".to_string(),
         })
     }
@@ -692,26 +613,5 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(client.get_pool_type(&dlmm_pool), MeteoraPoolType::Dlmm);
-    }
-
-    #[test]
-    fn test_sample_pools_creation() {
-        let client = MeteoraClient::new();
-        let pools = client.create_sample_pools();
-
-        // Should create 2 sample pools
-        assert_eq!(pools.len(), 2);
-
-        // First should be Dynamic AMM (no tick_spacing)
-        assert_eq!(client.get_pool_type(&pools[0]), MeteoraPoolType::DynamicAmm);
-        assert!(pools[0].tick_spacing.is_none());
-
-        // Second should be DLMM (has tick_spacing)
-        assert_eq!(client.get_pool_type(&pools[1]), MeteoraPoolType::Dlmm);
-        assert!(pools[1].tick_spacing.is_some());
-
-        // Both should be Meteora DEX type
-        assert_eq!(pools[0].dex_type, DexType::Meteora);
-        assert_eq!(pools[1].dex_type, DexType::Meteora);
     }
 }

@@ -1,16 +1,13 @@
 use dashmap::DashMap;
 use solana_arb_bot::{
-    arbitrage::{
-        execution::HftExecutor,
-        opportunity::{ArbHop, MultiHopArbOpportunity},
-    },
+    arbitrage::opportunity::{ArbHop, MultiHopArbOpportunity},
+    arbitrage::orchestrator::ArbitrageOrchestrator,
     config::settings::Config,
     dex::{api::DexClient, clients::{OrcaClient, RaydiumClient}},
     utils::{DexType, PoolInfo, PoolToken},
 };
-use solana_client::nonblocking::rpc_client::RpcClient;
 use solana_sdk::{pubkey::Pubkey, signature::Keypair, system_program};
-use std::{collections::HashMap, sync::Arc};
+use std::sync::Arc;
 use tokio::sync::Mutex;
 
 // Helper to create a default config for testing Jito integration.
@@ -143,27 +140,31 @@ fn create_mock_opportunity() -> MultiHopArbOpportunity {
 #[ignore] // This test makes real network calls and requires a valid QuickNode endpoint.
 async fn test_jito_bundle_execution_flow() {
     let config = Arc::new(create_jito_test_config());
-    let wallet = Arc::new(Keypair::new());
-    let rpc_client = Arc::new(RpcClient::new(config.rpc_url.clone()));
     let metrics = Arc::new(Mutex::new(solana_arb_bot::local_metrics::Metrics::new()));
     let hot_cache = Arc::new(DashMap::new());
+    let dex_providers: Vec<Arc<dyn DexClient>> = vec![
+        Arc::new(OrcaClient::new()),
+        Arc::new(RaydiumClient::new()),
+    ];
+    let banned_pairs_manager = Arc::new(solana_arb_bot::dex::BannedPairsManager::new("".to_string()).unwrap());
+    let rpc_client = None;
+    let ws_manager = None;
+    let quicknode_opportunity_receiver = None;
 
     // Populate hot_cache with dummy pool data for instruction building
     let sol_info = PoolToken {
-        mint: system_program::id(), // Using system_program id as a stand-in for SOL mint
+        mint: system_program::id(),
         symbol: "SOL".to_string(),
         decimals: 9,
         reserve: 0,
     };
     let usdc_info = PoolToken {
-        mint: Pubkey::new_unique(), // Dummy USDC mint
+        mint: Pubkey::new_unique(),
         symbol: "USDC".to_string(),
         decimals: 6,
         reserve: 0,
     };
-
     let opportunity = create_mock_opportunity();
-
     let pool1 = PoolInfo {
         address: opportunity.hops[0].pool,
         dex_type: DexType::Orca,
@@ -181,36 +182,23 @@ async fn test_jito_bundle_execution_flow() {
     hot_cache.insert(pool1.address, Arc::new(pool1));
     hot_cache.insert(pool2.address, Arc::new(pool2));
 
-    let mut executor = HftExecutor::new(
-        wallet,
+    let orchestrator = ArbitrageOrchestrator::new(
+        hot_cache,
+        ws_manager,
         rpc_client,
-        None,
         config.clone(),
         metrics,
-        hot_cache,
+        dex_providers,
+        banned_pairs_manager,
+        quicknode_opportunity_receiver,
     );
 
-    // Mock DEX clients
-    let mut dex_clients: HashMap<DexType, Box<dyn DexClient>> = HashMap::new();
-    dex_clients.insert(DexType::Orca, Box::new(OrcaClient::new()));
-    dex_clients.insert(DexType::Raydium, Box::new(RaydiumClient::new()));
-    executor.set_dex_clients(Arc::new(Mutex::new(dex_clients)));
-
-    // This will attempt to send a bundle to the configured jito_quicknode_url.
-    // In a real CI/CD environment, this URL should be a mock server.
-    // The test is expected to fail if the endpoint is not reachable or rejects the bundle.
-    let result = executor.execute_opportunity_atomic_jito(&opportunity).await;
-
-    // We expect an error here because we are not providing real, executable transactions.
-    // The goal is to verify that the flow reaches the point of submission and polling.
+    let result = orchestrator.execute_opportunity_atomic_jito(&opportunity).await;
     assert!(
         result.is_err(),
         "Expected Jito execution to fail without valid transactions and a real endpoint."
     );
-
-    // More specific assertions can be added if a mock server is used.
-    // For example, checking if the error message indicates a timeout or a specific API error.
-    let error_message = result.unwrap_err();
+    let error_message = format!("{}", result.unwrap_err());
     println!("Jito execution failed as expected: {}", error_message);
     assert!(error_message.contains("Error polling for bundle"));
 }

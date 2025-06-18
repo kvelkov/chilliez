@@ -65,13 +65,18 @@ impl SolanaWebsocketManager {
 
     pub async fn start(&mut self) -> Result<(), ArbError> {
         info!(
-            "🌐 Connecting to enhanced WebSocket server: {}",
+            "🌐 [VERBOSE] Attempting to connect to WebSocket server: {}",
             self.ws_url
         );
 
         let (ws_stream, _) = connect_async(&self.ws_url)
             .await
-            .map_err(|e| ArbError::WebSocketError(format!("Failed to connect: {}", e)))?;
+            .map_err(|e| {
+                error!("❌ [VERBOSE] WebSocket connection failed: {}", e);
+                ArbError::WebSocketError(format!("Failed to connect: {}", e))
+            })?;
+
+        info!("✅ [VERBOSE] WebSocket connection established: {}", self.ws_url);
 
         let (mut write, mut read) = ws_stream.split();
         let (mpsc_tx, mut mpsc_rx) = tokio::sync::mpsc::channel::<Message>(256);
@@ -88,7 +93,7 @@ impl SolanaWebsocketManager {
         tokio::spawn(async move {
             while let Some(msg) = mpsc_rx.recv().await {
                 if write.send(msg).await.is_err() {
-                    error!("❌ WebSocket write error. Closing connection.");
+                    error!("❌ [VERBOSE] WebSocket write error. Closing connection.");
                     break;
                 }
             }
@@ -97,14 +102,15 @@ impl SolanaWebsocketManager {
         // Enhanced task to read messages from the WebSocket and broadcast them
         let updates_tx_clone = self.updates_tx.clone();
         let metrics_clone = self.metrics.clone();
+        let ws_url = self.ws_url.clone();
 
         self._handle = Some(tokio::spawn(async move {
-            info!("🔄 Enhanced WebSocket read loop started with performance monitoring.");
+            info!("🔄 [VERBOSE] WebSocket read loop started for {}", ws_url);
             let mut update_count = 0u64;
             let mut parse_success_count = 0u64;
             let mut parse_failure_count = 0u64;
-
             while let Some(Ok(msg)) = read.next().await {
+                debug!("[VERBOSE] WebSocket received message: {}", match &msg { Message::Text(t) => t, _ => "<binary>" });
                 if let Message::Text(text) = msg {
                     update_count += 1;
                     let parse_start = std::time::Instant::now();
@@ -113,6 +119,7 @@ impl SolanaWebsocketManager {
                     match serde_json::from_str::<serde_json::Value>(&text) {
                         Ok(json) => {
                             if json["method"] == "accountNotification" {
+                                info!("[VERBOSE] Received accountNotification signal from WebSocket");
                                 if let Some(params) = json["params"].as_object() {
                                     if let Some(result) = params["result"].as_object() {
                                         if let Some(value) = result["value"].as_object() {
@@ -163,7 +170,7 @@ impl SolanaWebsocketManager {
                         }
                         Err(_) => {
                             parse_failure_count += 1;
-                            debug!("Failed to parse WebSocket message as JSON");
+                            warn!("[VERBOSE] Failed to parse WebSocket message as JSON");
                         }
                     }
 
@@ -185,10 +192,7 @@ impl SolanaWebsocketManager {
                     }
                 }
             }
-            info!(
-                "🔚 Enhanced WebSocket read loop finished after processing {} updates.",
-                update_count
-            );
+            info!("🔌 [VERBOSE] WebSocket read loop ended for {}", ws_url);
         }));
 
         info!("✅ Enhanced WebSocket manager started successfully with performance monitoring.");

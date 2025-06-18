@@ -7,7 +7,7 @@
 //! - analysis: Mathematical analysis, fees, and thresholds
 //! - mev: MEV protection and Jito integration
 //! - safety: Transaction safety, retry logic, and recovery
-
+use crate::error::ArbError;
 use crate::local_metrics::Metrics;
 use log::{error, info};
 use std::sync::Arc;
@@ -35,7 +35,6 @@ pub mod orchestrator; // Modular central controller with focused components
 
 // Specialized modules
 pub mod analysis; // Mathematical analysis, fees, thresholds
-pub mod execution; // All execution logic (HFT + batch)
 pub mod mev; // MEV protection and Jito integration
 pub mod price_aggregator; // Price aggregation with Jupiter fallback
 pub mod routing;
@@ -60,10 +59,6 @@ pub use self::analysis::{
     OpportunityCalculationResult, OptimalArbitrageResult, OptimalInputResult,
     SimulationResult as AnalysisSimulationResult, SlippageModel, VolatilityTracker,
     XYKSlippageModel,
-};
-pub use self::execution::{
-    BatchExecutionConfig, BatchExecutor, BundleExecutionResult, ExecutionMetrics, ExecutorEvent,
-    HftExecutor, JitoBundle, OpportunityBatch, SimulationResult,
 };
 pub use self::jito_client::{
     BundleBuilder, BundleStats, JitoClient, JitoConfig as JitoClientConfig,
@@ -93,11 +88,6 @@ pub use self::safety::{
     TransactionSafetyConfig,
 };
 
-// Backward compatibility aliases
-pub use self::execution::BatchExecutor as BatchExecutionEngine;
-pub use self::execution::HftExecutor as ArbitrageExecutor;
-pub use self::strategy::ArbitrageStrategy as ArbitrageDetector;
-
 // =============================================================================
 // Trade Coordination System
 // =============================================================================
@@ -113,7 +103,6 @@ pub enum TradeInstruction {
 /// and the on-chain trade execution (via the Executor). It listens for incoming trade instructions,
 /// dispatches them immediately to the Executor, and can record the execution results in Metrics.
 pub struct ArbitrageCoordinator {
-    executor: Arc<HftExecutor>, // Updated to use new HftExecutor
     metrics: Arc<Mutex<Metrics>>,
     instruction_rx: Receiver<TradeInstruction>,
     instruction_tx: Sender<TradeInstruction>,
@@ -122,10 +111,9 @@ pub struct ArbitrageCoordinator {
 impl ArbitrageCoordinator {
     /// Constructs a new coordinator with the given Executor and Metrics.
     /// It establishes an internal MPSC channel (with a capacity of 100) for trade instructions.
-    pub fn new(executor: Arc<HftExecutor>, metrics: Arc<Mutex<Metrics>>) -> Self {
+    pub fn new(metrics: Arc<Mutex<Metrics>>) -> Self {
         let (instruction_tx, instruction_rx) = mpsc::channel(100);
         Self {
-            executor,
             metrics,
             instruction_rx,
             instruction_tx,
@@ -148,7 +136,9 @@ impl ArbitrageCoordinator {
                 TradeInstruction::ExecuteOpportunity(opp) => {
                     info!("Received instruction to execute opportunity: {}", opp.id);
                     // Optionally push details to metrics here.
-                    match self.executor.execute_opportunity(&opp).await {
+                    // Removed: match self.executor.execute_opportunity(&opp).await {
+                    // Instead, use the new execution_manager logic:
+                    match self.execute_single_opportunity(&opp).await {
                         Ok(signature) => {
                             info!(
                                 "Successfully executed opportunity {} with signature {:?}",
@@ -171,5 +161,11 @@ impl ArbitrageCoordinator {
                 }
             }
         }
+    }
+
+    pub async fn execute_single_opportunity(&self, _opportunity: &MultiHopArbOpportunity) -> Result<(), ArbError> {
+        // Forward to the orchestrator's method. You may need to pass a reference to the orchestrator when constructing the coordinator.
+        // For now, this is a stub. Replace with actual orchestrator call in your integration.
+        Err(ArbError::ExecutionError("No orchestrator reference in ArbitrageCoordinator".to_string()))
     }
 }

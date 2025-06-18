@@ -77,6 +77,12 @@ pub struct PaperTradingAnalytics {
 
     /// Failure reasons count
     pub failure_reasons: HashMap<String, u64>,
+
+    /// Total rent paid for account creations
+    pub rent_paid: u64,
+
+    /// Total account creation fees paid
+    pub account_creation_fees: u64,
 }
 
 /// Performance metrics for a specific DEX
@@ -88,6 +94,14 @@ pub struct DexPerformance {
     pub avg_slippage_bps: f64,
     pub avg_execution_time_ms: f64,
     pub success_rate: f64,
+    /// DEX-specific error details (optional, for edge case tracking)
+    pub dex_error_details: Option<String>,
+
+    /// Total rent paid for this DEX
+    pub rent_paid: u64,
+
+    /// Total account creation fees paid for this DEX
+    pub account_creation_fees: u64,
 }
 
 /// Individual trade record for detailed analysis
@@ -139,6 +153,8 @@ impl PaperTradingAnalytics {
             execution_history: Vec::new(),
             failed_executions: 0,
             failure_reasons: HashMap::new(),
+            rent_paid: 0,
+            account_creation_fees: 0,
         }
     }
 
@@ -219,13 +235,27 @@ impl PaperTradingAnalytics {
     }
 
     /// Record a failed execution
-    pub fn record_failed_execution(&mut self, _input_amount: u64, fees: u64, reason: String) {
+    pub fn record_failed_execution(&mut self, _input_amount: u64, fees: u64, reason: String, dex_name: Option<&str>, dex_error_details: Option<String>) {
         self.failed_executions += 1;
         self.opportunities_executed += 1;
         self.total_fees_paid += fees;
-
-        // Record failure reason
-        *self.failure_reasons.entry(reason).or_insert(0) += 1;
+        *self.failure_reasons.entry(reason.clone()).or_insert(0) += 1;
+        // Track DEX-specific error details if provided
+        if let (Some(dex), Some(details)) = (dex_name, dex_error_details) {
+            self.performance_by_dex.entry(dex.to_string())
+                .or_insert(DexPerformance {
+                    trades_executed: 0,
+                    successful_trades: 0,
+                    total_profit_loss: 0,
+                    avg_slippage_bps: 0.0,
+                    avg_execution_time_ms: 0.0,
+                    success_rate: 0.0,
+                    dex_error_details: None,
+                    rent_paid: 0,
+                    account_creation_fees: 0,
+                })
+                .dex_error_details = Some(details);
+        }
     }
 
     /// Update from portfolio summary
@@ -272,6 +302,9 @@ impl PaperTradingAnalytics {
                 avg_slippage_bps: 0.0,
                 avg_execution_time_ms: 0.0,
                 success_rate: 0.0,
+                dex_error_details: None,
+                rent_paid: 0,
+                account_creation_fees: 0,
             });
 
         perf.trades_executed += 1;

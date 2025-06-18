@@ -97,8 +97,8 @@ metrics-exporter-log = "0.4"
 metrics-exporter-statsd = "0.7"
 
 # === JavaScript Bridge Dependencies ===
-libc = "0.2"
-hyper = "1.6.0"
+# libc = "0.2"
+# hyper = "1.6.0"
 
 [dev-dependencies]
 tempfile = "3.8"

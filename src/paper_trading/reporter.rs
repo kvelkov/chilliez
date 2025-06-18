@@ -27,6 +27,12 @@ pub struct TradeLogEntry {
     pub failure_reason: Option<String>,
     pub dex_route: Vec<String>,
     pub gas_cost: u64,
+    /// DEX-specific error details (optional, for edge case tracking)
+    pub dex_error_details: Option<String>,
+    /// Rent paid for this trade (lamports)
+    pub rent_paid: u64,
+    /// Account creation fees paid for this trade (lamports)
+    pub account_creation_fees: u64,
 }
 
 /// Performance summary for a trading session
@@ -48,6 +54,54 @@ pub struct PerformanceSummary {
     pub portfolio_value_start: u64,
     pub portfolio_value_end: u64,
     pub return_percentage: f64,
+    pub dex_breakdown: Vec<DexBreakdown>,
+    pub token_pair_breakdown: Vec<TokenPairBreakdown>,
+    pub percentile_metrics: PercentileMetrics,
+    pub top_trades: Vec<TopTrade>,
+    pub worst_trades: Vec<TopTrade>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DexBreakdown {
+    pub dex: String,
+    pub trades: u64,
+    pub successful_trades: u64,
+    pub total_profit_loss: i64,
+    pub avg_slippage_bps: f64,
+    pub avg_execution_time_ms: f64,
+    pub success_rate: f64,
+    pub total_fees_paid: u64,
+    pub rent_paid: u64,
+    pub account_creation_fees: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TokenPairBreakdown {
+    pub token_in: String,
+    pub token_out: String,
+    pub trades: u64,
+    pub total_profit_loss: i64,
+    pub success_rate: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PercentileMetrics {
+    pub p95_slippage_bps: f64,
+    pub p99_slippage_bps: f64,
+    pub p95_pnl: f64,
+    pub p99_pnl: f64,
+    pub p95_execution_time_ms: f64,
+    pub p99_execution_time_ms: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TopTrade {
+    pub timestamp: DateTime<Utc>,
+    pub profit_loss: i64,
+    pub slippage_bps: f64,
+    pub token_in: String,
+    pub token_out: String,
+    pub dex: String,
 }
 
 /// Paper trading reporter for exporting logs and analytics
@@ -107,26 +161,28 @@ impl PaperTradingReporter {
         execution_success: bool,
         failure_reason: Option<String>,
         gas_cost: u64,
+        dex_error_details: Option<String>,
+        rent_paid: u64,
+        account_creation_fees: u64,
     ) -> TradeLogEntry {
         TradeLogEntry {
             timestamp: Utc::now(),
             opportunity_id: format!("arb_{}", chrono::Utc::now().timestamp_millis()),
-            token_in: format!("Token_{}", opportunity.input_token), // Use actual token symbol
-            token_out: format!("Token_{}", opportunity.output_token), // Use actual token symbol
+            token_in: format!("Token_{}", opportunity.input_token),
+            token_out: format!("Token_{}", opportunity.output_token),
             amount_in,
             amount_out,
-            expected_profit: (opportunity.total_profit * 1_000_000.0) as u64, // Convert to lamports equivalent
+            expected_profit: (opportunity.total_profit * 1_000_000.0) as u64,
             actual_profit,
             slippage_applied,
             fees_paid,
             execution_success,
             failure_reason,
-            dex_route: opportunity
-                .pool_path
-                .iter()
-                .map(|p| format!("Pool_{}", p))
-                .collect(),
+            dex_route: opportunity.pool_path.iter().map(|p| format!("Pool_{}", p)).collect(),
             gas_cost,
+            dex_error_details,
+            rent_paid,
+            account_creation_fees,
         }
     }
 
@@ -169,6 +225,109 @@ impl PaperTradingReporter {
             0.0
         };
 
+        // DEX breakdown
+        let dex_breakdown = analytics
+            .performance_by_dex
+            .iter()
+            .map(
+                |(dex, perf)| DexBreakdown {
+                    dex: dex.clone(),
+                    trades: perf.trades_executed,
+                    successful_trades: perf.successful_trades,
+                    total_profit_loss: perf.total_profit_loss,
+                    avg_slippage_bps: perf.avg_slippage_bps,
+                    avg_execution_time_ms: perf.avg_execution_time_ms,
+                    success_rate: perf.success_rate,
+                    total_fees_paid: 0, // TODO: aggregate per DEX if tracked
+                    rent_paid: perf.rent_paid,
+                    account_creation_fees: perf.account_creation_fees,
+                },
+            )
+            .collect();
+        // Token pair breakdown (from trade logs)
+        let trade_logs = self.read_trade_logs().unwrap_or_default();
+        let mut token_pair_map = std::collections::HashMap::new();
+        for trade in &trade_logs {
+            let key = (trade.token_in.clone(), trade.token_out.clone());
+            let entry = token_pair_map.entry(key).or_insert((0u64, 0i64, 0u64));
+            entry.0 += 1;
+            entry.1 += trade.actual_profit;
+            if trade.execution_success {
+                entry.2 += 1;
+            }
+        }
+        let token_pair_breakdown = token_pair_map
+            .into_iter()
+            .map(
+                |((token_in, token_out), (trades, total_profit_loss, successful_trades))| {
+                    TokenPairBreakdown {
+                        token_in,
+                        token_out,
+                        trades,
+                        total_profit_loss,
+                        success_rate: if trades > 0 {
+                            successful_trades as f64 / trades as f64 * 100.0
+                        } else {
+                            0.0
+                        },
+                    }
+                },
+            )
+            .collect();
+        // Percentile metrics
+        let mut slippages: Vec<f64> = trade_logs.iter().map(|t| t.slippage_applied).collect();
+        let mut pnls: Vec<f64> = trade_logs.iter().map(|t| t.actual_profit as f64).collect();
+        let _exec_times: Vec<f64> = vec![]; // TODO: add execution time to TradeLogEntry if needed
+        slippages.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        pnls.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let p = |v: &Vec<f64>, pct: f64| -> f64 {
+            if v.is_empty() {
+                0.0
+            } else {
+                v[((v.len() as f64 * pct).ceil() as usize).saturating_sub(1)]
+            }
+        };
+        let percentile_metrics = PercentileMetrics {
+            p95_slippage_bps: p(&slippages, 0.95),
+            p99_slippage_bps: p(&slippages, 0.99),
+            p95_pnl: p(&pnls, 0.95),
+            p99_pnl: p(&pnls, 0.99),
+            p95_execution_time_ms: 0.0, // TODO: fill if available
+            p99_execution_time_ms: 0.0, // TODO: fill if available
+        };
+        // Top N trades
+        let mut sorted_trades = trade_logs.clone();
+        sorted_trades.sort_by_key(|t| -t.actual_profit);
+        let top_trades = sorted_trades
+            .iter()
+            .take(5)
+            .map(
+                |t| TopTrade {
+                    timestamp: t.timestamp,
+                    profit_loss: t.actual_profit,
+                    slippage_bps: t.slippage_applied,
+                    token_in: t.token_in.clone(),
+                    token_out: t.token_out.clone(),
+                    dex: t.dex_route.get(0).cloned().unwrap_or_default(),
+                },
+            )
+            .collect();
+        let worst_trades = sorted_trades
+            .iter()
+            .rev()
+            .take(5)
+            .map(
+                |t| TopTrade {
+                    timestamp: t.timestamp,
+                    profit_loss: t.actual_profit,
+                    slippage_bps: t.slippage_applied,
+                    token_in: t.token_in.clone(),
+                    token_out: t.token_out.clone(),
+                    dex: t.dex_route.get(0).cloned().unwrap_or_default(),
+                },
+            )
+            .collect();
+
         PerformanceSummary {
             session_start: self.session_start,
             session_end,
@@ -186,6 +345,11 @@ impl PaperTradingReporter {
             portfolio_value_start,
             portfolio_value_end,
             return_percentage,
+            dex_breakdown,
+            token_pair_breakdown,
+            percentile_metrics,
+            top_trades,
+            worst_trades,
         }
     }
 
@@ -212,6 +376,8 @@ impl PaperTradingReporter {
             "failure_reason",
             "dex_route",
             "gas_cost",
+            "rent_paid",
+            "account_creation_fees",
         ])?;
 
         // Write trade data
@@ -231,6 +397,8 @@ impl PaperTradingReporter {
                 trade.failure_reason.unwrap_or_default(),
                 trade.dex_route.join("|"),
                 trade.gas_cost.to_string(),
+                trade.rent_paid.to_string(),
+                trade.account_creation_fees.to_string(),
             ])?;
         }
 
@@ -278,22 +446,88 @@ impl PaperTradingReporter {
         println!("📈 Success Rate: {:.2}%", summary.success_rate);
         println!("💰 Total P&L: {} lamports", summary.total_profit_loss);
         println!("💸 Total Fees: {} lamports", summary.total_fees_paid);
-        println!(
-            "📊 Average Profit/Trade: {:.2} lamports",
-            summary.average_profit_per_trade
-        );
+        println!("🏦 Portfolio Value: {} -> {} lamports", summary.portfolio_value_start, summary.portfolio_value_end);
+        println!("📊 Portfolio Return: {:.2}%", summary.return_percentage);
+        println!("📊 Average Profit/Trade: {:.2} lamports", summary.average_profit_per_trade);
         println!("🎯 Largest Win: {} lamports", summary.largest_win);
         println!("😞 Largest Loss: {} lamports", summary.largest_loss);
-        println!("📊 Portfolio Return: {:.2}%", summary.return_percentage);
         if let Some(sharpe) = summary.sharpe_ratio {
             println!("📈 Sharpe Ratio: {:.4}", sharpe);
         }
         println!("📉 Max Drawdown: {:.2}%", summary.max_drawdown);
+        println!("\n--- DEX Breakdown ---");
+        for dex in &summary.dex_breakdown {
+            println!(
+                "  {}: trades={}, win_rate={:.2}%, P&L={}, fees={}, rent={}, acct_fees={}",
+                dex.dex, dex.trades, dex.success_rate, dex.total_profit_loss, dex.total_fees_paid, dex.rent_paid, dex.account_creation_fees
+            );
+        }
+        println!("\n--- Token Pair Breakdown ---");
+        for pair in &summary.token_pair_breakdown {
+            println!(
+                "  {} -> {}: trades={}, win_rate={:.2}%, P&L={}",
+                pair.token_in, pair.token_out, pair.trades, pair.success_rate, pair.total_profit_loss
+            );
+        }
+        println!("\n--- Percentile Metrics ---");
         println!(
-            "💼 Portfolio Value: {} -> {} lamports",
-            summary.portfolio_value_start, summary.portfolio_value_end
+            "  95th slippage: {:.4}, 99th slippage: {:.4}, 95th P&L: {:.2}, 99th P&L: {:.2}",
+            summary.percentile_metrics.p95_slippage_bps,
+            summary.percentile_metrics.p99_slippage_bps,
+            summary.percentile_metrics.p95_pnl,
+            summary.percentile_metrics.p99_pnl
         );
+        println!("\n--- Top 5 Trades ---");
+        for t in &summary.top_trades {
+            println!(
+                "  [{}] {} -> {} on {}: P&L={}, slippage={:.4}",
+                t.timestamp.format("%Y-%m-%d %H:%M:%S"), t.token_in, t.token_out, t.dex, t.profit_loss, t.slippage_bps
+            );
+        }
+        println!("\n--- Worst 5 Trades ---");
+        for t in &summary.worst_trades {
+            println!(
+                "  [{}] {} -> {} on {}: P&L={}, slippage={:.4}",
+                t.timestamp.format("%Y-%m-%d %H:%M:%S"), t.token_in, t.token_out, t.dex, t.profit_loss, t.slippage_bps
+            );
+        }
         println!("================================================\n");
+    }
+
+    /// Print a live summary after each trade
+    pub fn print_live_trade_summary(
+        &self,
+        analytics: &PaperTradingAnalytics,
+        last_trade: &TradeLogEntry,
+        portfolio: &VirtualPortfolio,
+    ) {
+        // Print balances (highlight SOL and USDC if present)
+        let sol_mint = "So11111111111111111111111111111111111111112"; // Mainnet SOL mint
+        let usdc_mint = "EPjFWdd5AufqSSqeM2q8VsJb9G9ZpwkRkzGwdrDam1w"; // Mainnet USDC mint
+        println!(
+            "[LIVE] {} {} -> {} | P&L: {} | Slippage: {:.4} | Success: {} | DEX: {} | Total P&L: {} | Trades: {} | Win Rate: {:.2}%",
+            last_trade.timestamp.format("%H:%M:%S"),
+            last_trade.token_in,
+            last_trade.token_out,
+            last_trade.actual_profit,
+            last_trade.slippage_applied,
+            last_trade.execution_success,
+            last_trade.dex_route.get(0).cloned().unwrap_or_default(),
+            analytics.total_pnl,
+            analytics.opportunities_executed,
+            analytics.get_success_rate()
+        );
+        println!("  Balances:");
+        for (mint, balance) in portfolio.get_balances() {
+            let mint_str = mint.to_string();
+            if mint_str == sol_mint {
+                println!("    SOL: {} lamports", balance);
+            } else if mint_str == usdc_mint {
+                println!("    USDC: {} micro-units", balance);
+            } else {
+                println!("    {}: {}", mint_str, balance);
+            }
+        }
     }
 
     /// Get the paths to the generated log files
@@ -393,11 +627,16 @@ mod tests {
             true,
             None,
             5000,
+            None,
+            1000,
+            2000,
         );
 
         assert_eq!(entry.amount_in, 1000000);
         assert_eq!(entry.amount_out, 1050000);
         assert_eq!(entry.actual_profit, 50000);
         assert!(entry.execution_success);
+        assert_eq!(entry.rent_paid, 1000);
+        assert_eq!(entry.account_creation_fees, 2000);
     }
 }

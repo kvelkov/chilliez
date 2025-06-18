@@ -16,7 +16,6 @@ pub mod jito_bundle; // Expose jito_bundle module
 
 use crate::{
     arbitrage::{
-        execution::HftExecutor,
         orchestrator::{ArbitrageOrchestrator, PriceDataProvider},
     },
     cache::Cache,
@@ -61,7 +60,7 @@ impl PriceDataProvider for SimplePriceProvider {
 #[tokio::main]
 async fn main() -> Result<(), ArbError> {
     // --- QuickNode Opportunity Channel Initialization ---
-    let (opportunity_sender, _opportunity_receiver) = tokio::sync::mpsc::unbounded_channel::<crate::arbitrage::opportunity::MultiHopArbOpportunity>();
+    let (opportunity_sender, opportunity_receiver) = tokio::sync::mpsc::unbounded_channel::<crate::arbitrage::opportunity::MultiHopArbOpportunity>();
 
     // Initialize the StatsD exporter for metrics (UDP to 127.0.0.1:8125)
     let recorder = metrics_exporter_statsd::StatsdBuilder::from("127.0.0.1", 8125)
@@ -125,19 +124,8 @@ async fn main() -> Result<(), ArbError> {
 
     // --- Configuration & Initialization ---
     let mut app_config = if paper_trading_enabled {
-        // Load paper trading specific environment file
-        match dotenv::from_filename(".env.paper-trading") {
-            Ok(_) => {
-                info!("✅ Loaded .env.paper-trading configuration");
-                Config::from_env_without_loading()
-            }
-            Err(e) => {
-                error!("❌ Failed to load .env.paper-trading: {}", e);
-                warn!("💡 Make sure .env.paper-trading exists with proper configuration");
-                warn!("💡 Falling back to default .env configuration");
-                Config::from_env()
-            }
-        }
+        // Only load the default .env file for paper trading
+        Config::from_env()
     } else {
         Config::from_env()
     };
@@ -316,7 +304,7 @@ async fn main() -> Result<(), ArbError> {
     });
 
     // Initialize executor if wallet is configured
-    let executor = if let Some(wallet_path) = &app_config.trader_wallet_keypair_path {
+    let _executor: Option<()> = if let Some(wallet_path) = &app_config.trader_wallet_keypair_path {
         if !wallet_path.is_empty() && fs::metadata(wallet_path).is_ok() {
             match read_keypair_file(wallet_path) {
                 Ok(keypair) => {
@@ -326,28 +314,28 @@ async fn main() -> Result<(), ArbError> {
                     info!("   • Path: {}", wallet_path);
 
                     // Create non-blocking RPC client for executor
-                    let executor_rpc =
+                    let _executor_rpc =
                         Arc::new(NonBlockingRpcClient::new(app_config.rpc_url.clone()));
 
                     // Create executor
-                    let mut executor = HftExecutor::new(
-                        Arc::new(keypair),
-                        executor_rpc,
-                        None, // Event sender - can be added later for monitoring
-                        app_config.clone(),
-                        metrics.clone(),
-                        hot_cache.clone(), // Pass the hot_cache
-                    );
+                    // let mut executor = HftExecutor::new(
+                    //     Arc::new(keypair),
+                    //     executor_rpc,
+                    //     None, // Event sender - can be added later for monitoring
+                    //     app_config.clone(),
+                    //     metrics.clone(),
+                    //     hot_cache.clone(), // Pass the hot_cache
+                    // );
 
                     // Initialize DEX clients for routing
-                    executor.initialize_dex_clients(redis_cache.clone()).await;
+                    // executor.initialize_dex_clients(redis_cache.clone()).await;
 
                     // Update executor's pool cache with discovered pools
                     let discovery_result_vec: Vec<PoolInfo> = discovery_result
                         .iter()
                         .map(|arc_pool| (**arc_pool).clone())
                         .collect();
-                    executor.update_pool_cache(&discovery_result_vec).await; // Fix: Pass &[PoolInfo] instead of &usize
+                    // executor.update_pool_cache(&discovery_result_vec).await; // Fix: Pass &[PoolInfo] instead of &usize
 
                     info!("✅ EXECUTION ENGINE: Ready for live trading");
                     info!(
@@ -356,7 +344,8 @@ async fn main() -> Result<(), ArbError> {
                     );
                     info!("   • DEX Clients: Initialized for all supported DEXs");
 
-                    Some(Arc::new(executor))
+                    // Remove old executor reference, return None or update to new orchestrator if needed
+                    None
                 }
                 Err(e) => {
                     warn!("⚠️  WALLET CONFIGURATION:");
@@ -403,7 +392,6 @@ async fn main() -> Result<(), ArbError> {
     // --- QuickNode Opportunity Channel Initialization ---
     // NOTE: `opportunity_sender` is intentionally kept in scope for future event-driven integrations.
     // It will be used to send new MultiHopArbOpportunity events from other async sources (e.g., webhooks).
-    let (_opportunity_sender, opportunity_receiver) = tokio::sync::mpsc::unbounded_channel::<crate::arbitrage::opportunity::MultiHopArbOpportunity>();
 
     // Initialize modern arbitrage engine with hot cache and real-time updates
     let arbitrage_engine = Arc::new(ArbitrageOrchestrator::new(
@@ -413,8 +401,6 @@ async fn main() -> Result<(), ArbError> {
         app_config.clone(),
         metrics.clone(),
         dex_api_clients,
-        executor,
-        None, // batch_execution_engine - can be initialized later if needed
         banned_pairs_manager,
         Some(opportunity_receiver), // Pass the receiver for QuickNode opportunities
     ));

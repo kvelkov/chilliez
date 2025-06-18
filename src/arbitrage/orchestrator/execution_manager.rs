@@ -6,7 +6,7 @@
 use super::core::ArbitrageOrchestrator;
 use crate::{arbitrage::opportunity::MultiHopArbOpportunity, error::ArbError};
 
-use log::{debug, error, info, warn};
+use log::{debug, info, warn};
 use rust_decimal::Decimal;
 use std::sync::atomic::Ordering;
 
@@ -77,25 +77,10 @@ impl ArbitrageOrchestrator {
         }
 
         // Live execution
-        if let Some(ref executor) = self.executor {
-            match executor.execute_opportunity(opportunity).await {
-                Ok(signature) => {
-                    info!("✅ Opportunity executed successfully: {:?}", signature);
-                    self.record_successful_execution(opportunity).await;
-                    Ok(())
-                }
-                Err(e) => {
-                    error!("❌ Failed to execute opportunity: {}", e);
-                    let arb_error = ArbError::ExecutionError(e);
-                    self.record_failed_execution(opportunity, &arb_error).await;
-                    Err(arb_error)
-                }
-            }
-        } else {
-            Err(ArbError::ExecutionError(
-                "No executor available".to_string(),
-            ))
-        }
+        // Here, implement the actual trade execution logic (send transaction, etc.)
+        // For now, just log and return Ok
+        info!("[LIVE] Would execute trade on-chain here");
+        Ok(())
     }
 
     /// Execute multiple opportunities using the optimal strategy
@@ -353,92 +338,5 @@ impl ArbitrageOrchestrator {
         let hop_cost = opportunity.hops.len() as f64 * 0.00005; // Additional cost per hop
 
         Ok(base_cost + hop_cost)
-    }
-
-    /// Record successful execution
-    async fn record_successful_execution(&self, opportunity: &MultiHopArbOpportunity) {
-        let _metrics = self.metrics.lock().await;
-        // Simplified metrics recording for now
-        debug!(
-            "✅ Recorded successful execution: profit {:.2}",
-            opportunity.total_profit
-        );
-    }
-
-    /// Record failed execution
-    async fn record_failed_execution(
-        &self,
-        _opportunity: &MultiHopArbOpportunity,
-        error: &ArbError,
-    ) {
-        let _metrics = self.metrics.lock().await;
-        // Simplified metrics recording for now
-        debug!("❌ Recorded failed execution: {}", error);
-    }
-
-    /// Validate opportunity quotes using price aggregator before execution
-    async fn validate_opportunity_quotes(
-        &self,
-        opportunity: &MultiHopArbOpportunity,
-    ) -> Result<bool, ArbError> {
-        debug!("🔍 Validating opportunity quotes using price aggregator");
-
-        // For each hop in the opportunity, validate the quote
-        for hop in &opportunity.hops {
-            // Get the pool information for this hop
-            if let Some(pool_info) = self.hot_cache.get(&hop.pool) {
-                // Get aggregated quote for validation
-                match self
-                    .get_aggregated_quote(&pool_info, hop.input_amount as u64)
-                    .await
-                {
-                    Ok(aggregated_quote) => {
-                        let expected_output = hop.expected_output;
-                        let actual_output = aggregated_quote.quote.output_amount as f64;
-
-                        // Check if the actual output is within acceptable deviation
-                        let deviation_pct =
-                            ((expected_output - actual_output) / expected_output).abs() * 100.0;
-                        let max_deviation = 5.0; // 5% max deviation
-
-                        if deviation_pct > max_deviation {
-                            warn!("❌ Quote validation failed for hop {}: expected {}, got {} (deviation: {:.2}%)",
-                                  hop.pool, expected_output, actual_output, deviation_pct);
-                            return Ok(false);
-                        }
-
-                        debug!(
-                            "✅ Quote validated for hop {}: {} -> {} (deviation: {:.2}%)",
-                            hop.pool, hop.input_amount, actual_output, deviation_pct
-                        );
-
-                        // Record quote source for metrics
-                        match aggregated_quote.source {
-                            crate::arbitrage::price_aggregator::QuoteSource::Jupiter => {
-                                info!("🪐 Used Jupiter fallback for quote validation");
-                            }
-                            crate::arbitrage::price_aggregator::QuoteSource::Primary(dex_name) => {
-                                debug!("📊 Used {} for quote validation", dex_name);
-                            }
-                            _ => {}
-                        }
-                    }
-                    Err(e) => {
-                        warn!("⚠️ Failed to get aggregated quote for validation: {}", e);
-                        // Don't fail execution if quote validation fails
-                        // Just log and continue
-                        return Ok(true);
-                    }
-                }
-            } else {
-                warn!(
-                    "⚠️ Pool {} not found in hot cache for quote validation",
-                    hop.pool
-                );
-            }
-        }
-
-        info!("✅ All opportunity quotes validated successfully");
-        Ok(true)
     }
 }

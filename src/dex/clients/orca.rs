@@ -512,12 +512,14 @@ impl PoolDiscoverable for OrcaClient {
         );
 
         let client = reqwest::Client::new();
+        info!("[DEBUG] OrcaClient: Sent GET request to {}", ORCA_API_URL);
         let response = client
             .get(ORCA_API_URL)
             .timeout(std::time::Duration::from_secs(30))
             .send()
             .await
             .map_err(|e| anyhow!("Failed to fetch Orca pool data: {}", e))?;
+        info!("[DEBUG] OrcaClient: Response status: {}", response.status());
 
         if !response.status().is_success() {
             return Err(anyhow!(

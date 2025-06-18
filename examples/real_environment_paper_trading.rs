@@ -280,6 +280,8 @@ async fn run_real_market_simulation(
                         result.input_amount,
                         result.fee_amount,
                         error_msg,
+                        None,
+                        None,
                     );
                 }
 

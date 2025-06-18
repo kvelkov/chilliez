@@ -288,3 +288,17 @@ pub struct WalletPoolStats {
     pub average_age_secs: u64,
     pub collector_address: Pubkey,
 }
+
+impl Default for WalletPoolStats {
+    fn default() -> Self {
+        Self {
+            total_wallets: 0,
+            active_wallets: 0,
+            expired_wallets: 0,
+            total_created: 0,
+            total_sweeps: 0,
+            average_age_secs: 0,
+            collector_address: Pubkey::default(),
+        }
+    }
+}

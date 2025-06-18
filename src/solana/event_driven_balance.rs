@@ -14,6 +14,35 @@ use std::{
 };
 use tokio::sync::{mpsc, RwLock};
 
+// CHECKLIST: Legacy/Removed Functions & Usage
+// =============================================
+// 1. PoolUpdateProcessor::add_update_callback
+//    - Used in: event_driven_balance.rs (register_with_webhook_processor)
+//    - Status: NOT implemented in PoolUpdateProcessor, so this integration is broken.
+//    - Needed? YES, if we want event-driven balance monitoring to react to pool updates.
+//    - Recommendation: Instead of deleting, RE-ENABLE this feature by re-implementing a callback/observer pattern in PoolUpdateProcessor for pool update events.
+//
+// 2. EventDrivenBalanceMonitor::register_with_webhook_processor
+//    - Used in: event_driven_balance.rs (only defined, not called anywhere else)
+//    - Status: NOT used in the codebase, but is a valuable feature for future event-driven balance monitoring.
+//    - Needed? YES, for future extensibility and real-time balance updates.
+//    - Recommendation: Do NOT delete. Instead, refactor PoolUpdateProcessor to support event/callback registration for pool updates, and wire this up for QuickNode events.
+//
+// 3. PoolUpdateEvent (type)
+//    - Used in: event_driven_balance.rs, webhooks/types.rs
+//    - Status: Still defined, but not produced by QuickNode flow.
+//    - Needed? YES, if we want to support event-driven balance monitoring.
+//    - Recommendation: Consider mapping QuickNode opportunities to PoolUpdateEvent or a similar event type for downstream consumers.
+//
+// 4. All other legacy Helius/HeliusWebhookManager code
+//    - Status: Already removed, not needed.
+//    - Needed? NO.
+//    - Recommendation: No action needed.
+//
+// If you want to re-enable event-driven balance monitoring, the next step is to add a callback/event system to PoolUpdateProcessor for QuickNode events, and update register_with_webhook_processor to use it.
+//
+// If you want to remove any function, check this list and confirm it's not needed or used before deleting.
+
 /// Configuration for event-driven balance monitoring
 #[derive(Debug, Clone)]
 #[allow(dead_code)] // Used in examples, fields accessed via methods
@@ -134,30 +163,23 @@ impl EventDrivenBalanceMonitor {
         let monitored_accounts = Arc::clone(&self.monitored_accounts);
 
         // Register callback for pool update events
-        processor
-            .add_update_callback(move |pool_event: PoolUpdateEvent| {
-                let event_sender = event_sender.clone();
-                let monitored_accounts = Arc::clone(&monitored_accounts);
-
-                tokio::spawn(async move {
-                    // Check if this event affects our monitored accounts
-                    if Self::should_process_pool_event(&pool_event, &monitored_accounts).await {
-                        // We need the original notification to extract balance changes
-                        // For now, we'll create a trigger event with the pool info
-                        let trigger = BalanceEventTrigger::DirectBalanceChange {
-                            account: pool_event.pool_address,
-                            new_balance: 0, // Will be updated by WebSocket or direct query
-                            change_amount: 0, // Will be calculated
-                            trigger_source: format!("pool_event_{:?}", pool_event.update_type),
-                        };
-
-                        if let Err(e) = event_sender.send(trigger) {
-                            warn!("Failed to send balance event trigger: {}", e);
-                        }
+        processor.add_update_callback(move |pool_event: PoolUpdateEvent| {
+            let event_sender = event_sender.clone();
+            let monitored_accounts = Arc::clone(&monitored_accounts);
+            tokio::spawn(async move {
+                if Self::should_process_pool_event(&pool_event, &monitored_accounts).await {
+                    let trigger = BalanceEventTrigger::DirectBalanceChange {
+                        account: pool_event.pool_address,
+                        new_balance: 0,
+                        change_amount: 0,
+                        trigger_source: format!("pool_event_{:?}", pool_event.update_type),
+                    };
+                    if let Err(e) = event_sender.send(trigger) {
+                        warn!("Failed to send balance event trigger: {}", e);
                     }
-                });
-            })
-            .await;
+                }
+            });
+        });
 
         info!("✅ Registered with webhook processor for balance events");
         Ok(())
@@ -238,11 +260,6 @@ impl EventDrivenBalanceMonitor {
             .send(trigger)
             .map_err(|e| anyhow!("Failed to send force refresh trigger: {}", e))?;
         Ok(())
-    }
-
-    /// Get event statistics
-    pub async fn get_stats(&self) -> EventStats {
-        self.event_stats.read().await.clone()
     }
 
     /// Take the balance update receiver from the underlying monitor

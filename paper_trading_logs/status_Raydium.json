@@ -1,0 +1,23 @@
+{
+  "timestamp": "2025-06-17T20:20:19.605Z",
+  "dex": "Raydium",
+  "runtime_minutes": "0.3",
+  "total_messages": 0,
+  "data_received_mb": "0.00",
+  "messages_per_minute": "0.0",
+  "opportunities_found": 0,
+  "connected": true,
+  "ws_avg_latency_ms": "154.00",
+  "logs_per_minute": 1,
+  "logs_quota_per_minute": 100,
+  "bytes_per_hour": 40,
+  "reconnect_count": 0,
+  "subscription_confirmations": 1,
+  "tx_decoded": 1,
+  "tx_seen": 1,
+  "parsing_success_ratio": "100.00",
+  "swaps_extracted": 0,
+  "swaps_per_tx_decoded": "0.00",
+  "avg_cpu_time_ms": "0.04",
+  "back_pressure_queue_length": 0
+}

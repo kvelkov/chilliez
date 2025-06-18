@@ -11,6 +11,8 @@ mod solana;
 mod utils;
 pub mod webhooks;
 pub mod websocket; // Add performance module
+pub mod quicknode;
+pub mod jito_bundle; // Expose jito_bundle module
 
 use crate::{
     arbitrage::{
@@ -58,6 +60,9 @@ impl PriceDataProvider for SimplePriceProvider {
 
 #[tokio::main]
 async fn main() -> Result<(), ArbError> {
+    // --- QuickNode Opportunity Channel Initialization ---
+    let (opportunity_sender, _opportunity_receiver) = tokio::sync::mpsc::unbounded_channel::<crate::arbitrage::opportunity::MultiHopArbOpportunity>();
+
     // Initialize the StatsD exporter for metrics (UDP to 127.0.0.1:8125)
     let recorder = metrics_exporter_statsd::StatsdBuilder::from("127.0.0.1", 8125)
         .build(None)
@@ -255,13 +260,28 @@ async fn main() -> Result<(), ArbError> {
     // Ensure compiler recognizes LiveUpdateManager usage (false positive workaround)
     let _: &LiveUpdateManager = &live_update_manager;
 
-    // Initialize webhook integration service
-    let mut webhook_service = WebhookIntegrationService::new(app_config.clone());
+    // --- Initialize QuickNode Webhook Processor ---
+    // Instead of using a config field, load the QuickNode function URL from the environment
+    let _quicknode_function_url = std::env::var("QUICKNODE_FUNCTION_URL").expect("QUICKNODE_FUNCTION_URL must be set in .env");
+
+    // Initialize webhook integration service as Arc<Mutex<...>> for safe sharing across tasks
+    let webhook_service = Arc::new(Mutex::new(WebhookIntegrationService::new(app_config.clone())));
     if app_config.enable_webhooks {
-        webhook_service.initialize().await.map_err(|e| {
+        webhook_service.lock().await.initialize().await.map_err(|e| {
             ArbError::ConfigError(format!("Failed to initialize webhook service: {}", e))
         })?;
         info!("✅ WEBHOOK SERVICE: Initialized successfully");
+
+        // Start the Axum webhook server in the background
+        let webhook_service_clone = webhook_service.clone();
+        let opportunity_sender_clone = opportunity_sender.clone();
+        tokio::spawn(async move {
+            let ws = webhook_service_clone.lock().await;
+            match ws.start_webhook_server(opportunity_sender_clone).await {
+                Ok(_) => info!("✅ WEBHOOK SERVER: Running and accepting POSTs on /quicknode"),
+                Err(e) => warn!("❌ WEBHOOK SERVER: Failed to start: {}", e),
+            }
+        });
     } else {
         info!("➖ WEBHOOK SERVICE: Disabled in configuration");
     }
@@ -380,6 +400,11 @@ async fn main() -> Result<(), ArbError> {
             }),
     );
 
+    // --- QuickNode Opportunity Channel Initialization ---
+    // NOTE: `opportunity_sender` is intentionally kept in scope for future event-driven integrations.
+    // It will be used to send new MultiHopArbOpportunity events from other async sources (e.g., webhooks).
+    let (_opportunity_sender, opportunity_receiver) = tokio::sync::mpsc::unbounded_channel::<crate::arbitrage::opportunity::MultiHopArbOpportunity>();
+
     // Initialize modern arbitrage engine with hot cache and real-time updates
     let arbitrage_engine = Arc::new(ArbitrageOrchestrator::new(
         hot_cache.clone(),
@@ -391,7 +416,9 @@ async fn main() -> Result<(), ArbError> {
         executor,
         None, // batch_execution_engine - can be initialized later if needed
         banned_pairs_manager,
+        Some(opportunity_receiver), // Pass the receiver for QuickNode opportunities
     ));
+    arbitrage_engine.spawn_quicknode_opportunity_task().await;
 
     // Start enhanced arbitrage engine services
     // arbitrage_engine.start_services(Some(redis_cache.clone())).await;
@@ -589,16 +616,6 @@ async fn main() -> Result<(), ArbError> {
             }
         }
     });
-
-    // --- Start Webhook Server if Enabled ---
-    if app_config.enable_webhooks {
-        tokio::spawn(async move {
-            info!("🔗 Starting webhook server...");
-            if let Err(e) = webhook_service.start_webhook_server().await {
-                error!("❌ Webhook server failed: {}", e);
-            }
-        });
-    }
 
     // --- Modern Architecture Summary ---
     info!("🎉 ═══════════════════════════════════════════════════════════════════════════");

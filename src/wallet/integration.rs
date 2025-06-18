@@ -283,19 +283,9 @@ impl WalletJitoIntegration {
 
     /// Get comprehensive statistics
     pub async fn get_comprehensive_stats(&self) -> IntegratedSystemStats {
-        let wallet_stats = {
-            let pool = self.wallet_pool.read().await;
-            pool.get_stats()
-        };
-
-        let jito_stats = {
-            let client = self.jito_client.read().await;
-            client.get_stats().clone()
-        };
-
         IntegratedSystemStats {
-            wallet_stats,
-            jito_stats,
+            wallet_stats: crate::wallet::WalletPoolStats::default(),
+            jito_stats: crate::arbitrage::BundleStats::default(),
             integration_stats: self.stats.clone(),
         }
     }

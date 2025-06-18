@@ -17,7 +17,6 @@ pub mod types; // Consolidated integration service
 
 // Core functionality
 pub use processor::PoolUpdateProcessor;
-pub use server::{EnhancedWebhookServer, HeliusWebhookManager, WebhookServer, WebhookServerStats};
 pub use types::*;
 
 // Consolidated integration exports

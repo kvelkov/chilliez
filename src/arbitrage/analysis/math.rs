@@ -17,7 +17,7 @@ use std::time::{Duration, Instant};
 // Slippage Models & Traits
 // =============================================================================
 
-pub trait SlippageModel: Send {
+pub trait SlippageModel: Send + Sync {
     fn calculate_slippage(&self, amount: Decimal, pool_info: &PoolInfo) -> Decimal;
     fn calculate_dynamic_slippage(
         &self,

@@ -73,6 +73,16 @@ pub struct Config {
     pub webhook_port: Option<u16>,
     pub webhook_url: Option<String>,
     pub enable_webhooks: bool,
+
+    // --- Jito/QuickNode bundle execution configuration ---
+    pub enable_jito_bundle: bool,
+    pub jito_quicknode_url: Option<String>,
+    pub jito_tip_lamports: Option<u64>,
+    pub jito_region: Option<String>,
+    pub jito_tip_accounts: Option<Vec<String>>,
+    pub jito_dynamic_tip_percentage: Option<f64>,
+    pub jito_bundle_status_poll_interval_ms: Option<u64>,
+    pub jito_bundle_status_timeout_secs: Option<u64>,
 }
 
 impl Config {
@@ -290,6 +300,26 @@ impl Config {
                 .unwrap_or_else(|_| "false".to_string())
                 .parse()
                 .unwrap_or(false),
+
+            // --- Jito/QuickNode bundle execution configuration ---
+            enable_jito_bundle: env::var("ENABLE_JITO_BUNDLE").map(|v| v == "true" || v == "1").unwrap_or(false),
+            jito_quicknode_url: env::var("JITO_QUICKNODE_URL").ok(),
+            jito_tip_lamports: env::var("JITO_TIP_LAMPORTS").ok().and_then(|s| s.parse().ok()),
+            jito_region: env::var("JITO_REGION").ok(),
+            jito_tip_accounts: env::var("JITO_TIP_ACCOUNTS")
+                .ok()
+                .map(|s| s.split(',').map(|s| s.trim().to_string()).collect()),
+            jito_dynamic_tip_percentage: env::var("JITO_DYNAMIC_TIP_PERCENTAGE")
+                .ok()
+                .and_then(|s| s.parse().ok()),
+            jito_bundle_status_poll_interval_ms: env::var(
+                "JITO_BUNDLE_STATUS_POLL_INTERVAL_MS",
+            )
+            .ok()
+            .and_then(|s| s.parse().ok()),
+            jito_bundle_status_timeout_secs: env::var("JITO_BUNDLE_STATUS_TIMEOUT_SECS")
+                .ok()
+                .and_then(|s| s.parse().ok()),
         }
     }
 
@@ -328,7 +358,7 @@ impl Config {
             execution_timeout_secs: Some(30),
             transaction_cu_limit: Some(400_000), // Add default for test config
             simulation_mode: false,
-            paper_trading: false,
+            paper_trading: true, // Enable paper trading for test config
             metrics_log_path: None,
             rpc_url_backup: None,
             rpc_max_retries: Some(3),
@@ -365,6 +395,16 @@ impl Config {
             jupiter_max_alternative_routes: 10,
             jupiter_route_evaluation_timeout_ms: 2000,
             jupiter_min_route_improvement_pct: 0.1,
+
+            // --- Jito/QuickNode bundle execution configuration (test defaults) ---
+            enable_jito_bundle: false,
+            jito_quicknode_url: None,
+            jito_tip_lamports: None,
+            jito_region: None,
+            jito_tip_accounts: None,
+            jito_dynamic_tip_percentage: None,
+            jito_bundle_status_poll_interval_ms: None,
+            jito_bundle_status_timeout_secs: None,
         }
     }
 

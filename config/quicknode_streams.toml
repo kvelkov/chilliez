@@ -28,6 +28,8 @@ filters = [
     { mentions = ["9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM"] },  # Orca
     { mentions = ["675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8"] },  # Raydium
     { mentions = ["JUP4Fb2cqiRUcaTHdrPC8h2gNsA2ETXiPDD33WcGuJB"] },   # Jupiter
+    { mentions = ["MERLuDFBMmsHnsBPZw2sDQZHvXFMwp8EdjudcU2HKky"] },  # Meteora
+    { mentions = ["2wT8Yq49kHgDzXuPxZSaeLaH1qbmGXtEyPy64bL7aD3c"] }   # Lifinity
 ]
 options = { commitment = "finalized" }
 

@@ -1,0 +1,23 @@
+{
+  "timestamp": "2025-06-17T20:20:19.599Z",
+  "dex": "Meteora",
+  "runtime_minutes": "0.3",
+  "total_messages": 0,
+  "data_received_mb": "0.00",
+  "messages_per_minute": "0.0",
+  "opportunities_found": 0,
+  "connected": true,
+  "ws_avg_latency_ms": "120.00",
+  "logs_per_minute": 2,
+  "logs_quota_per_minute": 100,
+  "bytes_per_hour": 80,
+  "reconnect_count": 0,
+  "subscription_confirmations": 2,
+  "tx_decoded": 2,
+  "tx_seen": 2,
+  "parsing_success_ratio": "100.00",
+  "swaps_extracted": 0,
+  "swaps_per_tx_decoded": "0.00",
+  "avg_cpu_time_ms": "0.04",
+  "back_pressure_queue_length": 0
+}

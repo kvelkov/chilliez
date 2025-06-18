@@ -205,6 +205,7 @@ mod jupiter_fallback_integration_tests {
             None, // No executor
             None, // No batch executor
             banned_pairs_manager,
+            None, // No quicknode_opportunity_receiver
         );
 
         // Test that orchestrator has price aggregator
@@ -259,6 +260,7 @@ mod jupiter_fallback_integration_tests {
             None, // No executor
             None, // No batch executor
             banned_pairs_manager,
+            None, // No quicknode_opportunity_receiver
         );
 
         // Test that orchestrator doesn't have price aggregator when disabled

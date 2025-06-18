@@ -285,7 +285,6 @@ mod tests {
         let dummy_dex_clients: Vec<Arc<dyn DexClient>> = vec![Arc::new(MockDexClient::new("Mock"))];
 
         let engine = Arc::new(
-            // Renamed ArbitrageEngine to ArbitrageOrchestrator
             ArbitrageOrchestrator::new(
                 pools_map_arc.clone(),
                 None,
@@ -296,6 +295,7 @@ mod tests {
                 None,                         // executor
                 None,                         // batch_execution_engine
                 dummy_banned_pairs_manager(), // banned_pairs_manager
+                None,                         // quicknode_opportunity_receiver
             ),
         );
 
@@ -382,6 +382,7 @@ mod tests {
             None,
             None,
             dummy_banned_pairs_manager(), // banned_pairs_manager
+            None, // quicknode_opportunity_receiver
         );
 
         let existing_pool_arc = pools_map.iter().next().unwrap().value().clone();
@@ -451,7 +452,6 @@ mod tests {
         )));
 
         let engine = ArbitrageOrchestrator::new(
-            // Renamed ArbitrageEngine to ArbitrageOrchestrator
             pools_map,
             None,
             dummy_sol_rpc_client,
@@ -461,6 +461,7 @@ mod tests {
             None,
             None,                         // batch_execution_engine
             dummy_banned_pairs_manager(), // banned_pairs_manager
+            None, // quicknode_opportunity_receiver
         );
 
         let expected_threshold_pct = config.min_profit_pct * 100.0;
@@ -515,6 +516,7 @@ mod tests {
             None,
             None,
             dummy_banned_pairs_manager(),
+            None, // quicknode_opportunity_receiver
         );
 
         assert_eq!(
@@ -547,6 +549,7 @@ mod tests {
             None,
             None,
             dummy_banned_pairs_manager(), // banned_pairs_manager
+            None, // quicknode_opportunity_receiver
         );
         let _ = engine
             .degradation_mode

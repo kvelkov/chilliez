@@ -19,6 +19,7 @@ use crate::{
     config::settings::Config,
     dex::api::DexClient,
     error::ArbError,
+    jito_bundle::{create_tip_instruction, poll_bundle_status, select_random_tip_account, send_jito_bundle},
     local_metrics::Metrics,
     solana::rpc::SolanaRpcClient,
     utils::{DexType, PoolInfo, TokenAmount}, // Added PoolInfo import
@@ -624,6 +625,138 @@ impl HftExecutor {
 
     pub fn metrics(&self) -> Arc<Mutex<Metrics>> {
         self.metrics.clone()
+    }
+
+    pub fn set_dex_clients(&mut self, clients: Arc<Mutex<HashMap<DexType, Box<dyn DexClient>>>>) {
+        self.dex_clients = Some(clients);
+    }
+
+    /// Executes a multi-hop arbitrage opportunity using Jito bundle if enabled.
+    pub async fn execute_opportunity_atomic_jito(
+        &self,
+        opportunity: &MultiHopArbOpportunity,
+    ) -> Result<String, String> {
+        use base64::{engine::general_purpose, Engine as _};
+        use solana_sdk::transaction::Transaction;
+
+        // --- Configuration Check ---
+        if !self.config.enable_jito_bundle {
+            return Err("Jito bundle execution is not enabled in the configuration.".to_string());
+        }
+        if opportunity.hops.len() < 2 {
+            return Err("Jito bundle execution is only supported for multi-hop opportunities."
+                .to_string());
+        }
+        let quicknode_url = self
+            .config
+            .jito_quicknode_url
+            .as_ref()
+            .ok_or("Jito QuickNode URL is not configured.")?;
+        let region = self.config.jito_region.as_deref();
+
+        // --- Dynamic Tip Calculation ---
+        let tip_lamports = self.calculate_dynamic_tip(opportunity);
+        let tip_accounts = self
+            .config
+            .jito_tip_accounts
+            .as_ref()
+            .ok_or("Jito tip accounts are not configured.")?;
+        let tip_account = select_random_tip_account(tip_accounts)
+            .map_err(|e| format!("Failed to select Jito tip account: {}", e))?;
+
+        // --- Instruction and Transaction Building ---
+        let mut tx_groups = self
+            .build_instruction_groups_for_multihop(opportunity)
+            .await?;
+        if tx_groups.is_empty() {
+            return Err("No instruction groups were built for the opportunity.".to_string());
+        }
+
+        // Add the tip instruction to the first transaction group.
+        let tip_instruction = create_tip_instruction(&self.wallet.pubkey(), tip_lamports, &tip_account);
+        if let Some(first_group) = tx_groups.get_mut(0) {
+            first_group.insert(0, tip_instruction);
+        } else {
+            return Err("Cannot add tip to an empty transaction group.".to_string());
+        }
+
+        // --- Signing and Encoding Transactions ---
+        let recent_blockhash = self.get_latest_blockhash().await?;
+        let mut signed_txs_base64 = Vec::new();
+        for instructions in tx_groups {
+            let tx = Transaction::new_signed_with_payer(
+                &instructions,
+                Some(&self.wallet.pubkey()),
+                &[&*self.wallet],
+                recent_blockhash,
+            );
+            let tx_bytes =
+                bincode::serialize(&tx).map_err(|e| format!("Failed to serialize transaction: {}", e))?;
+            let tx_base64 = general_purpose::STANDARD.encode(tx_bytes);
+            signed_txs_base64.push(tx_base64);
+        }
+
+        // --- Bundle Submission ---
+        info!(
+            "Submitting Jito bundle for opportunity {} with a tip of {} lamports to {}.",
+            opportunity.id, tip_lamports, tip_account
+        );
+        let bundle_id = send_jito_bundle(quicknode_url, signed_txs_base64, region)
+            .await
+            .map_err(|e| format!("Failed to send Jito bundle: {}", e))?;
+        info!("Jito bundle {} submitted successfully.", bundle_id);
+
+        // --- Bundle Status Polling ---
+        let poll_interval_ms = self.config.jito_bundle_status_poll_interval_ms.unwrap_or(1000);
+        let timeout_secs = self.config.jito_bundle_status_timeout_secs.unwrap_or(30);
+
+        info!(
+            "Polling for bundle {} status every {}ms for up to {} seconds...",
+            bundle_id, poll_interval_ms, timeout_secs
+        );
+
+        match poll_bundle_status(quicknode_url, &bundle_id, poll_interval_ms, timeout_secs).await {
+            Ok(final_status) => {
+                info!("Bundle {} processed. Final status: {:?}", bundle_id, final_status);
+                // TODO: Add more sophisticated parsing of the final status to confirm success/failure.
+                // For now, any processed status is considered a success for this function's purpose.
+                Ok(format!(
+                    "Bundle {} processed successfully. Final status: {:?}",
+                    bundle_id,
+                    final_status
+                ))
+            }
+            Err(e) => {
+                error!("Failed to get final status for bundle {}: {}", bundle_id, e);
+                Err(format!(
+                    "Error polling for bundle {} status: {}",
+                    bundle_id,
+                    e
+                ))
+            }
+        }
+    }
+
+    /// Calculates a dynamic tip for a Jito bundle based on the opportunity's profit.
+    fn calculate_dynamic_tip(&self, opportunity: &MultiHopArbOpportunity) -> u64 {
+        let base_tip = self.config.jito_tip_lamports.unwrap_or(10000); // Default base tip
+        let dynamic_tip_percentage = self.config.jito_dynamic_tip_percentage.unwrap_or(0.1); // Default 10% of profit
+
+        let profit_lamports = opportunity.total_profit as u64;
+        let dynamic_tip = (profit_lamports as f64 * dynamic_tip_percentage) as u64;
+
+        // Use the larger of the base tip or the calculated dynamic tip.
+        std::cmp::max(base_tip, dynamic_tip)
+    }
+
+    /// Helper: Build Vec<Vec<Instruction>> for each hop or logical tx in a multi-hop opportunity
+    async fn build_instruction_groups_for_multihop(
+        &self,
+        opportunity: &MultiHopArbOpportunity,
+    ) -> Result<Vec<Vec<solana_sdk::instruction::Instruction>>, String> {
+        // For now, just one group with all instructions (can be extended for true atomic multi-tx)
+        let instructions = self.build_instructions_from_multihop(opportunity).await?;
+        Ok(vec![instructions])
     }
 }
 

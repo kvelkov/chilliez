@@ -24,7 +24,7 @@ use crate::{
 use crate::performance::PerformanceManager;
 
 use dashmap::DashMap;
-use log::{debug, info, warn};
+use log::{error, info, warn};
 use solana_sdk::pubkey::Pubkey;
 use std::{
     collections::HashMap,
@@ -76,6 +76,7 @@ pub struct ArbitrageOrchestrator {
 
     // Async communication
     pub opportunity_sender: Option<mpsc::UnboundedSender<MultiHopArbOpportunity>>,
+    pub quicknode_opportunity_receiver: Arc<Mutex<Option<mpsc::UnboundedReceiver<MultiHopArbOpportunity>>>>,
 
     // Paper trading components
     pub paper_trading_engine: Option<Arc<SimulatedExecutionEngine>>,
@@ -95,7 +96,6 @@ pub struct ArbitrageOrchestrator {
     // Performance optimization system
     pub performance_manager: Option<Arc<PerformanceManager>>,
 }
-
 #[derive(Debug, Default)]
 pub struct DetectionMetrics {
     pub total_detection_cycles: u64,
@@ -122,6 +122,7 @@ impl ArbitrageOrchestrator {
         executor: Option<Arc<HftExecutor>>,
         batch_execution_engine: Option<Arc<BatchExecutor>>,
         banned_pairs_manager: Arc<BannedPairsManager>,
+        quicknode_opportunity_receiver: Option<mpsc::UnboundedReceiver<MultiHopArbOpportunity>>,
     ) -> Self {
         let detector = Arc::new(Mutex::new(ArbitrageStrategy::new_from_config(&config)));
         let health_check_interval =
@@ -259,6 +260,7 @@ impl ArbitrageOrchestrator {
             ws_reconnect_attempts: Arc::new(AtomicU64::new(0)),
             max_ws_reconnect_attempts,
             opportunity_sender: Some(opportunity_sender),
+            quicknode_opportunity_receiver: Arc::new(Mutex::new(quicknode_opportunity_receiver)),
             paper_trading_engine,
             paper_trading_portfolio,
             paper_trading_analytics,
@@ -318,11 +320,28 @@ impl ArbitrageOrchestrator {
     ) -> Result<(), ArbError> {
         info!("🎯 Executing {} opportunities", opportunities.len());
 
-        for _opportunity in opportunities {
-            // Basic execution logic - placeholder for now
+        for opportunity in opportunities {
             if self.execution_enabled.load(Ordering::Relaxed) {
-                // TODO: Implement actual execution logic via execution manager
-                debug!("⚡ Processing opportunity");
+                if let Some(executor) = &self.executor {
+                    // Use Jito bundle for multi-hop if enabled, else fallback
+                    if self.config.enable_jito_bundle && opportunity.hops.len() > 1 {
+                        match executor.execute_opportunity_atomic_jito(&opportunity).await {
+                            Ok(bundle_id) => {
+                                info!("✅ Jito bundle submitted: {}", bundle_id);
+                                // Optionally: poll bundle status here
+                            }
+                            Err(e) => {
+                                error!("❌ Jito bundle execution failed: {}. Falling back to standard execution.", e);
+                                // Fallback to standard execution
+                                let _ = executor.execute_opportunity(&opportunity).await;
+                            }
+                        }
+                    } else {
+                        let _ = executor.execute_opportunity(&opportunity).await;
+                    }
+                } else {
+                    warn!("No executor configured, skipping execution");
+                }
             } else {
                 warn!("⏸️ Execution disabled, skipping opportunity");
                 return Err(ArbError::ExecutionDisabled(
@@ -454,6 +473,23 @@ impl ArbitrageOrchestrator {
         Err(ArbError::DexError(
             "No quotes available from any DEX client".to_string(),
         ))
+    }
+
+    pub async fn spawn_quicknode_opportunity_task(self: &Arc<Self>) {
+        let receiver_opt = self.quicknode_opportunity_receiver.lock().await.take();
+        if let Some(mut receiver) = receiver_opt {
+            let orchestrator = Arc::clone(self);
+            tokio::spawn(async move {
+                while let Some(opp) = receiver.recv().await {
+                    // You can add filtering, logging, or deduplication here
+                    let _ = orchestrator.execute_opportunities(vec![opp]).await;
+                }
+            });
+        }
+    }
+
+    pub async fn spawn_quicknode_opportunity_task_static(orchestrator: Arc<Self>) {
+        orchestrator.spawn_quicknode_opportunity_task().await;
     }
 }
 

@@ -99,6 +99,16 @@ async fn reference_all_engine_methods_and_fields() {
         jupiter_cache_max_entries: 1000,
         jupiter_cache_amount_bucket_size: 1_000_000,
         jupiter_cache_volatility_threshold_pct: 2.0,
+
+        // Jito bundle configuration
+        enable_jito_bundle: false,
+        jito_quicknode_url: None,
+        jito_tip_lamports: None,
+        jito_region: None,
+        jito_tip_accounts: None,
+        jito_dynamic_tip_percentage: None,
+        jito_bundle_status_poll_interval_ms: None,
+        jito_bundle_status_timeout_secs: None,
     }); // Semicolon was missing here, added for correctness
     let metrics = Arc::new(Mutex::new(solana_arb_bot::local_metrics::Metrics::new()));
     let dex_api_clients: Vec<Arc<dyn DexClient>> = vec![];
@@ -115,6 +125,7 @@ async fn reference_all_engine_methods_and_fields() {
         executor,
         batch_engine,
         banned_pairs_manager,
+        None, // No QuickNode opportunity receiver for this test
     );
 
     // Reference degradation_mode field: set and read

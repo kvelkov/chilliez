@@ -11,7 +11,7 @@ use crate::{
     webhooks::{
         integration::WebhookIntegrationService,
         processor::PoolUpdateProcessor,
-        types::{HeliusWebhookNotification, PoolUpdateEvent, PoolUpdateType},
+        types::{PoolUpdateType},
     },
 };
 
@@ -46,11 +46,9 @@ pub struct LiveUpdateConfig {
     /// Batch timeout in milliseconds
     pub batch_timeout_ms: u64,
     /// Whether to validate updates before applying
-    #[allow(dead_code)] // Planned for validation logic implementation
-    pub validate_updates: bool,
+    pub validate_updates: bool, // Validation logic is now relevant
     /// Maximum age of an update before it's considered stale (ms)
-    #[allow(dead_code)] // Planned for stale update filtering
-    pub max_update_age_ms: u64,
+    pub max_update_age_ms: u64, // Stale update filtering is now relevant
 }
 
 impl Default for LiveUpdateConfig {
@@ -76,10 +74,8 @@ pub struct LiveUpdateMetrics {
     pub total_batches_processed: AtomicU64,
     pub hot_cache_updates: AtomicU64,
     pub webhook_updates: AtomicU64,
-    #[allow(dead_code)] // Planned for validation failure tracking
-    pub validation_failures: AtomicU64,
-    #[allow(dead_code)] // Planned for rate limiting implementation
-    pub rate_limit_hits: AtomicU64,
+    pub _validation_failures: AtomicU64, // Can be tracked if validation is enabled
+    pub rate_limit_hits: AtomicU64,     // Can be tracked if rate limiting is enabled
     pub average_update_latency_ms: AtomicU64,
     pub last_update_timestamp: AtomicU64,
 }
@@ -120,8 +116,7 @@ impl LiveUpdateMetrics {
 pub struct LiveUpdateEvent {
     pub pool_address: Pubkey,
     pub pool_info: Arc<PoolInfo>,
-    #[allow(dead_code)] // Planned for different update type handling
-    pub update_type: PoolUpdateType,
+    pub _update_type: PoolUpdateType, // Update type handling is now relevant
     pub timestamp: u64,
     pub source: UpdateSource,
 }
@@ -134,7 +129,11 @@ pub enum UpdateSource {
     WebSocket,
     Polling,
     Manual,
+    // 🧪 PAPER TRADING: QuickNode DEX Analysis Integration
+    QuickNodeDexAnalysis,
 }
+
+
 
 /// The main LiveUpdateManager service
 pub struct LiveUpdateManager {
@@ -144,12 +143,6 @@ pub struct LiveUpdateManager {
     // MPSC channels for data flow
     update_sender: mpsc::Sender<LiveUpdateEvent>,
     update_receiver: Option<mpsc::Receiver<LiveUpdateEvent>>,
-
-    // External integration channels (future webhook integration)
-    #[allow(dead_code)] // Planned for webhook receiver integration
-    webhook_receiver: Option<mpsc::UnboundedReceiver<HeliusWebhookNotification>>,
-    #[allow(dead_code)] // Planned for external pool update notifications
-    pool_update_sender: Option<mpsc::UnboundedSender<PoolUpdateEvent>>,
 
     // Components
     webhook_service: Option<Arc<Mutex<WebhookIntegrationService>>>,
@@ -165,7 +158,6 @@ pub struct LiveUpdateManager {
 }
 
 /// Simple rate limiter for update processing
-#[allow(dead_code)] // Planned for rate limiting implementation
 struct RateLimiter {
     max_per_second: u32,
     current_count: u32,
@@ -173,7 +165,6 @@ struct RateLimiter {
 }
 
 impl RateLimiter {
-    #[allow(dead_code)] // Planned for rate limiting implementation
     fn new(max_per_second: u32) -> Self {
         Self {
             max_per_second,
@@ -182,7 +173,6 @@ impl RateLimiter {
         }
     }
 
-    #[allow(dead_code)] // Planned for rate limiting implementation
     fn should_allow(&mut self) -> bool {
         let now = Instant::now();
         if now.duration_since(self.last_reset).as_secs() >= 1 {
@@ -224,8 +214,6 @@ impl LiveUpdateManager {
             hot_cache,
             update_sender,
             update_receiver: Some(update_receiver),
-            webhook_receiver: None,
-            pool_update_sender: None,
             webhook_service,
             pool_processor,
             metrics: Arc::new(LiveUpdateMetrics::default()),
@@ -505,7 +493,7 @@ impl LiveUpdateManager {
         LiveUpdateEvent {
             pool_address,
             pool_info,
-            update_type,
+            _update_type: update_type,
             timestamp: chrono::Utc::now().timestamp_millis() as u64,
             source,
         }
@@ -549,6 +537,8 @@ impl LiveUpdateManager {
 
         Ok(())
     }
+
+
 }
 
 /// Builder for LiveUpdateManager configuration

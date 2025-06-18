@@ -394,6 +394,10 @@ impl PoolDiscoverable for LifinityClient {
     fn dex_name(&self) -> &str {
         "Lifinity"
     }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
 }
 
 #[cfg(test)]

@@ -77,6 +77,9 @@ pub trait PoolDiscoverable: Send + Sync {
 
     /// Returns the DEX name for this discoverable client
     fn dex_name(&self) -> &str;
+
+    /// Returns a reference to self as &dyn Any for downcasting
+    fn as_any(&self) -> &dyn std::any::Any;
 }
 
 /// A struct to hold all the necessary information for building a swap instruction.

@@ -968,6 +968,10 @@ impl PoolDiscoverable for JupiterClient {
     fn dex_name(&self) -> &str {
         "Jupiter"
     }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
 }
 
 #[cfg(test)]

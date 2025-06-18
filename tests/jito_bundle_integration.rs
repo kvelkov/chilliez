@@ -101,6 +101,7 @@ fn create_jito_test_config() -> Config {
         jito_dynamic_tip_percentage: Some(0.1),
         jito_bundle_status_poll_interval_ms: Some(500),
         jito_bundle_status_timeout_secs: Some(5),
+        jito_enabled: Some(true), // <-- Added for compatibility
     }
 }
 

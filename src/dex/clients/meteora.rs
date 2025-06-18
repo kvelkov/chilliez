@@ -224,6 +224,97 @@ impl MeteoraPoolParser {
 
         Ok(pool_info)
     }
+
+    /// Parse pool data synchronously (fallback for async parsing)
+    fn parse_pool_data_sync(
+        &self,
+        pool_address: Pubkey,
+        data: &[u8],
+        _rpc_client: &Arc<SolanaRpcClient>,
+    ) -> AnyhowResult<PoolInfo> {
+        // Identify pool type from data length (heuristic approach)
+        let pool_type = Self::identify_pool_type_from_data(data)
+            .ok_or_else(|| anyhow!("Unknown Meteora pool type with data length {}", data.len()))?;
+        match pool_type {
+            MeteoraPoolType::DynamicAmm => {
+                // Parse DynamicAmmPoolState
+                if data.len() < DYNAMIC_AMM_POOL_STATE_SIZE {
+                    return Err(anyhow!("Invalid Dynamic AMM pool data size"));
+                }
+                let pool_state = bytemuck::from_bytes::<DynamicAmmPoolState>(&data[..DYNAMIC_AMM_POOL_STATE_SIZE]);
+                let pool_info = PoolInfo {
+                    address: pool_address,
+                    name: "Meteora Dynamic AMM Pool".to_string(),
+                    token_a: PoolToken {
+                        mint: pool_state.token_a_mint,
+                        symbol: "Unknown".to_string(),
+                        decimals: 0,
+                        reserve: 0,
+                    },
+                    token_b: PoolToken {
+                        mint: pool_state.token_b_mint,
+                        symbol: "Unknown".to_string(),
+                        decimals: 0,
+                        reserve: 0,
+                    },
+                    token_a_vault: pool_state.a_vault,
+                    token_b_vault: pool_state.b_vault,
+                    fee_numerator: Some(pool_state.fee_rate as u64),
+                    fee_denominator: Some(1000000),
+                    fee_rate_bips: Some(pool_state.fee_rate as u16),
+                    last_update_timestamp: 0,
+                    dex_type: DexType::Meteora,
+                    liquidity: None,
+                    sqrt_price: None,
+                    tick_current_index: None,
+                    tick_spacing: None,
+                    tick_array_0: None,
+                    tick_array_1: None,
+                    tick_array_2: None,
+                    oracle: Some(pool_state.oracle),
+                };
+                Ok(pool_info)
+            }
+            MeteoraPoolType::Dlmm => {
+                if data.len() < DLMM_LB_PAIR_STATE_SIZE {
+                    return Err(anyhow!("Invalid DLMM pool data size"));
+                }
+                let pool_state = bytemuck::from_bytes::<DlmmLbPairState>(&data[..DLMM_LB_PAIR_STATE_SIZE]);
+                let pool_info = PoolInfo {
+                    address: pool_address,
+                    name: "Meteora DLMM Pool".to_string(),
+                    token_a: PoolToken {
+                        mint: pool_state.token_x_mint,
+                        symbol: "Unknown".to_string(),
+                        decimals: 0,
+                        reserve: 0,
+                    },
+                    token_b: PoolToken {
+                        mint: pool_state.token_y_mint,
+                        symbol: "Unknown".to_string(),
+                        decimals: 0,
+                        reserve: 0,
+                    },
+                    token_a_vault: pool_state.reserve_x,
+                    token_b_vault: pool_state.reserve_y,
+                    fee_numerator: Some(pool_state.fee_bps as u64),
+                    fee_denominator: Some(10000),
+                    fee_rate_bips: Some(pool_state.fee_bps),
+                    last_update_timestamp: 0,
+                    dex_type: DexType::Meteora,
+                    liquidity: None,
+                    sqrt_price: None,
+                    tick_current_index: Some(pool_state.active_id as i32),
+                    tick_spacing: Some(pool_state.bin_step),
+                    tick_array_0: None,
+                    tick_array_1: None,
+                    tick_array_2: None,
+                    oracle: Some(pool_state.oracle),
+                };
+                Ok(pool_info)
+            }
+        }
+    }
 }
 
 #[async_trait]
@@ -537,6 +628,10 @@ impl PoolDiscoverable for MeteoraClient {
 
     fn dex_name(&self) -> &str {
         &self.name
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
     }
 }
 

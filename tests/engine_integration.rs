@@ -57,7 +57,7 @@ async fn reference_all_engine_methods_and_fields() {
         max_hops: None,
         max_pools_per_hop: None,
         max_concurrent_executions: None,
-        transaction_cu_limit: Some(400_000), // Add missing field
+        transaction_cu_limit: Some(400_000),
         execution_timeout_secs: None,
         simulation_mode: true,
         paper_trading: true,
@@ -109,6 +109,7 @@ async fn reference_all_engine_methods_and_fields() {
         jito_dynamic_tip_percentage: None,
         jito_bundle_status_poll_interval_ms: None,
         jito_bundle_status_timeout_secs: None,
+        jito_enabled: Some(false), // <-- Added for compatibility
     }); // Semicolon was missing here, added for correctness
     let metrics = Arc::new(Mutex::new(solana_arb_bot::local_metrics::Metrics::new()));
     let dex_api_clients: Vec<Arc<dyn DexClient>> = vec![];

@@ -199,6 +199,46 @@ impl UtilsPoolParser for PhoenixPoolParser {
         Ok(pool_info)
     }
 
+    fn parse_pool_data_sync(
+        &self,
+        market_address: Pubkey,
+        _data: &[u8],
+        _rpc_client: &Arc<SolanaRpcClient>,
+    ) -> AnyhowResult<PoolInfo> {
+        let pool_info = PoolInfo {
+            address: market_address,
+            name: "Phoenix Market".to_string(),
+            token_a: PoolToken {
+                mint: Pubkey::default(),
+                symbol: "BASE".to_string(),
+                decimals: 6,
+                reserve: 0,
+            },
+            token_b: PoolToken {
+                mint: Pubkey::default(),
+                symbol: "QUOTE".to_string(),
+                decimals: 6,
+                reserve: 0,
+            },
+            token_a_vault: Pubkey::default(),
+            token_b_vault: Pubkey::default(),
+            fee_numerator: Some(25),
+            fee_denominator: Some(10000),
+            fee_rate_bips: Some(25),
+            last_update_timestamp: chrono::Utc::now().timestamp() as u64,
+            dex_type: DexType::Unknown("Phoenix".to_string()),
+            liquidity: None,
+            sqrt_price: None,
+            tick_current_index: None,
+            tick_spacing: None,
+            tick_array_0: None,
+            tick_array_1: None,
+            tick_array_2: None,
+            oracle: None,
+        };
+        Ok(pool_info)
+    }
+
     fn get_program_id(&self) -> Pubkey {
         PHOENIX_PROGRAM_ID
     }
@@ -475,6 +515,10 @@ impl PoolDiscoverable for PhoenixClient {
 
     fn dex_name(&self) -> &str {
         &self.name
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
     }
 }
 

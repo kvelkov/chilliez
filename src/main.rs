@@ -41,6 +41,11 @@ use solana_sdk::{
 };
 use std::{fs, sync::Arc};
 use tokio::sync::Mutex;
+use crate::arbitrage::analysis::AdvancedArbitrageMath;
+use crate::arbitrage::strategy::ArbitrageStrategy;
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize};
+use std::time::{Instant, Duration};
+use tokio::sync::Semaphore;
 
 // Simple price provider implementation for demonstration
 struct SimplePriceProvider {
@@ -142,19 +147,24 @@ async fn main() -> Result<(), ArbError> {
 
     let metrics = Arc::new(Mutex::new(Metrics::new()));
 
+    info!("[DEBUG] Starting main initialization");
     let ha_solana_rpc_client = Arc::new(SolanaRpcClient::new(
         &app_config.rpc_url,
         vec![],
         app_config.rpc_max_retries.unwrap_or(3) as usize,
         std::time::Duration::from_millis(app_config.rpc_retry_delay_ms.unwrap_or(500)),
     ));
+    info!("[DEBUG] Solana RPC client initialized");
 
     let redis_cache =
         Arc::new(Cache::new(&app_config.redis_url, app_config.redis_default_ttl_secs).await?);
+    info!("[DEBUG] Redis cache initialized");
 
     let dex_api_clients = get_all_clients_arc(redis_cache.clone(), app_config.clone()).await;
+    info!("[DEBUG] DEX API clients initialized");
 
     // --- Initial Pool Discovery (One-time population) ---
+    info!("[DEBUG] Starting pool discovery");
     info!("� ═══════════════════════════════════════════════════════════════════════════");
     info!("🔍 POOL DISCOVERY: Initializing liquidity pool cache...");
     info!("🔍 ═══════════════════════════════════════════════════════════════════════════");
@@ -162,6 +172,7 @@ async fn main() -> Result<(), ArbError> {
     let validation_config = PoolValidationConfig::default();
     let discoverable_clients =
         get_all_discoverable_clients(redis_cache.clone(), app_config.clone());
+    info!("[DEBUG] Number of discoverable clients: {}", discoverable_clients.len());
     let pool_discovery_service = Arc::new(
         PoolDiscoveryService::new(
             discoverable_clients,
@@ -171,6 +182,7 @@ async fn main() -> Result<(), ArbError> {
         )
         .map_err(ArbError::from)?,
     );
+    info!("[DEBUG] PoolDiscoveryService initialized");
 
     let discovery_start = std::time::Instant::now();
     let discovery_result_count = pool_discovery_service
@@ -178,6 +190,7 @@ async fn main() -> Result<(), ArbError> {
         .await
         .map_err(ArbError::from)?;
     let discovery_duration = discovery_start.elapsed();
+    info!("[DEBUG] Pool discovery finished");
 
     info!("✅ POOL DISCOVERY COMPLETE:");
     info!("   • Duration: {:?}", discovery_duration);
@@ -189,17 +202,66 @@ async fn main() -> Result<(), ArbError> {
 
     // Get the actual discovered pools for cache population
     let discovery_result = pool_discovery_service.get_all_cached_pools();
+    info!("[DEBUG] Discovery result: {:#?}", discovery_result);
 
     // --- Initialize Hot Cache ---
     info!("🔥 ═══════════════════════════════════════════════════════════════════════════");
     info!("🔥 HOT CACHE: Initializing high-performance memory cache...");
     info!("🔥 ═══════════════════════════════════════════════════════════════════════════");
     let hot_cache: Arc<DashMap<Pubkey, Arc<PoolInfo>>> = Arc::new(DashMap::new());
+    info!("[DEBUG] Hot cache created");
 
     // Populate hot cache with initial discovery results
     for pool_info in discovery_result.iter() {
+        info!("[DEBUG] Inserting pool into hot_cache: {:#?}", pool_info);
         hot_cache.insert(pool_info.address, pool_info.clone());
     }
+    info!("[DEBUG] Hot cache population complete");
+
+    // --- SPECIAL CASE: ORCA WHIRLPOOLS ON-CHAIN DISCOVERY ---
+    info!("[ORCA] Attempting to populate Orca Whirlpools from JSON via on-chain fetch...");
+    {
+        use crate::arbitrage::orchestrator::ArbitrageOrchestrator;
+        let fake_orchestrator = ArbitrageOrchestrator {
+            hot_cache: hot_cache.clone(),
+            config: app_config.clone(),
+            metrics: metrics.clone(),
+            rpc_client: Some(ha_solana_rpc_client.clone()),
+            ws_manager: None,
+            dex_providers: vec![],
+            detector: Arc::new(Mutex::new(ArbitrageStrategy::new_from_config(&app_config))),
+            advanced_math: Arc::new(Mutex::new(AdvancedArbitrageMath::new(12))),
+            dynamic_threshold_updater: None,
+            price_aggregator: None,
+            pool_validation_config: PoolValidationConfig::default(),
+            banned_pairs_manager: Arc::new(BannedPairsManager::new("banned_pairs_log.csv".to_string()).unwrap()),
+            degradation_mode: Arc::new(AtomicBool::new(false)),
+            execution_enabled: Arc::new(AtomicBool::new(true)),
+            last_health_check: Arc::new(tokio::sync::RwLock::new(Instant::now())),
+            health_check_interval: Duration::from_secs(60),
+            ws_reconnect_attempts: Arc::new(AtomicU64::new(0)),
+            max_ws_reconnect_attempts: 5,
+            opportunity_sender: None,
+            quicknode_opportunity_receiver: Arc::new(Mutex::new(None)),
+            paper_trading_engine: None,
+            paper_trading_portfolio: None,
+            paper_trading_analytics: None,
+            paper_trading_reporter: None,
+            balance_monitor: None,
+            trading_pairs_locks: Arc::new(DashMap::new()),
+            execution_semaphore: Arc::new(Semaphore::new(1)),
+            concurrent_executions: Arc::new(AtomicUsize::new(0)),
+            max_concurrent_executions: 1,
+            performance_manager: None,
+            jito_client: None, // Add this line for compatibility
+        };
+        let orca_json_path = "config/orca_whirlpool_pools.json";
+        match fake_orchestrator.populate_orca_whirlpool_hot_cache_from_json(orca_json_path).await {
+            Ok(_) => info!("[ORCA] Orca Whirlpools hot cache population complete!"),
+            Err(e) => warn!("[ORCA] Failed to populate Orca Whirlpools from JSON: {}", e),
+        }
+    }
+    info!("[ORCA] After Orca hot cache population, total pools in hot cache: {}", hot_cache.len());
 
     info!("✅ HOT CACHE READY:");
     info!("   • Pools Loaded: {} pools", hot_cache.len());

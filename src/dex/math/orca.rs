@@ -31,6 +31,7 @@ pub fn tick_to_sqrt_price(tick: i32) -> Result<u128> {
 }
 
 /// Convert sqrt price (Q64.64) to normal price
+#[allow(dead_code)]
 pub fn sqrt_price_to_price(sqrt_price: u128) -> Result<f64> {
     if sqrt_price == 0 {
         return Err(anyhow!("Sqrt price cannot be zero"));
@@ -41,6 +42,7 @@ pub fn sqrt_price_to_price(sqrt_price: u128) -> Result<f64> {
 }
 
 /// Calculate swap output for Orca Whirlpool CLMM
+#[allow(dead_code)]
 pub fn calculate_whirlpool_swap_output(
     input_amount: u64,
     sqrt_price: u128,
@@ -96,6 +98,7 @@ pub fn calculate_whirlpool_swap_output(
 }
 
 /// Calculate output when swapping token A for token B
+#[allow(dead_code)]
 fn calculate_a_to_b_output(input_amount: u64, sqrt_price: u128, liquidity: u128) -> Result<u64> {
     // CLMM formula: ∆y = L * (√P - √P')
     // Where ∆x = input_amount, L = liquidity, √P = current sqrt price
@@ -113,6 +116,7 @@ fn calculate_a_to_b_output(input_amount: u64, sqrt_price: u128, liquidity: u128)
 }
 
 /// Calculate output when swapping token B for token A  
+#[allow(dead_code)]
 fn calculate_b_to_a_output(input_amount: u64, sqrt_price: u128, liquidity: u128) -> Result<u64> {
     // CLMM formula: ∆x = L * (1/√P' - 1/√P)
     // Where ∆y = input_amount, L = liquidity, √P = current sqrt price
@@ -135,6 +139,7 @@ fn calculate_b_to_a_output(input_amount: u64, sqrt_price: u128, liquidity: u128)
 }
 
 /// Calculate new sqrt price after swap
+#[allow(dead_code)]
 fn calculate_new_sqrt_price(
     current_sqrt_price: u128,
     liquidity: u128,
@@ -154,6 +159,7 @@ fn calculate_new_sqrt_price(
 }
 
 /// Convert sqrt price back to tick (inverse of tick_to_sqrt_price)
+#[allow(dead_code)]
 fn sqrt_price_to_tick(sqrt_price: u128) -> Result<i32> {
     let price = sqrt_price_to_price(sqrt_price)?;
     let tick = (price.ln() / 1.0001_f64.ln()) as i32;
@@ -164,6 +170,7 @@ fn sqrt_price_to_tick(sqrt_price: u128) -> Result<i32> {
 
 /// Result of a whirlpool swap calculation
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct WhirlpoolSwapResult {
     pub output_amount: u64,
     #[allow(dead_code)]
@@ -175,6 +182,7 @@ pub struct WhirlpoolSwapResult {
 }
 
 /// Validate pool state for CLMM calculations
+#[allow(dead_code)]
 pub fn validate_pool_state(
     sqrt_price: Option<u128>,
     liquidity: Option<u128>,

@@ -83,6 +83,9 @@ pub struct Config {
     pub jito_dynamic_tip_percentage: Option<f64>,
     pub jito_bundle_status_poll_interval_ms: Option<u64>,
     pub jito_bundle_status_timeout_secs: Option<u64>,
+
+    // Jito Orchestrator integration
+    pub jito_enabled: Option<bool>,
 }
 
 impl Config {
@@ -320,6 +323,9 @@ impl Config {
             jito_bundle_status_timeout_secs: env::var("JITO_BUNDLE_STATUS_TIMEOUT_SECS")
                 .ok()
                 .and_then(|s| s.parse().ok()),
+
+            // Jito Orchestrator integration
+            jito_enabled: env::var("JITO_ENABLED").ok().and_then(|s| s.parse().ok()),
         }
     }
 
@@ -405,6 +411,9 @@ impl Config {
             jito_dynamic_tip_percentage: None,
             jito_bundle_status_poll_interval_ms: None,
             jito_bundle_status_timeout_secs: None,
+
+            // Jito Orchestrator integration (test default)
+            jito_enabled: None,
         }
     }
 

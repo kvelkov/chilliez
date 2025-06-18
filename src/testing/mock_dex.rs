@@ -510,6 +510,10 @@ impl PoolDiscoverable for MockDex {
     fn dex_name(&self) -> &str {
         &self.name
     }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
 }
 
 /// Transaction statistics for monitoring

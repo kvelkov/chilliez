@@ -168,6 +168,57 @@ impl UtilsPoolParser for RaydiumPoolParser {
         Ok(pool_info)
     }
 
+    fn parse_pool_data_sync(
+        &self,
+        pool_address: Pubkey,
+        data: &[u8],
+        _rpc_client: &Arc<SolanaRpcClient>,
+    ) -> AnyhowResult<PoolInfo> {
+        if data.len() < RAYDIUM_V4_POOL_STATE_SIZE {
+            return Err(anyhow!(
+                "Invalid Raydium pool data size: expected {}, got {}",
+                RAYDIUM_V4_POOL_STATE_SIZE,
+                data.len()
+            ));
+        }
+        let pool_state = bytemuck::from_bytes::<LiquidityStateV4>(&data[..RAYDIUM_V4_POOL_STATE_SIZE]);
+        let pool_info = PoolInfo {
+            address: pool_address,
+            name: format!("Raydium V4 Pool"),
+            token_a: PoolToken {
+                mint: pool_state.base_mint,
+                symbol: "Unknown".to_string(),
+                decimals: 0, // Unknown in sync context
+                reserve: 0,  // Unknown in sync context
+            },
+            token_b: PoolToken {
+                mint: pool_state.quote_mint,
+                symbol: "Unknown".to_string(),
+                decimals: 0,
+                reserve: 0,
+            },
+            token_a_vault: pool_state.base_vault,
+            token_b_vault: pool_state.quote_vault,
+            fee_numerator: Some(pool_state.swap_fee_numerator),
+            fee_denominator: Some(pool_state.swap_fee_denominator),
+            fee_rate_bips: Some(
+                (pool_state.swap_fee_numerator * 10000 / pool_state.swap_fee_denominator) as u16,
+            ),
+            last_update_timestamp: chrono::Utc::now().timestamp() as u64,
+            dex_type: DexType::Raydium,
+            liquidity: None,
+            sqrt_price: None,
+            tick_current_index: None,
+            tick_spacing: None,
+            // Orca-specific fields (not applicable)
+            tick_array_0: None,
+            tick_array_1: None,
+            tick_array_2: None,
+            oracle: None,
+        };
+        Ok(pool_info)
+    }
+
     fn get_program_id(&self) -> Pubkey {
         RAYDIUM_LIQUIDITY_POOL_V4_PROGRAM_ID
     }
@@ -469,6 +520,10 @@ impl PoolDiscoverable for RaydiumClient {
 
     fn dex_name(&self) -> &str {
         self.get_name()
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
     }
 }
 

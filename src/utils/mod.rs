@@ -93,13 +93,6 @@ pub struct ProgramConfig {
     pub version: String,
 }
 
-impl ProgramConfig {
-    #[allow(dead_code)] // Used for debugging/logging purposes
-    pub fn log_details(&self) {
-        info!("Program: {} v{}", self.name, self.version);
-    }
-}
-
 /// Setup logging for the application
 pub fn setup_logging() -> Result<(), fern::InitError> {
     fern::Dispatch::new()
@@ -207,7 +200,7 @@ pub trait PoolParser: Send + Sync {
     ) -> Result<PoolInfo>;
 
     /// Parse pool data synchronously (fallback method)
-    #[allow(dead_code)] // Fallback method for synchronous parsing
+    // Fallback method for synchronous parsing
     fn parse_pool_data_sync(
         &self,
         _pool_address: Pubkey,
@@ -219,12 +212,11 @@ pub trait PoolParser: Send + Sync {
     }
 
     /// Get the program ID of the DEX
-    #[allow(dead_code)] // Used by pool discovery systems
     fn get_program_id(&self) -> Pubkey;
 }
 
 /// Calculate output amount for a swap given pool information
-#[allow(dead_code)] // Utility function for quote calculations
+// Utility function for quote calculations
 pub fn calculate_output_amount(pool: &PoolInfo, input_amount: u64, is_a_to_b: bool) -> Result<u64> {
     let (input_reserve, output_reserve) = if is_a_to_b {
         (pool.token_a.reserve, pool.token_b.reserve)
@@ -250,7 +242,7 @@ pub fn calculate_output_amount(pool: &PoolInfo, input_amount: u64, is_a_to_b: bo
 /// Test struct to verify PoolInfo field definitions
 #[cfg(test)]
 #[derive(Debug, Clone)]
-#[allow(dead_code)] // Used for field definition verification in tests
+ // Used for field definition verification in tests
 pub struct TestPoolInfo {
     pub address: Pubkey,
     pub name: String,

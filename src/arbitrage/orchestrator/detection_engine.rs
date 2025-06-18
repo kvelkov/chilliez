@@ -34,8 +34,19 @@ impl ArbitrageOrchestrator {
             pool_count
         );
 
-        // Validate pools before detection
-        let validated_pools = self.validate_hot_cache_pools(&pools_snapshot).await?;
+        // Validate pools before detection, and update blacklist for validation failures
+        let mut detector = self.detector.lock().await;
+        let mut validated_pools = Vec::new();
+        for pool in &pools_snapshot {
+            if detector.is_blacklisted(&pool.address) {
+                continue;
+            }
+            if self.is_pool_valid(pool).await {
+                validated_pools.push(pool.clone());
+            } else {
+                detector.add_to_blacklist(pool.address, "validation");
+            }
+        }
         let validation_filtered = pool_count - validated_pools.len();
         timer.checkpoint("pool_validation");
 
@@ -49,18 +60,14 @@ impl ArbitrageOrchestrator {
         }
 
         // Run enhanced detection with validated pools
-        let opportunities = {
-            let detector = self.detector.lock().await;
-            // Convert Vec to HashMap for compatibility
-            let pools_map: std::collections::HashMap<solana_sdk::pubkey::Pubkey, Arc<PoolInfo>> =
-                validated_pools
-                    .iter()
-                    .map(|pool| (pool.address, pool.clone()))
-                    .collect();
-            detector
-                .detect_all_opportunities(&pools_map, &self.metrics)
-                .await?
-        };
+        let pools_map: std::collections::HashMap<solana_sdk::pubkey::Pubkey, Arc<PoolInfo>> =
+            validated_pools
+                .iter()
+                .map(|pool| (pool.address, pool.clone()))
+                .collect();
+        let opportunities = detector
+            .detect_all_opportunities(&pools_map, &self.metrics)
+            .await?;
         timer.checkpoint("opportunity_detection");
 
         let detection_time = timer.finish_with_threshold(2000); // Warn if > 2 seconds

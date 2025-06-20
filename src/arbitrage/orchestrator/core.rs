@@ -23,8 +23,14 @@ use crate::{
 use crate::performance::PerformanceManager;
 
 use dashmap::DashMap;
-use log::{error, info, warn, debug};
+use log::{debug, error, info, warn};
 use solana_sdk::pubkey::Pubkey;
+use solana_sdk::{
+    hash::Hash,
+    signature::{Keypair, Signer},
+    signer::keypair::read_keypair_file, // Fix: import read_keypair_file
+    transaction::Transaction,
+};
 use std::{
     collections::HashMap,
     sync::{
@@ -34,12 +40,6 @@ use std::{
     time::{Duration, Instant},
 };
 use tokio::sync::{mpsc, Mutex, RwLock, Semaphore};
-use solana_sdk::{
-    signature::{Keypair, Signer},
-    transaction::Transaction,
-    hash::Hash,
-    signer::keypair::read_keypair_file, // Fix: import read_keypair_file
-};
 
 // =============================================================================
 // Core Orchestrator Struct
@@ -79,7 +79,8 @@ pub struct ArbitrageOrchestrator {
 
     // Async communication
     pub opportunity_sender: Option<mpsc::UnboundedSender<MultiHopArbOpportunity>>,
-    pub quicknode_opportunity_receiver: Arc<Mutex<Option<mpsc::UnboundedReceiver<MultiHopArbOpportunity>>>>,
+    pub quicknode_opportunity_receiver:
+        Arc<Mutex<Option<mpsc::UnboundedReceiver<MultiHopArbOpportunity>>>>,
 
     // Paper trading components
     pub paper_trading_engine: Option<Arc<SimulatedExecutionEngine>>,
@@ -211,9 +212,11 @@ impl ArbitrageOrchestrator {
 
         // Initialize Jito client if enabled in config
         let jito_client = if config.jito_enabled.unwrap_or(false) {
-            Some(Arc::new(tokio::sync::RwLock::new(crate::arbitrage::JitoClient::new_with_defaults(
-                solana_client::nonblocking::rpc_client::RpcClient::new(config.rpc_url.clone())
-            ))))
+            Some(Arc::new(tokio::sync::RwLock::new(
+                crate::arbitrage::JitoClient::new_with_defaults(
+                    solana_client::nonblocking::rpc_client::RpcClient::new(config.rpc_url.clone()),
+                ),
+            )))
         } else {
             None
         };
@@ -372,23 +375,26 @@ impl ArbitrageOrchestrator {
                                     analytics_lock.record_trade_execution(&receipt, &dex_name);
 
                                     if let Some(reporter) = &self.paper_trading_reporter {
-                                        let actual_profit = receipt.output_amount as i64 - receipt.input_amount as i64;
-                                        let slippage_applied = receipt.slippage_bps as f64 / 10_000.0;
+                                        let actual_profit = receipt.output_amount as i64
+                                            - receipt.input_amount as i64;
+                                        let slippage_applied =
+                                            receipt.slippage_bps as f64 / 10_000.0;
 
-                                        let log_entry = PaperTradingReporter::create_trade_log_entry(
-                                            &opportunity,
-                                            receipt.input_amount,
-                                            receipt.output_amount,
-                                            actual_profit,
-                                            slippage_applied,
-                                            receipt.fee_amount, // fees_paid
-                                            receipt.success,
-                                            receipt.error_message.clone(),
-                                            receipt.fee_amount, // gas_cost
-                                            None, // dex_error_details
-                                            0,    // rent_paid
-                                            0,    // account_creation_fees
-                                        );
+                                        let log_entry =
+                                            PaperTradingReporter::create_trade_log_entry(
+                                                &opportunity,
+                                                receipt.input_amount,
+                                                receipt.output_amount,
+                                                actual_profit,
+                                                slippage_applied,
+                                                receipt.fee_amount, // fees_paid
+                                                receipt.success,
+                                                receipt.error_message.clone(),
+                                                receipt.fee_amount, // gas_cost
+                                                None,               // dex_error_details
+                                                0,                  // rent_paid
+                                                0,                  // account_creation_fees
+                                            );
 
                                         if let Err(e) = reporter.log_trade(log_entry.clone()) {
                                             warn!("Failed to log paper trade: {}", e);
@@ -397,7 +403,11 @@ impl ArbitrageOrchestrator {
                                         if let Some(portfolio) = &self.paper_trading_portfolio {
                                             // Pass a reference to the inner VirtualPortfolio
                                             let portfolio_snapshot = portfolio.snapshot();
-                                            reporter.print_live_trade_summary(&analytics_lock, &log_entry, &portfolio_snapshot);
+                                            reporter.print_live_trade_summary(
+                                                &analytics_lock,
+                                                &log_entry,
+                                                &portfolio_snapshot,
+                                            );
                                         } else {
                                             warn!("No paper trading portfolio available for live summary");
                                         }
@@ -415,7 +425,10 @@ impl ArbitrageOrchestrator {
                 } else {
                     // --- Real Trading Execution ---
                     // Use the new execution_manager logic for real execution
-                    debug!("[DEBUG] Real trading execution for opportunity: {:#?}", opportunity);
+                    debug!(
+                        "[DEBUG] Real trading execution for opportunity: {:#?}",
+                        opportunity
+                    );
                     if let Err(e) = self.execute_single_opportunity(&opportunity).await {
                         error!("❌ Real trade execution failed: {}", e);
                         debug!("[DEBUG] Real trade execution error: {:#?}", e);
@@ -423,7 +436,10 @@ impl ArbitrageOrchestrator {
                 }
             } else {
                 warn!("⏸️ Execution disabled, skipping opportunity");
-                debug!("[DEBUG] Execution disabled for opportunity: {:#?}", opportunity);
+                debug!(
+                    "[DEBUG] Execution disabled for opportunity: {:#?}",
+                    opportunity
+                );
                 return Err(ArbError::ExecutionDisabled(
                     "Execution is disabled".to_string(),
                 ));
@@ -462,12 +478,22 @@ impl ArbitrageOrchestrator {
                 priority_fee_lamports: None,
             };
             // Find the DEX client for this hop
-            let dex_client = self.dex_providers.iter().find(|c| c.get_name().to_lowercase() == hop.dex.to_string().to_lowercase());
+            let dex_client = self
+                .dex_providers
+                .iter()
+                .find(|c| c.get_name().to_lowercase() == hop.dex.to_string().to_lowercase());
             let dex_client = match dex_client {
                 Some(c) => c,
-                None => return Err(ArbError::ConfigError(format!("No DEX client for {}", hop.dex))),
+                None => {
+                    return Err(ArbError::ConfigError(format!(
+                        "No DEX client for {}",
+                        hop.dex
+                    )))
+                }
             };
-            let ix = dex_client.get_swap_instruction_enhanced(&swap_info, pool_info).await?;
+            let ix = dex_client
+                .get_swap_instruction_enhanced(&swap_info, pool_info)
+                .await?;
             instructions.push(ix);
         }
         // Build a single transaction for the whole opportunity (multi-hop atomic)
@@ -485,8 +511,14 @@ impl ArbitrageOrchestrator {
         info!("[TRACE][JITO] Received opportunity for Jito execution: input_token={} output_token={} pool_path={:?}",
             opportunity.input_token, opportunity.output_token, opportunity.pool_path);
 
-        if !self.execution_enabled.load(std::sync::atomic::Ordering::Relaxed) {
-            warn!("[JITO] Execution is currently disabled. Skipping opportunity: {} -> {}", opportunity.input_token, opportunity.output_token);
+        if !self
+            .execution_enabled
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
+            warn!(
+                "[JITO] Execution is currently disabled. Skipping opportunity: {} -> {}",
+                opportunity.input_token, opportunity.output_token
+            );
             return Err(crate::error::ArbError::ExecutionDisabled(
                 "Execution is currently disabled".to_string(),
             ));
@@ -496,19 +528,29 @@ impl ArbitrageOrchestrator {
         match self.validate_opportunity_quotes(opportunity).await {
             Ok(is_valid) => {
                 if !is_valid {
-                    warn!("[JITO] Skipping opportunity due to quote validation failure: {} -> {}", opportunity.input_token, opportunity.output_token);
+                    warn!(
+                        "[JITO] Skipping opportunity due to quote validation failure: {} -> {}",
+                        opportunity.input_token, opportunity.output_token
+                    );
                     return Err(crate::error::ArbError::InvalidPoolState(
                         "Quote validation failed".to_string(),
                     ));
                 } else {
-                    info!("[TRACE][JITO] Opportunity passed quote validation: {} -> {}", opportunity.input_token, opportunity.output_token);
+                    info!(
+                        "[TRACE][JITO] Opportunity passed quote validation: {} -> {}",
+                        opportunity.input_token, opportunity.output_token
+                    );
                 }
             }
             Err(e) => {
-                error!("[JITO] Error during quote validation: {} -> {} | error: {}", opportunity.input_token, opportunity.output_token, e);
-                return Err(crate::error::ArbError::InvalidPoolState(
-                    format!("Quote validation error: {}", e),
-                ));
+                error!(
+                    "[JITO] Error during quote validation: {} -> {} | error: {}",
+                    opportunity.input_token, opportunity.output_token, e
+                );
+                return Err(crate::error::ArbError::InvalidPoolState(format!(
+                    "Quote validation error: {}",
+                    e
+                )));
             }
         }
 
@@ -524,15 +566,36 @@ impl ArbitrageOrchestrator {
         };
 
         // Load payer keypair from config
-        let payer_path = self.config.trader_wallet_keypair_path.as_ref().ok_or_else(|| ArbError::ConfigError("No trader_wallet_keypair_path in config".to_string()))?;
-        let payer = read_keypair_file(payer_path).map_err(|e| ArbError::ConfigError(format!("Failed to read keypair: {}", e)))?;
+        let payer_path = self
+            .config
+            .trader_wallet_keypair_path
+            .as_ref()
+            .ok_or_else(|| {
+                ArbError::ConfigError("No trader_wallet_keypair_path in config".to_string())
+            })?;
+        let payer = read_keypair_file(payer_path)
+            .map_err(|e| ArbError::ConfigError(format!("Failed to read keypair: {}", e)))?;
         // Get recent blockhash
-        let rpc = self.rpc_client.as_ref().ok_or_else(|| ArbError::ConfigError("No RPC client configured".to_string()))?;
-        let recent_blockhash = rpc.primary_client.get_latest_blockhash().await.map_err(|e| ArbError::ExecutionError(format!("Failed to get recent blockhash: {}", e)))?;
+        let rpc = self
+            .rpc_client
+            .as_ref()
+            .ok_or_else(|| ArbError::ConfigError("No RPC client configured".to_string()))?;
+        let recent_blockhash = rpc
+            .primary_client
+            .get_latest_blockhash()
+            .await
+            .map_err(|e| {
+                ArbError::ExecutionError(format!("Failed to get recent blockhash: {}", e))
+            })?;
         // Build and sign the transaction bundle
-        let transactions = self.build_signed_jito_bundle(opportunity, &payer, recent_blockhash).await?;
+        let transactions = self
+            .build_signed_jito_bundle(opportunity, &payer, recent_blockhash)
+            .await?;
         if transactions.is_empty() {
-            error!("[JITO] No transactions built for opportunity: {} -> {}", opportunity.input_token, opportunity.output_token);
+            error!(
+                "[JITO] No transactions built for opportunity: {} -> {}",
+                opportunity.input_token, opportunity.output_token
+            );
             return Err(crate::error::ArbError::ExecutionError(
                 "No transactions built for Jito bundle".to_string(),
             ));
@@ -541,13 +604,19 @@ impl ArbitrageOrchestrator {
         let mut client = jito_client.write().await;
         match client.submit_bundle(transactions).await {
             Ok(bundle_id) => {
-                info!("[JITO] Bundle submitted successfully. Bundle ID: {}", bundle_id);
+                info!(
+                    "[JITO] Bundle submitted successfully. Bundle ID: {}",
+                    bundle_id
+                );
                 // TODO: Track bundle result, poll for confirmation, etc.
                 Ok(())
             }
             Err(e) => {
                 error!("[JITO] Bundle submission failed: {}", e);
-                Err(crate::error::ArbError::ExecutionError(format!("Jito bundle submission failed: {}", e)))
+                Err(crate::error::ArbError::ExecutionError(format!(
+                    "Jito bundle submission failed: {}",
+                    e
+                )))
             }
         }
     }
@@ -594,7 +663,10 @@ impl ArbitrageOrchestrator {
     ) -> Result<(), ArbError> {
         // Use hot_cache or pools_map to check for pool existence
         for pool_addr in &opp.pool_path {
-            debug!("[DEBUG] Checking pool existence in hot_cache: {}", pool_addr);
+            debug!(
+                "[DEBUG] Checking pool existence in hot_cache: {}",
+                pool_addr
+            );
             if !self.hot_cache.contains_key(pool_addr) {
                 warn!("[DEBUG] Pool not found in hot_cache: {}", pool_addr);
                 return Err(ArbError::PoolNotFound(pool_addr.to_string()));
@@ -705,7 +777,10 @@ impl ArbitrageOrchestrator {
     }
 
     /// Populate the hot cache with Orca Whirlpools pools from a JSON file (on-chain fetch)
-    pub async fn populate_orca_whirlpool_hot_cache_from_json(&self, json_path: &str) -> anyhow::Result<()> {
+    pub async fn populate_orca_whirlpool_hot_cache_from_json(
+        &self,
+        json_path: &str,
+    ) -> anyhow::Result<()> {
         use crate::dex::clients::orca::OrcaClient;
         let rpc = match &self.rpc_client {
             Some(rpc) => rpc.clone(),
@@ -715,18 +790,28 @@ impl ArbitrageOrchestrator {
             }
         };
         let orca_client = OrcaClient::new();
-        log::info!("[ORCA] Starting on-chain pool discovery from JSON: {}", json_path);
+        log::info!(
+            "[ORCA] Starting on-chain pool discovery from JSON: {}",
+            json_path
+        );
         let pools = orca_client
             .discover_pools_onchain_from_json(&rpc, json_path)
             .await?;
-        log::info!("[ORCA] On-chain pool discovery complete. {} pools found.", pools.len());
+        log::info!(
+            "[ORCA] On-chain pool discovery complete. {} pools found.",
+            pools.len()
+        );
         for pool in &pools {
             debug!("[DEBUG] Inserting pool into hot_cache: {:#?}", pool);
         }
         for pool in pools {
             self.hot_cache.insert(pool.address, Arc::new(pool));
         }
-        log::info!("[HOT CACHE] Populated with {} Orca Whirlpools pools from {}", self.hot_cache.len(), json_path);
+        log::info!(
+            "[HOT CACHE] Populated with {} Orca Whirlpools pools from {}",
+            self.hot_cache.len(),
+            json_path
+        );
         Ok(())
     }
 }

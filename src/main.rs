@@ -4,20 +4,20 @@ mod cache;
 mod config;
 mod dex;
 mod error;
+pub mod jito_bundle;
 mod local_metrics;
 pub mod paper_trading; // Add paper trading module
 pub mod performance;
+pub mod quicknode;
 mod solana;
 mod utils;
 pub mod webhooks;
-pub mod websocket; // Add performance module
-pub mod quicknode;
-pub mod jito_bundle; // Expose jito_bundle module
+pub mod websocket; // Add performance module // Expose jito_bundle module
 
+use crate::arbitrage::analysis::AdvancedArbitrageMath;
+use crate::arbitrage::strategy::ArbitrageStrategy;
 use crate::{
-    arbitrage::{
-        orchestrator::{ArbitrageOrchestrator, PriceDataProvider},
-    },
+    arbitrage::orchestrator::{ArbitrageOrchestrator, PriceDataProvider},
     cache::Cache,
     config::settings::Config,
     dex::{
@@ -39,12 +39,10 @@ use solana_sdk::{
     pubkey::Pubkey,
     signature::{read_keypair_file, Signer},
 };
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize};
+use std::time::{Duration, Instant};
 use std::{fs, sync::Arc};
 use tokio::sync::Mutex;
-use crate::arbitrage::analysis::AdvancedArbitrageMath;
-use crate::arbitrage::strategy::ArbitrageStrategy;
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize};
-use std::time::{Instant, Duration};
 use tokio::sync::Semaphore;
 
 // Simple price provider implementation for demonstration
@@ -65,7 +63,9 @@ impl PriceDataProvider for SimplePriceProvider {
 #[tokio::main]
 async fn main() -> Result<(), ArbError> {
     // --- QuickNode Opportunity Channel Initialization ---
-    let (opportunity_sender, opportunity_receiver) = tokio::sync::mpsc::unbounded_channel::<crate::arbitrage::opportunity::MultiHopArbOpportunity>();
+    let (opportunity_sender, opportunity_receiver) = tokio::sync::mpsc::unbounded_channel::<
+        crate::arbitrage::opportunity::MultiHopArbOpportunity,
+    >();
 
     // Initialize the StatsD exporter for metrics (UDP to 127.0.0.1:8125)
     let recorder = metrics_exporter_statsd::StatsdBuilder::from("127.0.0.1", 8125)
@@ -172,7 +172,10 @@ async fn main() -> Result<(), ArbError> {
     let validation_config = PoolValidationConfig::default();
     let discoverable_clients =
         get_all_discoverable_clients(redis_cache.clone(), app_config.clone());
-    info!("[DEBUG] Number of discoverable clients: {}", discoverable_clients.len());
+    info!(
+        "[DEBUG] Number of discoverable clients: {}",
+        discoverable_clients.len()
+    );
     let pool_discovery_service = Arc::new(
         PoolDiscoveryService::new(
             discoverable_clients,
@@ -234,7 +237,9 @@ async fn main() -> Result<(), ArbError> {
             dynamic_threshold_updater: None,
             price_aggregator: None,
             pool_validation_config: PoolValidationConfig::default(),
-            banned_pairs_manager: Arc::new(BannedPairsManager::new("banned_pairs_log.csv".to_string()).unwrap()),
+            banned_pairs_manager: Arc::new(
+                BannedPairsManager::new("banned_pairs_log.csv".to_string()).unwrap(),
+            ),
             degradation_mode: Arc::new(AtomicBool::new(false)),
             execution_enabled: Arc::new(AtomicBool::new(true)),
             last_health_check: Arc::new(tokio::sync::RwLock::new(Instant::now())),
@@ -256,12 +261,18 @@ async fn main() -> Result<(), ArbError> {
             jito_client: None, // Add this line for compatibility
         };
         let orca_json_path = "config/orca_whirlpool_pools.json";
-        match fake_orchestrator.populate_orca_whirlpool_hot_cache_from_json(orca_json_path).await {
+        match fake_orchestrator
+            .populate_orca_whirlpool_hot_cache_from_json(orca_json_path)
+            .await
+        {
             Ok(_) => info!("[ORCA] Orca Whirlpools hot cache population complete!"),
             Err(e) => warn!("[ORCA] Failed to populate Orca Whirlpools from JSON: {}", e),
         }
     }
-    info!("[ORCA] After Orca hot cache population, total pools in hot cache: {}", hot_cache.len());
+    info!(
+        "[ORCA] After Orca hot cache population, total pools in hot cache: {}",
+        hot_cache.len()
+    );
 
     info!("✅ HOT CACHE READY:");
     info!("   • Pools Loaded: {} pools", hot_cache.len());
@@ -312,14 +323,22 @@ async fn main() -> Result<(), ArbError> {
 
     // --- Initialize QuickNode Webhook Processor ---
     // Instead of using a config field, load the QuickNode function URL from the environment
-    let _quicknode_function_url = std::env::var("QUICKNODE_FUNCTION_URL").expect("QUICKNODE_FUNCTION_URL must be set in .env");
+    let _quicknode_function_url = std::env::var("QUICKNODE_FUNCTION_URL")
+        .expect("QUICKNODE_FUNCTION_URL must be set in .env");
 
     // Initialize webhook integration service as Arc<Mutex<...>> for safe sharing across tasks
-    let webhook_service = Arc::new(Mutex::new(WebhookIntegrationService::new(app_config.clone())));
+    let webhook_service = Arc::new(Mutex::new(WebhookIntegrationService::new(
+        app_config.clone(),
+    )));
     if app_config.enable_webhooks {
-        webhook_service.lock().await.initialize().await.map_err(|e| {
-            ArbError::ConfigError(format!("Failed to initialize webhook service: {}", e))
-        })?;
+        webhook_service
+            .lock()
+            .await
+            .initialize()
+            .await
+            .map_err(|e| {
+                ArbError::ConfigError(format!("Failed to initialize webhook service: {}", e))
+            })?;
         info!("✅ WEBHOOK SERVICE: Initialized successfully");
 
         // Start the Axum webhook server in the background

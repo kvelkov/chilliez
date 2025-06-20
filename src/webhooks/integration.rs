@@ -6,16 +6,16 @@ use crate::dex::{api::DexClient, validate_single_pool, BannedPairsManager, PoolV
 use crate::utils::{DexType, PoolInfo};
 use crate::webhooks::types::PoolUpdateEvent;
 use anyhow::Result as AnyhowResult;
-use anyhow::{Context, anyhow};
+use anyhow::{anyhow, Context};
 use log::info;
-use serde::{Serialize, Deserialize};
+use log::{debug, error, warn};
+use serde::{Deserialize, Serialize};
 use solana_sdk::pubkey::Pubkey;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{mpsc, RwLock};
 use tokio::time::{interval, Instant};
-use log::{error, warn, debug};
 
 /// Webhook integration service (Axum/QuickNode only)
 pub struct WebhookIntegrationService {
@@ -46,10 +46,7 @@ impl WebhookIntegrationService {
     pub async fn update_pools(&self, pools: HashMap<Pubkey, Arc<PoolInfo>>) {
         let mut cache = self.pool_cache.write().await;
         cache.extend(pools);
-        info!(
-            "Updated webhook service with {} pools",
-            cache.len()
-        );
+        info!("Updated webhook service with {} pools", cache.len());
     }
 
     /// Check if webhooks are enabled and working
@@ -76,7 +73,12 @@ impl WebhookIntegrationService {
     }
 
     /// Start the Axum webhook server (QuickNode POST handler)
-    pub async fn start_webhook_server(&self, opportunity_sender: tokio::sync::mpsc::UnboundedSender<crate::arbitrage::opportunity::MultiHopArbOpportunity>) -> anyhow::Result<()> {
+    pub async fn start_webhook_server(
+        &self,
+        opportunity_sender: tokio::sync::mpsc::UnboundedSender<
+            crate::arbitrage::opportunity::MultiHopArbOpportunity,
+        >,
+    ) -> anyhow::Result<()> {
         use crate::webhooks::server::create_quicknode_router;
         use axum::serve;
         use std::net::SocketAddr;
@@ -730,10 +732,7 @@ impl PoolMonitoringCoordinator {
     }
 
     /// Process a pool update from webhook
-    async fn process_pool_update(
-        pool_address: &Pubkey,
-        event_type: &PoolEventType,
-    ) {
+    async fn process_pool_update(pool_address: &Pubkey, event_type: &PoolEventType) {
         debug!(
             "🔄 Processing transaction for pool {}: {:?}",
             pool_address, event_type

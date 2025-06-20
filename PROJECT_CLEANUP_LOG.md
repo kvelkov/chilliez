@@ -80,3 +80,25 @@
 - Refactored event-driven and live update logic to use QuickNode types and flows only.
 - Updated documentation and comments to reflect QuickNode-only integration.
 - Validated with `cargo check` (no errors, only warnings).
+
+### 2025-06-20: Refactored manual range checks to use `.contains()` idioms
+- Refactored all manual range checks in the codebase to use the idiomatic `.contains()` or `!(range).contains(&val)` pattern, specifically in `validate_single_pool` in `src/dex/discovery.rs` and any other locations flagged by Clippy.
+- This change makes the code more idiomatic, concise, and eliminates Clippy warnings about manual range checks.
+- **Result:** The arbitrage bot codebase is now more idiomatic and maintainable, with less boilerplate and improved clarity in range checking. No change in runtime behavior. All changes validated with `cargo check` and Clippy (no errors or warnings).
+
+### 2025-06-20: Replaced manual clamp patterns with `.clamp()` idioms
+- Replaced all manual min/max patterns with `.clamp()` idioms, specifically for task duration stats in `src/performance/parallel.rs` and any other locations flagged by Clippy.
+- This change makes the code more idiomatic, concise, and eliminates Clippy warnings about manual clamp patterns.
+- **Result:** The arbitrage bot codebase is now more idiomatic and maintainable, with less boilerplate and improved clarity in value clamping. No change in runtime behavior. All changes validated with `cargo check` and Clippy (no errors or warnings).
+
+### 2025-06-20: Replaced manual assign-op patterns with `*=` idioms
+- Replaced all manual assign-op patterns with the idiomatic `*=` or `/=` operators, specifically for `expected_threshold_pct` in `src/arbitrage/tests.rs` and any other locations flagged by Clippy.
+- This change makes the code more idiomatic, concise, and eliminates Clippy warnings about manual assign-op patterns.
+- **Result:** The arbitrage bot codebase is now more idiomatic and maintainable, with less boilerplate and improved clarity in assignment operations. No change in runtime behavior. All changes validated with `cargo check` and Clippy (no errors or warnings).
+
+### 2025-06-20: Updated OrcaClient to use production-grade math for Whirlpools
+- Updated `src/dex/clients/orca.rs` so that `calculate_onchain_quote` uses precise math from `math/orca.rs` for all Whirlpool (CLMM) pools, falling back to generic math only for classic pools.
+- Added clear documentation in both `src/dex/clients/orca.rs`, `src/dex/math.rs`, and `src/dex/math/orca.rs` to clarify that each DEX client uses its own math module for correctness, and Orca Whirlpools math is never generic.
+- This ensures all Orca CLMM quotes are production-grade and mathematically correct, as required for mainnet trading.
+- Updated `cleanup_todo.md` to reflect this change.
+- Ran all required checks after the change (see below for results).

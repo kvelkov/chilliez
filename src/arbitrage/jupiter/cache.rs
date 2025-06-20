@@ -8,6 +8,7 @@ use log::{debug, info, warn};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, VecDeque},
+    fmt,
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -78,10 +79,12 @@ impl CacheKey {
         }
         ((amount + bucket_size / 2) / bucket_size) * bucket_size
     }
+}
 
-    /// Get a human-readable representation of the cache key
-    pub fn to_string(&self) -> String {
-        format!(
+impl fmt::Display for CacheKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
             "{}→{}:{}@{}bps",
             self.input_mint.chars().take(6).collect::<String>(),
             self.output_mint.chars().take(6).collect::<String>(),

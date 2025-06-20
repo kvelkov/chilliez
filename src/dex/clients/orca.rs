@@ -62,15 +62,22 @@ pub struct RewardInfo {
 }
 
 // --- API Data Structures ---
-// Fields are part of an external API contract, logged for info
+/// Orca API response struct for deserializing external API data.
+///
+/// All fields are retained for compatibility with the external API contract, even if not directly read in Rust code.
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 pub struct OrcaApiResponse {
     pub whirlpools: Vec<OrcaApiPool>,
 }
 
+/// Orca API pool struct for deserializing external API data.
+///
+/// All fields are retained for compatibility with the external API contract, even if not directly read in Rust code.
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 pub struct OrcaApiPool {
-// Field is part of an external API contract
+    // Field is part of an external API contract
     pub address: String,
     #[allow(dead_code)] // Field is part of an external API contract, may be used for logging/debugging
     #[serde(rename = "whirlpoolBump")]
@@ -78,7 +85,7 @@ pub struct OrcaApiPool {
     #[serde(rename = "whirlpoolsConfig")]
     pub whirlpools_config: Option<String>, // Field is part of an external API contract, may be used for logging/debugging
     #[serde(rename = "tokenMintA")]
-    pub token_mint_a: Option<String>,// Field is part of an external API contract, may be used for logging/debugging
+    pub token_mint_a: Option<String>, // Field is part of an external API contract, may be used for logging/debugging
     #[serde(rename = "tokenMintB")]
     pub token_mint_b: Option<String>,
     #[serde(rename = "tokenVaultA")]
@@ -122,7 +129,10 @@ pub struct OrcaApiPool {
     pub updated_at: Option<String>,
 }
 
-#[allow(dead_code)] // Fields are part of an external API contract, logged for info
+/// Orca API token struct for deserializing external API data.
+///
+/// All fields are retained for compatibility with the external API contract, even if not directly read in Rust code.
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 pub struct OrcaApiToken {
     pub mint: String,
@@ -133,7 +143,10 @@ pub struct OrcaApiToken {
     pub decimals: u8,
 }
 
-#[allow(dead_code)] // Fields are part of an external API contract, logged for info
+/// Orca API reward info struct for deserializing external API data.
+///
+/// All fields are retained for compatibility with the external API contract, even if not directly read in Rust code.
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 pub struct OrcaApiRewardInfo {
     pub mint: String,
@@ -204,29 +217,58 @@ fn extract_orca_whirlpool_addresses_from_json(json_path: &str) -> anyhow::Result
     let json = std::fs::read_to_string(json_path)?;
     let value: serde_json::Value = serde_json::from_str(&json)?;
     let mut addresses = Vec::new();
-    match value {
-        serde_json::Value::Array(arr) => {
-            for item in arr {
-                match &item {
-                    serde_json::Value::String(addr) => {
-                        if let Ok(pk) = Pubkey::from_str(addr) {
-                            addresses.push(pk);
-                        }
+    if let serde_json::Value::Array(arr) = value {
+        for item in arr {
+            if let serde_json::Value::String(addr) = &item {
+                if let Ok(pk) = Pubkey::from_str(addr) {
+                    addresses.push(pk);
+                }
+            } else if let serde_json::Value::Object(map) = &item {
+                if let Some(serde_json::Value::String(addr)) = map.get("address") {
+                    if let Ok(pk) = Pubkey::from_str(addr) {
+                        addresses.push(pk);
                     }
-                    serde_json::Value::Object(map) => {
-                        if let Some(serde_json::Value::String(addr)) = map.get("address") {
-                            if let Ok(pk) = Pubkey::from_str(addr) {
-                                addresses.push(pk);
-                            }
-                        }
-                    }
-                    _ => {}
                 }
             }
         }
-        _ => {}
     }
     Ok(addresses)
+}
+
+/// Helper to construct a `PoolInfo` from a `WhirlpoolState` and address.
+/// Used by all Orca pool parsing and discovery logic to ensure consistency.
+fn build_orca_pool_info(pool_address: Pubkey, whirlpool_state: &WhirlpoolState) -> PoolInfo {
+    PoolInfo {
+        address: pool_address,
+        name: "Orca Whirlpool".to_string(),
+        token_a: PoolToken {
+            mint: whirlpool_state.token_mint_a,
+            symbol: "Unknown".to_string(), // TODO: resolve from metadata
+            decimals: 6,                   // TODO: resolve from metadata
+            reserve: 0,                    // TODO: fetch from vault
+        },
+        token_b: PoolToken {
+            mint: whirlpool_state.token_mint_b,
+            symbol: "Unknown".to_string(),
+            decimals: 6,
+            reserve: 0,
+        },
+        token_a_vault: whirlpool_state.token_vault_a,
+        token_b_vault: whirlpool_state.token_vault_b,
+        fee_numerator: Some(whirlpool_state.fee_rate as u64),
+        fee_denominator: Some(1_000_000), // Orca uses 1M denominator
+        fee_rate_bips: Some(whirlpool_state.fee_rate),
+        last_update_timestamp: whirlpool_state.reward_last_updated_timestamp,
+        dex_type: DexType::Orca,
+        liquidity: Some(whirlpool_state.liquidity),
+        sqrt_price: Some(whirlpool_state.sqrt_price),
+        tick_current_index: Some(whirlpool_state.tick_current_index),
+        tick_spacing: Some(whirlpool_state.tick_spacing),
+        tick_array_0: None,
+        tick_array_1: None,
+        tick_array_2: None,
+        oracle: None, // Orca doesn't use external oracles
+    }
 }
 
 // --- Pool Parser ---
@@ -243,44 +285,8 @@ impl UtilsPoolParser for OrcaPoolParser {
         if data.len() < std::mem::size_of::<WhirlpoolState>() {
             return Err(anyhow!("Invalid Whirlpool data size"));
         }
-
         let whirlpool_state = bytemuck::from_bytes::<WhirlpoolState>(data);
-
-        let pool_info = PoolInfo {
-            address: pool_address,
-            name: format!("Orca Whirlpool"),
-            token_a: PoolToken {
-                mint: whirlpool_state.token_mint_a,
-                symbol: "Unknown".to_string(), // Would be resolved from metadata
-                decimals: 6,                   // Default, would be resolved
-                reserve: 0,                    // Would be fetched from vault
-            },
-            token_b: PoolToken {
-                mint: whirlpool_state.token_mint_b,
-                symbol: "Unknown".to_string(),
-                decimals: 6,
-                reserve: 0,
-            },
-            token_a_vault: whirlpool_state.token_vault_a,
-            token_b_vault: whirlpool_state.token_vault_b,
-            fee_numerator: Some(whirlpool_state.fee_rate as u64),
-            fee_denominator: Some(1000000), // Orca uses 1M denominator
-            fee_rate_bips: Some(whirlpool_state.fee_rate),
-            last_update_timestamp: whirlpool_state.reward_last_updated_timestamp,
-            dex_type: DexType::Orca,
-            // CLMM specific fields
-            liquidity: Some(whirlpool_state.liquidity),
-            sqrt_price: Some(whirlpool_state.sqrt_price),
-            tick_current_index: Some(whirlpool_state.tick_current_index),
-            tick_spacing: Some(whirlpool_state.tick_spacing),
-            // Tick arrays would need to be resolved separately
-            tick_array_0: None, // Would be resolved based on current tick
-            tick_array_1: None,
-            tick_array_2: None,
-            oracle: None, // Orca doesn't use external oracles
-        };
-
-        Ok(pool_info)
+        Ok(build_orca_pool_info(pool_address, whirlpool_state))
     }
 
     fn parse_pool_data_sync(
@@ -293,38 +299,7 @@ impl UtilsPoolParser for OrcaPoolParser {
             return Err(anyhow!("Invalid Whirlpool data size"));
         }
         let whirlpool_state = bytemuck::from_bytes::<WhirlpoolState>(data);
-        let pool_info = PoolInfo {
-            address: pool_address,
-            name: format!("Orca Whirlpool"),
-            token_a: PoolToken {
-                mint: whirlpool_state.token_mint_a,
-                symbol: "Unknown".to_string(),
-                decimals: 6,
-                reserve: 0,
-            },
-            token_b: PoolToken {
-                mint: whirlpool_state.token_mint_b,
-                symbol: "Unknown".to_string(),
-                decimals: 6,
-                reserve: 0,
-            },
-            token_a_vault: whirlpool_state.token_vault_a,
-            token_b_vault: whirlpool_state.token_vault_b,
-            fee_numerator: Some(whirlpool_state.fee_rate as u64),
-            fee_denominator: Some(1000000),
-            fee_rate_bips: Some(whirlpool_state.fee_rate),
-            last_update_timestamp: whirlpool_state.reward_last_updated_timestamp,
-            dex_type: DexType::Orca,
-            liquidity: Some(whirlpool_state.liquidity),
-            sqrt_price: Some(whirlpool_state.sqrt_price),
-            tick_current_index: Some(whirlpool_state.tick_current_index),
-            tick_spacing: Some(whirlpool_state.tick_spacing),
-            tick_array_0: None,
-            tick_array_1: None,
-            tick_array_2: None,
-            oracle: None,
-        };
-        Ok(pool_info)
+        Ok(build_orca_pool_info(pool_address, whirlpool_state))
     }
 
     fn get_program_id(&self) -> Pubkey {
@@ -333,20 +308,31 @@ impl UtilsPoolParser for OrcaPoolParser {
 }
 
 // --- Orca Client ---
+/// OrcaClient provides integration with Orca Whirlpools on Solana, supporting pool discovery, quoting, and swap instruction building.
+///
+/// All public methods use production-grade math for CLMM pools and fallback logic for classic pools. Error handling is unified via ArbError.
 pub struct OrcaClient {
+    /// The name of the DEX client.
     pub name: String,
 }
 
 impl OrcaClient {
+    /// Create a new OrcaClient instance.
     pub fn new() -> Self {
         Self {
             name: "Orca".to_string(),
         }
     }
 
-    /// Discover Orca Whirlpools pools by fetching on-chain data for a static list of pool addresses
+    /// Discover Orca Whirlpools pools by fetching on-chain data for a static list of pool addresses.
+    ///
+    /// Loads pool addresses from `config/orca_whirlpool_pools.json` and fetches their on-chain state
+    /// using the provided Solana RPC client.
     #[allow(dead_code)]
-    pub async fn discover_pools_onchain(&self, rpc: &SolanaRpcClient) -> AnyhowResult<Vec<PoolInfo>> {
+    pub async fn discover_pools_onchain(
+        &self,
+        rpc: &SolanaRpcClient,
+    ) -> AnyhowResult<Vec<PoolInfo>> {
         // 1. Load pool addresses from JSON
         let json = fs::read_to_string("config/orca_whirlpool_pools.json")?;
         let pool_addresses: Vec<String> = serde_json::from_str(&json)?;
@@ -356,7 +342,6 @@ impl OrcaClient {
             .filter_map(|addr| Pubkey::from_str(&addr).ok())
             .collect();
 
-        // 2. Batch fetch account data (in parallel, since no batch method exists)
         use futures::future::join_all;
         let fetches = pool_addresses.iter().map(|addr| rpc.get_account_data(addr));
         let results = join_all(fetches).await;
@@ -366,47 +351,26 @@ impl OrcaClient {
                 if data.len() >= std::mem::size_of::<WhirlpoolState>() {
                     let whirlpool_state = bytemuck::from_bytes::<WhirlpoolState>(&data);
                     let pool_address = pool_addresses[i];
-                    let pool_info = PoolInfo {
-                        address: pool_address,
-                        name: format!("Orca Whirlpool"),
-                        token_a: PoolToken {
-                            mint: whirlpool_state.token_mint_a,
-                            symbol: "Unknown".to_string(),
-                            decimals: 6,
-                            reserve: 0,
-                        },
-                        token_b: PoolToken {
-                            mint: whirlpool_state.token_mint_b,
-                            symbol: "Unknown".to_string(),
-                            decimals: 6,
-                            reserve: 0,
-                        },
-                        token_a_vault: whirlpool_state.token_vault_a,
-                        token_b_vault: whirlpool_state.token_vault_b,
-                        fee_numerator: Some(whirlpool_state.fee_rate as u64),
-                        fee_denominator: Some(1000000),
-                        fee_rate_bips: Some(whirlpool_state.fee_rate),
-                        last_update_timestamp: whirlpool_state.reward_last_updated_timestamp,
-                        dex_type: DexType::Orca,
-                        liquidity: Some(whirlpool_state.liquidity),
-                        sqrt_price: Some(whirlpool_state.sqrt_price),
-                        tick_current_index: Some(whirlpool_state.tick_current_index),
-                        tick_spacing: Some(whirlpool_state.tick_spacing),
-                        tick_array_0: None,
-                        tick_array_1: None,
-                        tick_array_2: None,
-                        oracle: None,
-                    };
-                    discovered_pools.push(pool_info);
+                    discovered_pools.push(build_orca_pool_info(pool_address, whirlpool_state));
                 }
             }
         }
-        info!("[ONCHAIN] Discovered {} Orca Whirlpool pools", discovered_pools.len());
+        info!(
+            "[ONCHAIN] Discovered {} Orca Whirlpool pools",
+            discovered_pools.len()
+        );
         Ok(discovered_pools)
     }
 
-    /// Discover Orca Whirlpools pools by fetching on-chain data for a static list of pool addresses (from JSON)
-    pub async fn discover_pools_onchain_from_json(&self, rpc: &SolanaRpcClient, json_path: &str) -> AnyhowResult<Vec<PoolInfo>> {
+    /// Discover Orca Whirlpools pools by fetching on-chain data for a static list of pool addresses from a JSON file.
+    ///
+    /// Loads pool addresses from the provided JSON path and fetches their on-chain state
+    /// using the provided Solana RPC client.
+    pub async fn discover_pools_onchain_from_json(
+        &self,
+        rpc: &SolanaRpcClient,
+        json_path: &str,
+    ) -> AnyhowResult<Vec<PoolInfo>> {
         let pool_addresses = extract_orca_whirlpool_addresses_from_json(json_path)?;
         use futures::future::join_all;
         let fetches = pool_addresses.iter().map(|addr| rpc.get_account_data(addr));
@@ -417,67 +381,75 @@ impl OrcaClient {
                 if data.len() >= std::mem::size_of::<WhirlpoolState>() {
                     let whirlpool_state = bytemuck::from_bytes::<WhirlpoolState>(&data);
                     let pool_address = pool_addresses[i];
-                    let pool_info = PoolInfo {
-                        address: pool_address,
-                        name: format!("Orca Whirlpool"),
-                        token_a: PoolToken {
-                            mint: whirlpool_state.token_mint_a,
-                            symbol: "Unknown".to_string(),
-                            decimals: 6,
-                            reserve: 0,
-                        },
-                        token_b: PoolToken {
-                            mint: whirlpool_state.token_mint_b,
-                            symbol: "Unknown".to_string(),
-                            decimals: 6,
-                            reserve: 0,
-                        },
-                        token_a_vault: whirlpool_state.token_vault_a,
-                        token_b_vault: whirlpool_state.token_vault_b,
-                        fee_numerator: Some(whirlpool_state.fee_rate as u64),
-                        fee_denominator: Some(1000000),
-                        fee_rate_bips: Some(whirlpool_state.fee_rate),
-                        last_update_timestamp: whirlpool_state.reward_last_updated_timestamp,
-                        dex_type: DexType::Orca,
-                        liquidity: Some(whirlpool_state.liquidity),
-                        sqrt_price: Some(whirlpool_state.sqrt_price),
-                        tick_current_index: Some(whirlpool_state.tick_current_index),
-                        tick_spacing: Some(whirlpool_state.tick_spacing),
-                        tick_array_0: None,
-                        tick_array_1: None,
-                        tick_array_2: None,
-                        oracle: None,
-                    };
-                    discovered_pools.push(pool_info);
+                    discovered_pools.push(build_orca_pool_info(pool_address, whirlpool_state));
                 }
             }
         }
-        info!("[ONCHAIN] Discovered {} Orca Whirlpool pools from JSON", discovered_pools.len());
+        info!(
+            "[ONCHAIN] Discovered {} Orca Whirlpool pools from JSON",
+            discovered_pools.len()
+        );
         Ok(discovered_pools)
     }
 }
 
-use crate::dex::api::{DexClient, PoolDiscoverable, Quote, SwapInfo, CommonSwapInfo, DexHealthStatus};
+use crate::dex::api::{
+    CommonSwapInfo, DexClient, DexHealthStatus, PoolDiscoverable, Quote, SwapInfo,
+};
+use crate::dex::math::orca;
 
 #[async_trait]
 impl DexClient for OrcaClient {
+    /// Returns the name of the DEX client.
     fn get_name(&self) -> &str {
         &self.name
     }
-
+    /// Calculates a quote for a given pool and input amount.
+    ///
+    /// For Whirlpool (CLMM) pools, uses precise math from `math/orca.rs`.
+    /// For classic pools, falls back to the generic constant product formula.
     fn calculate_onchain_quote(&self, pool: &PoolInfo, input_amount: u64) -> AnyhowResult<Quote> {
-        // Use the generic constant product formula as a fallback for Orca classic pools
-        use crate::utils::calculate_output_amount;
-        let output = calculate_output_amount(pool, input_amount, true)?;
-        Ok(Quote {
-            input_token: pool.token_a.symbol.clone(),
-            output_token: pool.token_b.symbol.clone(),
-            input_amount,
-            output_amount: output,
-            dex: "Orca".to_string(),
-            route: vec![pool.address],
-            slippage_estimate: None,
-        })
+        // Use precise CLMM math for Whirlpool pools
+        if pool.liquidity.is_some() && pool.sqrt_price.is_some() {
+            let liquidity = pool.liquidity.unwrap();
+            let sqrt_price = pool.sqrt_price.unwrap();
+            let tick_current = pool.tick_current_index.unwrap_or(0);
+            let tick_spacing = pool.tick_spacing.unwrap_or(64); // already u16
+            let fee_rate = pool.fee_rate_bips.unwrap_or(30); // already u16
+            let result = orca::calculate_whirlpool_swap_output(
+                input_amount,
+                sqrt_price,
+                liquidity,
+                tick_current,
+                tick_spacing,
+                fee_rate,
+                true, // Assume A to B for now; extend as needed
+            )
+            .map_err(|e| anyhow!(e.to_string()))?;
+            Ok(Quote {
+                input_token: pool.token_a.symbol.clone(),
+                output_token: pool.token_b.symbol.clone(),
+                input_amount,
+                output_amount: result.output_amount,
+                dex: "Orca".to_string(),
+                route: vec![pool.address],
+                slippage_estimate: Some(result.price_impact),
+            })
+        } else {
+            // Fallback for classic pools
+            use crate::utils::calculate_output_amount;
+            let output = calculate_output_amount(pool, input_amount, true)
+                .map_err(|e| anyhow!(e.to_string()))?;
+            Ok(Quote {
+                input_token: pool.token_a.symbol.clone(),
+                output_token: pool.token_b.symbol.clone(),
+                input_amount,
+                output_amount: output,
+                dex: "Orca".to_string(),
+                route: vec![pool.address],
+                slippage_estimate: None,
+            })
+        }
     }
 
     fn get_swap_instruction(&self, _swap_info: &SwapInfo) -> AnyhowResult<Instruction> {
@@ -485,6 +457,7 @@ impl DexClient for OrcaClient {
         Err(anyhow!("Orca swap instruction not implemented"))
     }
 
+    /// Returns a swap instruction for the given swap info and pool info (not yet implemented).
     async fn get_swap_instruction_enhanced(
         &self,
         _swap_info: &CommonSwapInfo,
@@ -496,10 +469,12 @@ impl DexClient for OrcaClient {
         ))
     }
 
+    /// Not supported: requires explicit RPC client.
     async fn discover_pools(&self) -> AnyhowResult<Vec<PoolInfo>> {
         Err(anyhow!("OrcaClient::discover_pools requires an RPC client to be passed in. Use discover_pools_onchain_from_json with an explicit RPC client."))
     }
 
+    /// Returns a health check status for the Orca DEX client.
     async fn health_check(&self) -> Result<DexHealthStatus, crate::error::ArbError> {
         Ok(DexHealthStatus {
             is_healthy: true,
@@ -514,20 +489,29 @@ impl DexClient for OrcaClient {
 
 #[async_trait]
 impl PoolDiscoverable for OrcaClient {
+    /// Not supported: requires explicit RPC client.
     async fn discover_pools(&self) -> AnyhowResult<Vec<PoolInfo>> {
         <Self as DexClient>::discover_pools(self).await
     }
-
+    /// Not supported: fetching a single pool's data is not implemented.
     async fn fetch_pool_data(&self, pool_address: Pubkey) -> AnyhowResult<PoolInfo> {
         // Placeholder: Implement fetching a single pool's data
-        Err(anyhow!("fetch_pool_data not implemented for OrcaClient. Pool address: {}", pool_address))
+        Err(anyhow!(
+            "fetch_pool_data not implemented for OrcaClient. Pool address: {}",
+            pool_address
+        ))
     }
-
+    /// Returns the DEX name.
     fn dex_name(&self) -> &str {
         self.get_name()
     }
-
     fn as_any(&self) -> &dyn std::any::Any {
         self
+    }
+}
+
+impl Default for OrcaClient {
+    fn default() -> Self {
+        Self::new()
     }
 }

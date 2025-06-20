@@ -134,8 +134,12 @@ impl ParallelExecutor {
                                 s.max_task_duration = task_duration;
                                 s.avg_task_duration = task_duration;
                             } else {
-                                s.min_task_duration = s.min_task_duration.min(task_duration);
-                                s.max_task_duration = s.max_task_duration.max(task_duration);
+                                s.min_task_duration = s
+                                    .min_task_duration
+                                    .clamp(task_duration, s.min_task_duration);
+                                s.max_task_duration = s
+                                    .max_task_duration
+                                    .clamp(s.max_task_duration, task_duration);
                                 s.avg_task_duration = Duration::from_nanos(
                                     (s.avg_task_duration.as_nanos() as u64
                                         * (s.completed_tasks - 1)

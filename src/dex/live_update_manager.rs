@@ -9,9 +9,8 @@ use crate::{
     dex::api::DexClient,
     utils::{DexType, PoolInfo},
     webhooks::{
-        integration::WebhookIntegrationService,
-        processor::PoolUpdateProcessor,
-        types::{PoolUpdateType},
+        integration::WebhookIntegrationService, processor::PoolUpdateProcessor,
+        types::PoolUpdateType,
     },
 };
 
@@ -75,7 +74,7 @@ pub struct LiveUpdateMetrics {
     pub hot_cache_updates: AtomicU64,
     pub webhook_updates: AtomicU64,
     pub _validation_failures: AtomicU64, // Can be tracked if validation is enabled
-    pub rate_limit_hits: AtomicU64,     // Can be tracked if rate limiting is enabled
+    pub rate_limit_hits: AtomicU64,      // Can be tracked if rate limiting is enabled
     pub average_update_latency_ms: AtomicU64,
     pub last_update_timestamp: AtomicU64,
 }
@@ -132,8 +131,6 @@ pub enum UpdateSource {
     // 🧪 PAPER TRADING: QuickNode DEX Analysis Integration
     QuickNodeDexAnalysis,
 }
-
-
 
 /// The main LiveUpdateManager service
 pub struct LiveUpdateManager {
@@ -537,8 +534,6 @@ impl LiveUpdateManager {
 
         Ok(())
     }
-
-
 }
 
 /// Builder for LiveUpdateManager configuration

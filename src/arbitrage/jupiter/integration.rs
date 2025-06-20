@@ -304,12 +304,9 @@ impl JupiterFallbackManager {
 
     /// Get route optimization statistics
     pub async fn get_route_optimization_stats(&self) -> Option<String> {
-        if let Some(ref _optimizer) = self.route_optimizer {
-            // In a real implementation, this would return comprehensive route stats
-            Some("Route optimization active".to_string())
-        } else {
-            None
-        }
+        self.route_optimizer
+            .as_ref()
+            .map(|_optimizer| "Route optimization active".to_string())
     }
 
     /// Create a route evaluation from a single quote (for compatibility)

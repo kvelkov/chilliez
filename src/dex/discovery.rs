@@ -277,8 +277,14 @@ impl PoolDiscoveryService {
                     // Use the default JSON path for Orca whirlpool pools
                     let json_path = "config/orca_whirlpool_pools.json";
                     // Downcast to OrcaClient if possible
-                    if let Some(orca_client) = client.as_any().downcast_ref::<crate::dex::clients::orca::OrcaClient>() {
-                        match orca_client.discover_pools_onchain_from_json(&rpc_client, json_path).await {
+                    if let Some(orca_client) = client
+                        .as_any()
+                        .downcast_ref::<crate::dex::clients::orca::OrcaClient>()
+                    {
+                        match orca_client
+                            .discover_pools_onchain_from_json(&rpc_client, json_path)
+                            .await
+                        {
                             Ok(pools) => {
                                 info!("Discovered {} pools from Orca (onchain)", pools.len());
                                 Ok((client.dex_name().to_string(), pools))
@@ -293,7 +299,11 @@ impl PoolDiscoveryService {
                         // Fallback to default
                         match client.discover_pools().await {
                             Ok(pools) => {
-                                info!("Discovered {} pools from {}", pools.len(), client.dex_name());
+                                info!(
+                                    "Discovered {} pools from {}",
+                                    pools.len(),
+                                    client.dex_name()
+                                );
                                 Ok((client.dex_name().to_string(), pools))
                             }
                             Err(e) => {
@@ -305,7 +315,11 @@ impl PoolDiscoveryService {
                 } else {
                     match client.discover_pools().await {
                         Ok(pools) => {
-                            info!("Discovered {} pools from {}", pools.len(), client.dex_name());
+                            info!(
+                                "Discovered {} pools from {}",
+                                pools.len(),
+                                client.dex_name()
+                            );
                             Ok((client.dex_name().to_string(), pools))
                         }
                         Err(e) => {
@@ -369,19 +383,28 @@ impl PoolDiscoveryService {
         for pool in validated_pools {
             // Real logic: match parser by DexType (by name)
             let parser_opt = POOL_PARSER_REGISTRY.values().find(|parser| {
-                parser.as_ref().get_program_id() == match pool.dex_type {
-                    DexType::Orca => OrcaPoolParser.get_program_id(),
-                    DexType::Raydium => RaydiumPoolParser.get_program_id(),
-                    DexType::Lifinity => LifinityPoolParser.get_program_id(),
-                    DexType::Meteora => MeteoraPoolParser.get_program_id(),
-                    // Add more as needed
-                    _ => Pubkey::default(),
-                }
+                parser.as_ref().get_program_id()
+                    == match pool.dex_type {
+                        DexType::Orca => OrcaPoolParser.get_program_id(),
+                        DexType::Raydium => RaydiumPoolParser.get_program_id(),
+                        DexType::Lifinity => LifinityPoolParser.get_program_id(),
+                        DexType::Meteora => MeteoraPoolParser.get_program_id(),
+                        // Add more as needed
+                        _ => Pubkey::default(),
+                    }
             });
             if let Some(parser) = parser_opt {
-                match self._rpc_client.primary_client.get_account_data(&pool.address).await {
+                match self
+                    ._rpc_client
+                    .primary_client
+                    .get_account_data(&pool.address)
+                    .await
+                {
                     Ok(account_data) => {
-                        match parser.parse_pool_data(pool.address, &account_data, &self._rpc_client).await {
+                        match parser
+                            .parse_pool_data(pool.address, &account_data, &self._rpc_client)
+                            .await
+                        {
                             Ok(parsed_pool) => {
                                 parsed_pools.push(parsed_pool);
                             }
@@ -391,7 +414,10 @@ impl PoolDiscoveryService {
                         }
                     }
                     Err(e) => {
-                        warn!("Failed to fetch account data for pool {}: {}", pool.address, e);
+                        warn!(
+                            "Failed to fetch account data for pool {}: {}",
+                            pool.address, e
+                        );
                     }
                 }
             } else {

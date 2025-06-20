@@ -325,7 +325,10 @@ impl QuickNodeDexAnalysisClient {
 
     /// 🧪 PAPER TRADING: Process DEX analysis data from JavaScript
     /// This method receives the JSON data from our JavaScript analyzer
-    pub fn process_dex_analysis(&self, analysis: QuickNodeDexAnalysis) -> Vec<DexArbitrageOpportunity> {
+    pub fn process_dex_analysis(
+        &self,
+        analysis: QuickNodeDexAnalysis,
+    ) -> Vec<DexArbitrageOpportunity> {
         let mut opportunities = Vec::new();
 
         for (program_id, metrics) in &analysis.programs {
@@ -335,7 +338,11 @@ impl QuickNodeDexAnalysisClient {
         }
 
         // Sort by confidence score (highest first)
-        opportunities.sort_by(|a, b| b.confidence_score.partial_cmp(&a.confidence_score).unwrap_or(std::cmp::Ordering::Equal));
+        opportunities.sort_by(|a, b| {
+            b.confidence_score
+                .partial_cmp(&a.confidence_score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
 
         opportunities
     }
@@ -374,11 +381,8 @@ impl QuickNodeDexAnalysisClient {
         );
 
         // Estimate potential profit (simplified model for paper trading)
-        let estimated_profit_sol = self.estimate_profit(
-            value_change_sol,
-            transaction_share,
-            success_rate,
-        );
+        let estimated_profit_sol =
+            self.estimate_profit(value_change_sol, transaction_share, success_rate);
 
         Some(DexArbitrageOpportunity {
             dex_name: metrics.name.clone(),
@@ -396,18 +400,12 @@ impl QuickNodeDexAnalysisClient {
 
     /// Parse percentage string like "100.00%" to 100.0
     fn parse_percentage(&self, percentage_str: &str) -> Option<f64> {
-        percentage_str
-            .trim_end_matches('%')
-            .parse::<f64>()
-            .ok()
+        percentage_str.trim_end_matches('%').parse::<f64>().ok()
     }
 
     /// Parse SOL amount string like "-0.0002 SOL" to -0.0002
     fn parse_sol_amount(&self, sol_str: &str) -> Option<f64> {
-        sol_str
-            .trim_end_matches(" SOL")
-            .parse::<f64>()
-            .ok()
+        sol_str.trim_end_matches(" SOL").parse::<f64>().ok()
     }
 
     /// 🧪 PAPER TRADING: Calculate confidence score for opportunity
@@ -454,7 +452,10 @@ impl QuickNodeDexAnalysisClient {
     }
 
     /// 🧪 PAPER TRADING: Generate trade recommendation
-    pub fn generate_trade_recommendation(&self, opportunity: &DexArbitrageOpportunity) -> TradeRecommendation {
+    pub fn generate_trade_recommendation(
+        &self,
+        opportunity: &DexArbitrageOpportunity,
+    ) -> TradeRecommendation {
         let direction = if opportunity.value_change_sol > 0.0 {
             TradeDirection::Long
         } else {
@@ -552,13 +553,13 @@ pub fn process_quicknode_dex_analysis_for_paper_trading(
 ) -> Result<Vec<TradeRecommendation>> {
     let analysis: QuickNodeDexAnalysis = serde_json::from_str(analysis_json)?;
     let client = QuickNodeDexAnalysisClient::new_for_paper_trading();
-    
+
     let opportunities = client.process_dex_analysis(analysis);
     let recommendations = opportunities
         .iter()
         .map(|opp| client.generate_trade_recommendation(opp))
         .collect();
-    
+
     Ok(recommendations)
 }
 
@@ -566,7 +567,7 @@ pub fn process_quicknode_dex_analysis_for_paper_trading(
 // These functions provide a C-compatible interface for JavaScript to call
 
 /// 🔗 FFI Bridge: Process QuickNode DEX analysis from JavaScript
-/// 
+///
 /// # Safety
 /// This function is unsafe because it deals with raw pointers from JavaScript.
 /// The caller must ensure the input_json pointer is valid and null-terminated.

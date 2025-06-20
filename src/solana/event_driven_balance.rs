@@ -185,10 +185,10 @@ impl EventDrivenBalanceMonitor {
     }
 
     /// Register a direct webhook notification handler
-    #[deprecated(note = "Helius integration removed; use QuickNode event-driven integration instead")]
-    pub async fn register_webhook_notification_handler(
-        &self,
-    ) -> () {
+    #[deprecated(
+        note = "Helius integration removed; use QuickNode event-driven integration instead"
+    )]
+    pub fn register_webhook_notification_handler(&self) {
         // This function is now obsolete and does nothing.
         // All HeliusWebhookNotification logic has been removed.
     }
@@ -314,7 +314,9 @@ impl EventDrivenBalanceMonitor {
     }
 
     /// Extract balance triggers from webhook notification
-    #[deprecated(note = "Helius integration removed; use QuickNode event-driven integration instead")]
+    #[deprecated(
+        note = "Helius integration removed; use QuickNode event-driven integration instead"
+    )]
     async fn extract_balance_triggers(
         _notification: &(),
         _monitored_accounts: &Arc<RwLock<HashSet<Pubkey>>>,

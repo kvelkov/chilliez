@@ -178,7 +178,11 @@ impl PaperTradingReporter {
             fees_paid,
             execution_success,
             failure_reason,
-            dex_route: opportunity.pool_path.iter().map(|p| format!("Pool_{}", p)).collect(),
+            dex_route: opportunity
+                .pool_path
+                .iter()
+                .map(|p| format!("Pool_{}", p))
+                .collect(),
             gas_cost,
             dex_error_details,
             rent_paid,
@@ -229,20 +233,18 @@ impl PaperTradingReporter {
         let dex_breakdown = analytics
             .performance_by_dex
             .iter()
-            .map(
-                |(dex, perf)| DexBreakdown {
-                    dex: dex.clone(),
-                    trades: perf.trades_executed,
-                    successful_trades: perf.successful_trades,
-                    total_profit_loss: perf.total_profit_loss,
-                    avg_slippage_bps: perf.avg_slippage_bps,
-                    avg_execution_time_ms: perf.avg_execution_time_ms,
-                    success_rate: perf.success_rate,
-                    total_fees_paid: 0, // TODO: aggregate per DEX if tracked
-                    rent_paid: perf.rent_paid,
-                    account_creation_fees: perf.account_creation_fees,
-                },
-            )
+            .map(|(dex, perf)| DexBreakdown {
+                dex: dex.clone(),
+                trades: perf.trades_executed,
+                successful_trades: perf.successful_trades,
+                total_profit_loss: perf.total_profit_loss,
+                avg_slippage_bps: perf.avg_slippage_bps,
+                avg_execution_time_ms: perf.avg_execution_time_ms,
+                success_rate: perf.success_rate,
+                total_fees_paid: 0, // TODO: aggregate per DEX if tracked
+                rent_paid: perf.rent_paid,
+                account_creation_fees: perf.account_creation_fees,
+            })
             .collect();
         // Token pair breakdown (from trade logs)
         let trade_logs = self.read_trade_logs().unwrap_or_default();
@@ -301,31 +303,27 @@ impl PaperTradingReporter {
         let top_trades = sorted_trades
             .iter()
             .take(5)
-            .map(
-                |t| TopTrade {
-                    timestamp: t.timestamp,
-                    profit_loss: t.actual_profit,
-                    slippage_bps: t.slippage_applied,
-                    token_in: t.token_in.clone(),
-                    token_out: t.token_out.clone(),
-                    dex: t.dex_route.first().cloned().unwrap_or_default(),
-                },
-            )
+            .map(|t| TopTrade {
+                timestamp: t.timestamp,
+                profit_loss: t.actual_profit,
+                slippage_bps: t.slippage_applied,
+                token_in: t.token_in.clone(),
+                token_out: t.token_out.clone(),
+                dex: t.dex_route.first().cloned().unwrap_or_default(),
+            })
             .collect();
         let worst_trades = sorted_trades
             .iter()
             .rev()
             .take(5)
-            .map(
-                |t| TopTrade {
-                    timestamp: t.timestamp,
-                    profit_loss: t.actual_profit,
-                    slippage_bps: t.slippage_applied,
-                    token_in: t.token_in.clone(),
-                    token_out: t.token_out.clone(),
-                    dex: t.dex_route.first().cloned().unwrap_or_default(),
-                },
-            )
+            .map(|t| TopTrade {
+                timestamp: t.timestamp,
+                profit_loss: t.actual_profit,
+                slippage_bps: t.slippage_applied,
+                token_in: t.token_in.clone(),
+                token_out: t.token_out.clone(),
+                dex: t.dex_route.first().cloned().unwrap_or_default(),
+            })
             .collect();
 
         PerformanceSummary {
@@ -446,9 +444,15 @@ impl PaperTradingReporter {
         println!("📈 Success Rate: {:.2}%", summary.success_rate);
         println!("💰 Total P&L: {} lamports", summary.total_profit_loss);
         println!("💸 Total Fees: {} lamports", summary.total_fees_paid);
-        println!("🏦 Portfolio Value: {} -> {} lamports", summary.portfolio_value_start, summary.portfolio_value_end);
+        println!(
+            "🏦 Portfolio Value: {} -> {} lamports",
+            summary.portfolio_value_start, summary.portfolio_value_end
+        );
         println!("📊 Portfolio Return: {:.2}%", summary.return_percentage);
-        println!("📊 Average Profit/Trade: {:.2} lamports", summary.average_profit_per_trade);
+        println!(
+            "📊 Average Profit/Trade: {:.2} lamports",
+            summary.average_profit_per_trade
+        );
         println!("🎯 Largest Win: {} lamports", summary.largest_win);
         println!("😞 Largest Loss: {} lamports", summary.largest_loss);
         if let Some(sharpe) = summary.sharpe_ratio {
@@ -459,14 +463,24 @@ impl PaperTradingReporter {
         for dex in &summary.dex_breakdown {
             println!(
                 "  {}: trades={}, win_rate={:.2}%, P&L={}, fees={}, rent={}, acct_fees={}",
-                dex.dex, dex.trades, dex.success_rate, dex.total_profit_loss, dex.total_fees_paid, dex.rent_paid, dex.account_creation_fees
+                dex.dex,
+                dex.trades,
+                dex.success_rate,
+                dex.total_profit_loss,
+                dex.total_fees_paid,
+                dex.rent_paid,
+                dex.account_creation_fees
             );
         }
         println!("\n--- Token Pair Breakdown ---");
         for pair in &summary.token_pair_breakdown {
             println!(
                 "  {} -> {}: trades={}, win_rate={:.2}%, P&L={}",
-                pair.token_in, pair.token_out, pair.trades, pair.success_rate, pair.total_profit_loss
+                pair.token_in,
+                pair.token_out,
+                pair.trades,
+                pair.success_rate,
+                pair.total_profit_loss
             );
         }
         println!("\n--- Percentile Metrics ---");
@@ -481,14 +495,24 @@ impl PaperTradingReporter {
         for t in &summary.top_trades {
             println!(
                 "  [{}] {} -> {} on {}: P&L={}, slippage={:.4}",
-                t.timestamp.format("%Y-%m-%d %H:%M:%S"), t.token_in, t.token_out, t.dex, t.profit_loss, t.slippage_bps
+                t.timestamp.format("%Y-%m-%d %H:%M:%S"),
+                t.token_in,
+                t.token_out,
+                t.dex,
+                t.profit_loss,
+                t.slippage_bps
             );
         }
         println!("\n--- Worst 5 Trades ---");
         for t in &summary.worst_trades {
             println!(
                 "  [{}] {} -> {} on {}: P&L={}, slippage={:.4}",
-                t.timestamp.format("%Y-%m-%d %H:%M:%S"), t.token_in, t.token_out, t.dex, t.profit_loss, t.slippage_bps
+                t.timestamp.format("%Y-%m-%d %H:%M:%S"),
+                t.token_in,
+                t.token_out,
+                t.dex,
+                t.profit_loss,
+                t.slippage_bps
             );
         }
         println!("================================================\n");

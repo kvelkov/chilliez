@@ -181,7 +181,8 @@ impl UtilsPoolParser for RaydiumPoolParser {
                 data.len()
             ));
         }
-        let pool_state = bytemuck::from_bytes::<LiquidityStateV4>(&data[..RAYDIUM_V4_POOL_STATE_SIZE]);
+        let pool_state =
+            bytemuck::from_bytes::<LiquidityStateV4>(&data[..RAYDIUM_V4_POOL_STATE_SIZE]);
         let pool_info = PoolInfo {
             address: pool_address,
             name: format!("Raydium V4 Pool"),
@@ -234,6 +235,12 @@ impl RaydiumClient {
         Self {
             name: "Raydium".to_string(),
         }
+    }
+}
+
+impl Default for RaydiumClient {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -384,9 +391,15 @@ impl DexClient for RaydiumClient {
         info!("RaydiumClient: Starting pool discovery from API...");
 
         let client = reqwest::Client::new();
-        info!("[DEBUG] RaydiumClient: Sent GET request to {}", RAYDIUM_LIQUIDITY_JSON_URL);
+        info!(
+            "[DEBUG] RaydiumClient: Sent GET request to {}",
+            RAYDIUM_LIQUIDITY_JSON_URL
+        );
         let response = client.get(RAYDIUM_LIQUIDITY_JSON_URL).send().await?;
-        info!("[DEBUG] RaydiumClient: Response status: {}", response.status());
+        info!(
+            "[DEBUG] RaydiumClient: Response status: {}",
+            response.status()
+        );
 
         if !response.status().is_success() {
             return Err(anyhow!(

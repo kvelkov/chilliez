@@ -69,14 +69,15 @@ impl SolanaWebsocketManager {
             self.ws_url
         );
 
-        let (ws_stream, _) = connect_async(&self.ws_url)
-            .await
-            .map_err(|e| {
-                error!("❌ [VERBOSE] WebSocket connection failed: {}", e);
-                ArbError::WebSocketError(format!("Failed to connect: {}", e))
-            })?;
+        let (ws_stream, _) = connect_async(&self.ws_url).await.map_err(|e| {
+            error!("❌ [VERBOSE] WebSocket connection failed: {}", e);
+            ArbError::WebSocketError(format!("Failed to connect: {}", e))
+        })?;
 
-        info!("✅ [VERBOSE] WebSocket connection established: {}", self.ws_url);
+        info!(
+            "✅ [VERBOSE] WebSocket connection established: {}",
+            self.ws_url
+        );
 
         let (mut write, mut read) = ws_stream.split();
         let (mpsc_tx, mut mpsc_rx) = tokio::sync::mpsc::channel::<Message>(256);
@@ -110,7 +111,13 @@ impl SolanaWebsocketManager {
             let mut parse_success_count = 0u64;
             let mut parse_failure_count = 0u64;
             while let Some(Ok(msg)) = read.next().await {
-                debug!("[VERBOSE] WebSocket received message: {}", match &msg { Message::Text(t) => t, _ => "<binary>" });
+                debug!(
+                    "[VERBOSE] WebSocket received message: {}",
+                    match &msg {
+                        Message::Text(t) => t,
+                        _ => "<binary>",
+                    }
+                );
                 if let Message::Text(text) = msg {
                     update_count += 1;
                     let parse_start = std::time::Instant::now();
@@ -119,7 +126,9 @@ impl SolanaWebsocketManager {
                     match serde_json::from_str::<serde_json::Value>(&text) {
                         Ok(json) => {
                             if json["method"] == "accountNotification" {
-                                info!("[VERBOSE] Received accountNotification signal from WebSocket");
+                                info!(
+                                    "[VERBOSE] Received accountNotification signal from WebSocket"
+                                );
                                 if let Some(params) = json["params"].as_object() {
                                     if let Some(result) = params["result"].as_object() {
                                         if let Some(value) = result["value"].as_object() {

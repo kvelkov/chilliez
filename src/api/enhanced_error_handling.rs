@@ -339,17 +339,14 @@ impl EnhancedApiErrorHandler {
             is_banned: self.is_banned,
             ban_detected_at: self.ban_detected_at,
             consecutive_403s: self.consecutive_403s,
-            time_until_recovery: self
-                .ban_detected_at
-                .map(|ban_time| {
-                    let elapsed = ban_time.elapsed();
-                    if elapsed < self.ban_detection.ban_recovery_interval {
-                        Some(self.ban_detection.ban_recovery_interval - elapsed)
-                    } else {
-                        None
-                    }
-                })
-                .flatten(),
+            time_until_recovery: self.ban_detected_at.and_then(|ban_time| {
+                let elapsed = ban_time.elapsed();
+                if elapsed < self.ban_detection.ban_recovery_interval {
+                    Some(self.ban_detection.ban_recovery_interval - elapsed)
+                } else {
+                    None
+                }
+            }),
             recent_error_count: self
                 .error_history
                 .iter()

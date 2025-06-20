@@ -3,7 +3,6 @@
 
 use serde::{Deserialize, Serialize};
 use solana_sdk::pubkey::Pubkey;
-use std::collections::HashMap;
 
 /// QuickNode webhook payload structure (matches your QuickNode Function output)
 #[derive(Debug, Clone, Deserialize, Serialize)]

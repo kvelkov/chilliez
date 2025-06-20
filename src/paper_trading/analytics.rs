@@ -235,14 +235,22 @@ impl PaperTradingAnalytics {
     }
 
     /// Record a failed execution
-    pub fn record_failed_execution(&mut self, _input_amount: u64, fees: u64, reason: String, dex_name: Option<&str>, dex_error_details: Option<String>) {
+    pub fn record_failed_execution(
+        &mut self,
+        _input_amount: u64,
+        fees: u64,
+        reason: String,
+        dex_name: Option<&str>,
+        dex_error_details: Option<String>,
+    ) {
         self.failed_executions += 1;
         self.opportunities_executed += 1;
         self.total_fees_paid += fees;
         *self.failure_reasons.entry(reason.clone()).or_insert(0) += 1;
         // Track DEX-specific error details if provided
         if let (Some(dex), Some(details)) = (dex_name, dex_error_details) {
-            self.performance_by_dex.entry(dex.to_string())
+            self.performance_by_dex
+                .entry(dex.to_string())
                 .or_insert(DexPerformance {
                     trades_executed: 0,
                     successful_trades: 0,

@@ -242,7 +242,7 @@ pub fn calculate_output_amount(pool: &PoolInfo, input_amount: u64, is_a_to_b: bo
 /// Test struct to verify PoolInfo field definitions
 #[cfg(test)]
 #[derive(Debug, Clone)]
- // Used for field definition verification in tests
+// Used for field definition verification in tests
 pub struct TestPoolInfo {
     pub address: Pubkey,
     pub name: String,

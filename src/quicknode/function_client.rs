@@ -1,10 +1,10 @@
 // Example: Integrate QuickNode Function with your Rust bot
 // src/quicknode/function_client.rs
 
-use reqwest;
-use serde_json::{json, Value};
 use anyhow::Result;
+use reqwest;
 use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
 
 pub struct QuickNodeFunctionClient {
     function_url: String,
@@ -18,86 +18,117 @@ impl QuickNodeFunctionClient {
             client: reqwest::Client::new(),
         }
     }
-    
-    pub async fn analyze_transaction(&self, transaction: &Value) -> Result<Option<ArbitrageOpportunity>> {
-        let response = self.client
+
+    pub async fn analyze_transaction(
+        &self,
+        transaction: &Value,
+    ) -> Result<Option<ArbitrageOpportunity>> {
+        let response = self
+            .client
             .post(&self.function_url)
             .json(&json!({
                 "transaction": transaction
             }))
             .send()
             .await?;
-            
+
         if response.status().is_success() {
             let result: Option<Value> = response.json().await?;
-            
+
             if let Some(data) = result {
-                if data.get("success").and_then(|v| v.as_bool()).unwrap_or(false) {
+                if data
+                    .get("success")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false)
+                {
                     return Ok(Some(self.parse_opportunity(data)?));
                 }
             }
         }
-        
+
         Ok(None)
     }
-    
+
     fn parse_opportunity(&self, data: Value) -> Result<ArbitrageOpportunity> {
         // Parse the QuickNode function response into your bot's format
-        let opportunities = data.get("opportunities")
+        let opportunities = data
+            .get("opportunities")
             .and_then(|v| v.as_array())
             .map(|arr| arr.clone())
             .unwrap_or_else(Vec::new);
-            
-        let estimated_value = data.get("transaction")
+
+        let estimated_value = data
+            .get("transaction")
             .and_then(|t| t.get("estimatedValueUSD"))
             .and_then(|v| v.as_f64())
             .unwrap_or(0.0);
-            
+
         Ok(ArbitrageOpportunity {
-            signature: data.get("transaction")
+            signature: data
+                .get("transaction")
                 .and_then(|t| t.get("signature"))
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .to_string(),
             block_slot: data.get("slot").and_then(|v| v.as_u64()),
             block_time: data.get("blockTime").and_then(|v| v.as_i64()),
-            dex_swaps: data.get("dexSwaps")
+            dex_swaps: data
+                .get("dexSwaps")
                 .and_then(|v| v.as_array())
                 .unwrap_or(&vec![])
                 .iter()
                 .filter_map(|v| self.parse_single_swap(v))
                 .collect(),
-            token_transfers: data.get("tokenTransfers")
+            token_transfers: data
+                .get("tokenTransfers")
                 .and_then(|v| v.as_array())
                 .unwrap_or(&vec![])
                 .iter()
                 .filter_map(|v| self.parse_single_transfer(v))
                 .collect(),
-            liquidity_changes: data.get("liquidityChanges")
+            liquidity_changes: data
+                .get("liquidityChanges")
                 .and_then(|v| v.as_array())
                 .unwrap_or(&vec![])
                 .iter()
                 .filter_map(|v| self.parse_single_liquidity_change(v))
                 .collect(),
-            opportunities: opportunities.iter()
+            opportunities: opportunities
+                .iter()
                 .filter_map(|o| self.parse_single_opportunity(o))
                 .collect(),
-            address_flags: self.parse_address_flags(data.get("addressFlags").unwrap_or(&Value::Null))?,
-            price_impact: data.get("priceImpact").and_then(|v| v.as_f64()).unwrap_or(0.0),
-            is_large_trade: data.get("isLargeTrade").and_then(|v| v.as_bool()).unwrap_or(false),
+            address_flags: self
+                .parse_address_flags(data.get("addressFlags").unwrap_or(&Value::Null))?,
+            price_impact: data
+                .get("priceImpact")
+                .and_then(|v| v.as_f64())
+                .unwrap_or(0.0),
+            is_large_trade: data
+                .get("isLargeTrade")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false),
             estimated_value_usd: estimated_value,
         })
     }
-    
+
     fn parse_single_opportunity(&self, opp: &Value) -> Option<OpportunityType> {
         let opp_type = opp.get("type")?.as_str()?.to_string();
         let profit = opp.get("estimatedProfit").and_then(|v| v.as_f64());
-        let dexes = opp.get("dexes")
+        let dexes = opp
+            .get("dexes")
             .and_then(|v| v.as_array())
-            .map(|arr| arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                    .collect()
+            })
             .unwrap_or_else(Vec::new);
         let trade_value = opp.get("tradeValue").and_then(|v| v.as_f64());
-        let confidence = opp.get("confidence").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let confidence = opp
+            .get("confidence")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
         let price_impact = opp.get("priceImpact").and_then(|v| v.as_f64());
         Some(OpportunityType {
             opp_type,
@@ -108,7 +139,7 @@ impl QuickNodeFunctionClient {
             trade_value,
         })
     }
-    
+
     fn parse_single_swap(&self, swap: &Value) -> Option<DexSwap> {
         Some(DexSwap {
             dex: swap.get("dex")?.as_str()?.to_string(),
@@ -121,7 +152,7 @@ impl QuickNodeFunctionClient {
             slippage: swap.get("slippage").and_then(|v| v.as_f64()),
         })
     }
-    
+
     fn parse_single_transfer(&self, transfer: &Value) -> Option<TokenTransfer> {
         Some(TokenTransfer {
             source: transfer.get("source")?.as_str()?.to_string(),
@@ -131,7 +162,7 @@ impl QuickNodeFunctionClient {
             is_significant: transfer.get("isSignificant")?.as_bool()?,
         })
     }
-    
+
     fn parse_single_liquidity_change(&self, change: &Value) -> Option<LiquidityChange> {
         Some(LiquidityChange {
             mint: change.get("mint")?.as_str()?.to_string(),
@@ -141,13 +172,25 @@ impl QuickNodeFunctionClient {
             change_type: change.get("type")?.as_str()?.to_string(),
         })
     }
-    
+
     fn parse_address_flags(&self, flags: &Value) -> Result<AddressFlags> {
         Ok(AddressFlags {
-            is_watched: flags.get("isWatched").and_then(|v| v.as_bool()).unwrap_or(false),
-            is_mev_bot: flags.get("isMevBot").and_then(|v| v.as_bool()).unwrap_or(false),
-            is_whale: flags.get("isWhale").and_then(|v| v.as_bool()).unwrap_or(false),
-            has_arbitrage_token: flags.get("hasArbitrageToken").and_then(|v| v.as_bool()).unwrap_or(false),
+            is_watched: flags
+                .get("isWatched")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false),
+            is_mev_bot: flags
+                .get("isMevBot")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false),
+            is_whale: flags
+                .get("isWhale")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false),
+            has_arbitrage_token: flags
+                .get("hasArbitrageToken")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false),
         })
     }
 }
@@ -247,21 +290,21 @@ pub struct AddressFlags {
 // Usage in your bot
 pub async fn monitor_arbitrage_opportunities() -> Result<()> {
     let function_client = QuickNodeFunctionClient::new(
-        "https://your-function-url.quicknode-functions.com/".to_string()
+        "https://your-function-url.quicknode-functions.com/".to_string(),
     );
-    
+
     // This would be called when you receive transaction data
     // from QuickNode streams or other sources
     loop {
         // Get transaction from your stream/webhook
         let transaction = get_next_transaction().await?;
-        
+
         // Analyze with QuickNode function
         if let Some(opportunity) = function_client.analyze_transaction(&transaction).await? {
             log::info!("🎯 Arbitrage opportunity found!");
             log::info!("Opportunities: {}", opportunity.opportunities.len());
             log::info!("Value: ${:.2}", opportunity.estimated_value_usd);
-            
+
             // Execute arbitrage if profitable
             for opp in &opportunity.opportunities {
                 if opp.opp_type == "cross_dex_arbitrage" {
@@ -279,7 +322,7 @@ pub async fn monitor_arbitrage_opportunities() -> Result<()> {
                 }
             }
         }
-        
+
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
     }
 }
@@ -290,7 +333,11 @@ async fn get_next_transaction() -> Result<Value> {
 }
 
 async fn execute_cross_dex_arbitrage(dexes: Vec<String>, profit: f64) -> Result<()> {
-    log::info!("Executing cross-DEX arbitrage between {:?}, profit: ${:.2}", dexes, profit);
+    log::info!(
+        "Executing cross-DEX arbitrage between {:?}, profit: ${:.2}",
+        dexes,
+        profit
+    );
     // Your arbitrage execution logic here
     Ok(())
 }

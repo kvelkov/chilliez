@@ -105,8 +105,18 @@ impl MarketGraph {
         // Calculate exchange rates in both directions
         if let Some(liquidity) = pool.liquidity {
             if liquidity > 0 {
-                let rate_a_to_b = self.calculate_exchange_rate_with_overflow(pool, true, overflow_count, overflow_pools);
-                let rate_b_to_a = self.calculate_exchange_rate_with_overflow(pool, false, overflow_count, overflow_pools);
+                let rate_a_to_b = self.calculate_exchange_rate_with_overflow(
+                    pool,
+                    true,
+                    overflow_count,
+                    overflow_pools,
+                );
+                let rate_b_to_a = self.calculate_exchange_rate_with_overflow(
+                    pool,
+                    false,
+                    overflow_count,
+                    overflow_pools,
+                );
                 if rate_a_to_b > 0.0 {
                     let weight_a_to_b = -rate_a_to_b.ln();
                     self.graph.add_edge(
@@ -165,18 +175,19 @@ impl MarketGraph {
                     let price_decimal = match sqrt_price_decimal.checked_mul(sqrt_price_decimal) {
                         Some(val) => val / Decimal::from(1u128 << 64),
                         None => {
-                            log::warn!("[PATCH] Decimal multiplication overflow in pool: {:?}", pool);
+                            log::warn!(
+                                "[PATCH] Decimal multiplication overflow in pool: {:?}",
+                                pool
+                            );
                             return 0.0;
                         }
                     };
                     let rate_decimal = if a_to_b {
                         price_decimal
+                    } else if !price_decimal.is_zero() {
+                        dec!(1) / price_decimal
                     } else {
-                        if !price_decimal.is_zero() {
-                            dec!(1) / price_decimal
-                        } else {
-                            Decimal::ZERO
-                        }
+                        Decimal::ZERO
                     };
                     let rate = rate_decimal.to_f64().unwrap_or(0.0);
                     rate
@@ -217,7 +228,14 @@ impl MarketGraph {
         }
     }
 
-    fn calculate_exchange_rate_with_overflow(&self, pool: &PoolInfo, a_to_b: bool, overflow_count: &mut usize, overflow_pools: &mut Vec<PoolInfo>) -> f64 {
+    #[allow(clippy::ptr_arg)] // Clippy suggests `&mut [PoolInfo]` but `push` may be used in the future
+    fn calculate_exchange_rate_with_overflow(
+        &self,
+        pool: &PoolInfo,
+        a_to_b: bool,
+        overflow_count: &mut usize,
+        overflow_pools: &mut Vec<PoolInfo>,
+    ) -> f64 {
         use num_traits::ToPrimitive;
         use rust_decimal::Decimal;
         use rust_decimal_macros::dec;
@@ -238,12 +256,10 @@ impl MarketGraph {
                     };
                     let rate_decimal = if a_to_b {
                         price_decimal
+                    } else if !price_decimal.is_zero() {
+                        dec!(1) / price_decimal
                     } else {
-                        if !price_decimal.is_zero() {
-                            dec!(1) / price_decimal
-                        } else {
-                            Decimal::ONE // PATCH: return 1.0 if price_decimal is zero
-                        }
+                        Decimal::ONE // PATCH: return 1.0 if price_decimal is zero
                     };
                     rate_decimal.to_f64().unwrap_or(1.0)
                 } else {
@@ -361,7 +377,13 @@ impl ArbitrageStrategy {
         timer.checkpoint("market_graph_built");
 
         info!("═══════════════════════════════════════════════════════════════");
-        info!("🔍 Detection Cycle | Pools: {} | Analyzed: {} | Skipped: {} | Overflows: {}", pools.len(), analyzed_count, skipped_count, overflow_count);
+        info!(
+            "🔍 Detection Cycle | Pools: {} | Analyzed: {} | Skipped: {} | Overflows: {}",
+            pools.len(),
+            analyzed_count,
+            skipped_count,
+            overflow_count
+        );
         if !self.blacklist.is_empty() {
             info!("⛔ Blacklisted pools (skipped due to repeated issues):");
             for (addr, reason) in &self.blacklist_reasons {
@@ -377,7 +399,11 @@ impl ArbitrageStrategy {
             }
         }
         info!("---------------------------------------------------------------");
-        info!("Market graph built with {} tokens and {} edges", graph.node_count(), graph.edge_count());
+        info!(
+            "Market graph built with {} tokens and {} edges",
+            graph.node_count(),
+            graph.edge_count()
+        );
 
         if graph.node_count() == 0 || graph.edge_count() == 0 {
             warn!("Market graph is empty - no tokens or edges found");

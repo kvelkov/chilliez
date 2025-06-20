@@ -1,14 +1,14 @@
 // src/webhooks/server.rs
 //! Webhook server for receiving QuickNode notifications (Axum-based)
 
-use crate::webhooks::types::QuickNodeWebhookPayload;
 use crate::arbitrage::opportunity::MultiHopArbOpportunity;
 use crate::webhooks::processor::PoolUpdateProcessor;
+use crate::webhooks::types::QuickNodeWebhookPayload;
+use axum::http::{HeaderMap, StatusCode};
 use axum::{extract::State, routing::post, Json, Router};
-use axum::http::{StatusCode, HeaderMap};
 use serde_json::json;
 use tokio::sync::mpsc::UnboundedSender;
-use tracing::{info, warn, error, debug};
+use tracing::{debug, error, info, warn};
 
 #[derive(Clone)]
 pub struct AppState {
@@ -79,7 +79,9 @@ pub struct QuickNodeWebhookState {
 }
 
 pub fn create_quicknode_router(sender: UnboundedSender<MultiHopArbOpportunity>) -> Router {
-    let state = QuickNodeWebhookState { opportunity_sender: sender };
+    let state = QuickNodeWebhookState {
+        opportunity_sender: sender,
+    };
     Router::new()
         .route("/quicknode", post(handle_quicknode_webhook))
         .route("/health", post(health_check))
@@ -102,7 +104,13 @@ async fn handle_quicknode_webhook(
     debug!("QuickNode payload: {:?}", payload);
 
     // Process the QuickNode opportunity
-    match PoolUpdateProcessor::process_quicknode_opportunity(payload, &state.opportunity_sender, &PoolUpdateProcessor::new()).await {
+    match PoolUpdateProcessor::process_quicknode_opportunity(
+        payload,
+        &state.opportunity_sender,
+        &PoolUpdateProcessor::new(),
+    )
+    .await
+    {
         Ok(_) => Ok(Json(json!({
             "status": "success",
             "message": "QuickNode webhook processed successfully",

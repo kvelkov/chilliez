@@ -163,9 +163,14 @@ impl ArbitrageCoordinator {
         }
     }
 
-    pub async fn execute_single_opportunity(&self, _opportunity: &MultiHopArbOpportunity) -> Result<(), ArbError> {
+    pub async fn execute_single_opportunity(
+        &self,
+        _opportunity: &MultiHopArbOpportunity,
+    ) -> Result<(), ArbError> {
         // Forward to the orchestrator's method. You may need to pass a reference to the orchestrator when constructing the coordinator.
         // For now, this is a stub. Replace with actual orchestrator call in your integration.
-        Err(ArbError::ExecutionError("No orchestrator reference in ArbitrageCoordinator".to_string()))
+        Err(ArbError::ExecutionError(
+            "No orchestrator reference in ArbitrageCoordinator".to_string(),
+        ))
     }
 }

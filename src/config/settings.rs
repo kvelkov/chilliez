@@ -305,9 +305,13 @@ impl Config {
                 .unwrap_or(false),
 
             // --- Jito/QuickNode bundle execution configuration ---
-            enable_jito_bundle: env::var("ENABLE_JITO_BUNDLE").map(|v| v == "true" || v == "1").unwrap_or(false),
+            enable_jito_bundle: env::var("ENABLE_JITO_BUNDLE")
+                .map(|v| v == "true" || v == "1")
+                .unwrap_or(false),
             jito_quicknode_url: env::var("JITO_QUICKNODE_URL").ok(),
-            jito_tip_lamports: env::var("JITO_TIP_LAMPORTS").ok().and_then(|s| s.parse().ok()),
+            jito_tip_lamports: env::var("JITO_TIP_LAMPORTS")
+                .ok()
+                .and_then(|s| s.parse().ok()),
             jito_region: env::var("JITO_REGION").ok(),
             jito_tip_accounts: env::var("JITO_TIP_ACCOUNTS")
                 .ok()
@@ -315,11 +319,9 @@ impl Config {
             jito_dynamic_tip_percentage: env::var("JITO_DYNAMIC_TIP_PERCENTAGE")
                 .ok()
                 .and_then(|s| s.parse().ok()),
-            jito_bundle_status_poll_interval_ms: env::var(
-                "JITO_BUNDLE_STATUS_POLL_INTERVAL_MS",
-            )
-            .ok()
-            .and_then(|s| s.parse().ok()),
+            jito_bundle_status_poll_interval_ms: env::var("JITO_BUNDLE_STATUS_POLL_INTERVAL_MS")
+                .ok()
+                .and_then(|s| s.parse().ok()),
             jito_bundle_status_timeout_secs: env::var("JITO_BUNDLE_STATUS_TIMEOUT_SECS")
                 .ok()
                 .and_then(|s| s.parse().ok()),
@@ -450,19 +452,15 @@ impl Config {
         if let Some(wallet_path) = &self.trader_wallet_keypair_path {
             if !wallet_path.is_empty() {
                 log::info!("   • Trader Wallet: ✅ Configured ({})", wallet_path);
-            } else {
-                if self.paper_trading {
-                    log::info!("   • Trader Wallet: ➖ Not required (Paper Trading)");
-                } else {
-                    log::error!("   • Trader Wallet: ❌ MISSING - Required for real trading!");
-                }
-            }
-        } else {
-            if self.paper_trading {
+            } else if self.paper_trading {
                 log::info!("   • Trader Wallet: ➖ Not required (Paper Trading)");
             } else {
                 log::error!("   • Trader Wallet: ❌ MISSING - Required for real trading!");
             }
+        } else if self.paper_trading {
+            log::info!("   • Trader Wallet: ➖ Not required (Paper Trading)");
+        } else {
+            log::error!("   • Trader Wallet: ❌ MISSING - Required for real trading!");
         }
 
         // Trading Parameters

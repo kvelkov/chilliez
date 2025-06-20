@@ -436,14 +436,14 @@ impl BalanceMonitor {
             };
 
             // Check safety mode trigger
-            if self.config.enable_emergency_pause {
-                if self.check_safety_mode_trigger(account, new_balance).await {
-                    self.activate_safety_mode(&format!(
-                        "Balance dropped significantly for account {}",
-                        account
-                    ))
-                    .await;
-                }
+            if self.config.enable_emergency_pause
+                && self.check_safety_mode_trigger(account, new_balance).await
+            {
+                self.activate_safety_mode(&format!(
+                    "Balance dropped significantly for account {}",
+                    account
+                ))
+                .await;
             }
 
             // Broadcast update

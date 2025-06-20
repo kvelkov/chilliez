@@ -1,23 +1,20 @@
 // src/dex/clients/lifinity.rs
 //! Lifinity DEX integration with proactive market making support.
 
-use crate::dex::api::{
-    CommonSwapInfo, DexClient, DexHealthStatus, PoolDiscoverable, Quote, SwapInfo,
-};
+use crate::dex::api::SwapInfo;
+use crate::dex::api::{CommonSwapInfo, DexClient, DexHealthStatus, PoolDiscoverable, Quote};
 use crate::solana::rpc::SolanaRpcClient;
 use crate::utils::{DexType, PoolInfo, PoolParser as UtilsPoolParser, PoolToken};
-use anyhow::{anyhow, Result as AnyhowResult};
 use async_trait::async_trait;
 use bytemuck::{Pod, Zeroable};
-use futures;
 use log::{info, warn};
+use solana_client::rpc_client::RpcClient;
+use solana_sdk::pubkey::Pubkey;
 use solana_sdk::{
     instruction::{AccountMeta, Instruction},
     program_pack::Pack,
     system_program, sysvar,
 };
-use solana_sdk::pubkey::Pubkey;
-use solana_client::rpc_client::RpcClient;
 use spl_token::state::{Account as TokenAccount, Mint};
 use std::sync::Arc;
 
@@ -65,20 +62,21 @@ pub struct LifinityPoolParser;
 
 #[async_trait]
 impl UtilsPoolParser for LifinityPoolParser {
+    /// Parse Lifinity pool data asynchronously from on-chain account data.
     async fn parse_pool_data(
         &self,
         pool_address: Pubkey,
         data: &[u8],
         rpc_client: &Arc<SolanaRpcClient>,
-    ) -> AnyhowResult<PoolInfo> {
+    ) -> anyhow::Result<PoolInfo> {
         if data.len() < LIFINITY_POOL_STATE_SIZE {
-            return Err(anyhow!(
+            return Err(crate::error::ArbError::ParseError(format!(
                 "Invalid Lifinity pool data size: expected {}, got {}",
                 LIFINITY_POOL_STATE_SIZE,
                 data.len()
-            ));
+            ))
+            .into());
         }
-
         let pool_state =
             bytemuck::from_bytes::<LifinityPoolState>(&data[..LIFINITY_POOL_STATE_SIZE]);
 
@@ -96,61 +94,58 @@ impl UtilsPoolParser for LifinityPoolParser {
         );
 
         // Parse token account data
-        let token_a_account_data = token_a_account_result.map_err(anyhow::Error::from)?;
-        let token_b_account_data = token_b_account_result.map_err(anyhow::Error::from)?;
-        let token_a_mint_data = token_a_mint_result.map_err(anyhow::Error::from)?;
-        let token_b_mint_data = token_b_mint_result.map_err(anyhow::Error::from)?;
+        let token_a_account_data = token_a_account_result
+            .map_err(|e| crate::error::ArbError::ParseError(e.to_string()))?;
+        let token_b_account_data = token_b_account_result
+            .map_err(|e| crate::error::ArbError::ParseError(e.to_string()))?;
+        let token_a_mint_data =
+            token_a_mint_result.map_err(|e| crate::error::ArbError::ParseError(e.to_string()))?;
+        let token_b_mint_data =
+            token_b_mint_result.map_err(|e| crate::error::ArbError::ParseError(e.to_string()))?;
 
         // Unpack token account data
-        let token_a_data = TokenAccount::unpack(&token_a_account_data)?;
-        let token_b_data = TokenAccount::unpack(&token_b_account_data)?;
-        let token_a_mint = Mint::unpack(&token_a_mint_data)?;
-        let token_b_mint = Mint::unpack(&token_b_mint_data)?;
+        let token_a_data = TokenAccount::unpack(&token_a_account_data)
+            .map_err(|e| crate::error::ArbError::ParseError(e.to_string()))?;
+        let token_b_data = TokenAccount::unpack(&token_b_account_data)
+            .map_err(|e| crate::error::ArbError::ParseError(e.to_string()))?;
+        let token_a_mint = Mint::unpack(&token_a_mint_data)
+            .map_err(|e| crate::error::ArbError::ParseError(e.to_string()))?;
+        let token_b_mint = Mint::unpack(&token_b_mint_data)
+            .map_err(|e| crate::error::ArbError::ParseError(e.to_string()))?;
 
         let pool_info = PoolInfo {
             address: pool_address,
-            name: format!("Lifinity Pool"),
+            name: "Lifinity Pool".to_string(),
             token_a: PoolToken {
                 mint: pool_state.token_a_mint,
-                symbol: "Unknown".to_string(), // Would be resolved from metadata
+                symbol: "Unknown".to_string(),
                 decimals: token_a_mint.decimals,
-                reserve: token_a_data.amount, // Fix: Keep as u64, no conversion to f64
+                reserve: token_a_data.amount,
             },
             token_b: PoolToken {
                 mint: pool_state.token_b_mint,
                 symbol: "Unknown".to_string(),
                 decimals: token_b_mint.decimals,
-                reserve: token_b_data.amount, // Fix: Keep as u64, no conversion to f64
+                reserve: token_b_data.amount,
             },
             token_a_vault: pool_state.token_a_vault,
             token_b_vault: pool_state.token_b_vault,
-            fee_numerator: Some(pool_state.fee_numerator as u64), // Fix: Convert u32 to u64
-            fee_denominator: Some(pool_state.fee_denominator as u64), // Fix: Convert u32 to u64
+            fee_numerator: Some(pool_state.fee_numerator as u64),
+            fee_denominator: Some(pool_state.fee_denominator as u64),
             fee_rate_bips: Some(pool_state.fee_rate_bips),
             last_update_timestamp: pool_state.last_rebalance_timestamp as u64,
             dex_type: DexType::Lifinity,
-            // Lifinity-specific CLMM fields
             liquidity: Some(pool_state.liquidity),
             sqrt_price: Some(pool_state.sqrt_price),
             tick_current_index: Some(pool_state.tick_current),
-            tick_spacing: Some(pool_state.concentration), // Using concentration as tick spacing
-            // Orca-specific fields (not applicable)
+            tick_spacing: Some(pool_state.concentration),
             tick_array_0: None,
             tick_array_1: None,
             tick_array_2: None,
-            oracle: Some(pool_state.oracle), // Lifinity uses oracle for price feeds
+            oracle: Some(pool_state.oracle),
         };
 
         Ok(pool_info)
-    }
-
-    fn parse_pool_data_sync(
-        &self,
-        _pool_address: Pubkey,
-        _data: &[u8],
-        _rpc_client: &Arc<SolanaRpcClient>,
-    ) -> AnyhowResult<PoolInfo> {
-        Err(anyhow!("Synchronous parsing not implemented for Lifinity"))
     }
 
     fn get_program_id(&self) -> Pubkey {
@@ -159,18 +154,21 @@ impl UtilsPoolParser for LifinityPoolParser {
 }
 
 /// Lifinity DEX client
+#[derive(Debug, Clone)]
 pub struct LifinityClient {
+    /// Name of the DEX client
     pub name: String,
 }
 
 impl LifinityClient {
+    /// Create a new LifinityClient instance.
     pub fn new() -> Self {
         Self {
             name: "Lifinity".to_string(),
         }
     }
 
-    /// Build Lifinity swap instruction
+    /// Build a Lifinity swap instruction.
     async fn build_swap_instruction(
         &self,
         swap_info: &CommonSwapInfo,
@@ -208,7 +206,7 @@ impl LifinityClient {
         })
     }
 
-    /// Calculate oracle-adjusted price
+    /// Calculate the oracle-adjusted price for a Lifinity pool.
     pub fn calculate_oracle_price(&self, pool_info: &PoolInfo) -> Option<f64> {
         // In a real implementation, this would fetch from Lifinity's oracle
         // For now, calculate from reserves
@@ -226,18 +224,14 @@ impl DexClient for LifinityClient {
         "Lifinity"
     }
 
-    fn calculate_onchain_quote(&self, pool: &PoolInfo, input_amount: u64) -> AnyhowResult<Quote> {
-        // Use Lifinity's proactive market making calculation from math module
+    fn calculate_onchain_quote(&self, pool: &PoolInfo, input_amount: u64) -> anyhow::Result<Quote> {
         let oracle_price = pool.oracle.and_then(|_| {
-            // In production, this would fetch from oracle
-            // For now, calculate from reserves as a fallback
             if pool.token_a.reserve > 0 && pool.token_b.reserve > 0 {
-                Some((pool.token_b.reserve * 1000000) / pool.token_a.reserve) // Scale by 1M for precision
+                Some((pool.token_b.reserve * 1000000) / pool.token_a.reserve)
             } else {
                 None
             }
         });
-
         let output_amount = calculate_lifinity_output(
             input_amount,
             pool.token_a.reserve,
@@ -245,29 +239,25 @@ impl DexClient for LifinityClient {
             pool.fee_rate_bips.unwrap_or(25) as u32,
             oracle_price,
         )
-        .map_err(|e| anyhow!("Lifinity calculation failed: {}", e))?;
-
-        // Calculate slippage estimate (higher for Lifinity due to proactive market making)
+        .map_err(|e| crate::error::ArbError::DexError(e.to_string()))?;
         let slippage_estimate = if input_amount > 0 && pool.token_a.reserve > 0 {
             let price_impact = (input_amount as f64) / (pool.token_a.reserve as f64);
-            Some((price_impact * 100.0).min(5.0)) // Cap at 5%
+            Some((price_impact * 100.0).min(5.0))
         } else {
-            Some(0.1) // Default 0.1%
+            Some(0.1)
         };
-
         Ok(Quote {
             input_token: pool.token_a.symbol.clone(),
             output_token: pool.token_b.symbol.clone(),
             input_amount,
             output_amount,
-            dex: self.name.clone(), // Now using the name field
+            dex: self.name.clone(),
             route: vec![pool.address],
             slippage_estimate,
         })
     }
 
-    fn get_swap_instruction(&self, swap_info: &SwapInfo) -> AnyhowResult<Instruction> {
-        // Legacy method - use enhanced version
+    fn get_swap_instruction(&self, swap_info: &SwapInfo) -> anyhow::Result<Instruction> {
         let common_swap_info = CommonSwapInfo {
             user_wallet_pubkey: swap_info.user_wallet,
             user_source_token_account: swap_info.user_source_token_account,
@@ -276,19 +266,17 @@ impl DexClient for LifinityClient {
             destination_token_mint: swap_info.pool.token_b.mint,
             input_amount: swap_info.amount_in,
             minimum_output_amount: swap_info.min_output_amount,
-            priority_fee_lamports: None, // Set as needed
-            slippage_bps: None,          // Set as needed
+            priority_fee_lamports: None,
+            slippage_bps: None,
         };
-
-        // Create a pool_info Arc for the enhanced method
         let pool_info = Arc::new(swap_info.pool.clone());
-
-        // Use async runtime to call the enhanced method
-        futures::executor::block_on(async {
-            self.get_swap_instruction_enhanced(&common_swap_info, pool_info)
-                .await
-        })
-        .map_err(|e| anyhow!("Enhanced swap instruction failed: {}", e))
+        tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(async {
+                self.get_swap_instruction_enhanced(&common_swap_info, pool_info)
+                    .await
+            })
+            .map_err(|e| crate::error::ArbError::InstructionError(e.to_string()).into())
     }
 
     async fn get_swap_instruction_enhanced(
@@ -299,29 +287,19 @@ impl DexClient for LifinityClient {
         self.build_swap_instruction(swap_info, &pool_info).await
     }
 
-    async fn discover_pools(&self) -> AnyhowResult<Vec<PoolInfo>> {
+    async fn discover_pools(&self) -> anyhow::Result<Vec<PoolInfo>> {
         info!("LifinityClient: Starting pool discovery...");
-        let rpc_url = std::env::var("SOLANA_RPC_URL").unwrap_or_else(|_| "https://api.mainnet-beta.solana.com".to_string());
-        let _websocket_url = std::env::var("SOLANA_WS_URL").unwrap_or_else(|_| "wss://api.mainnet-beta.solana.com/".to_string());
+        let rpc_url = std::env::var("SOLANA_RPC_URL")
+            .unwrap_or_else(|_| "https://api.mainnet-beta.solana.com".to_string());
         let rpc_client = RpcClient::new(rpc_url);
-        // Fix: Handle Result from get_program_accounts before returning Vec
-        let accounts: Result<Vec<(Pubkey, solana_sdk::account::Account)>, _> = rpc_client.get_program_accounts(&LIFINITY_PROGRAM_ID);
-        match accounts {
-            Ok(accs) => {
-                info!("[REAL] LifinityClient: Found {} pool accounts on-chain", accs.len());
-                // TODO: Parse each account.data into PoolInfo using Lifinity's pool layout
-                // For now, just log the first few account pubkeys
-                for (i, (pubkey, _data)) in accs.iter().take(5).enumerate() {
-                    info!("[REAL] Lifinity pool #{} pubkey: {}", i + 1, pubkey);
-                }
-                // TODO: Return parsed PoolInfo list
-                Ok(vec![])
-            }
-            Err(e) => {
-                warn!("[REAL] LifinityClient: Failed to fetch pool accounts: {}", e);
-                Ok(vec![])
-            }
-        }
+        let accounts = rpc_client
+            .get_program_accounts(&LIFINITY_PROGRAM_ID)
+            .map_err(|e| crate::error::ArbError::RpcError(e.to_string()))?;
+        info!(
+            "[REAL] LifinityClient: Found {} pool accounts on-chain",
+            accounts.len()
+        );
+        Ok(vec![])
     }
 
     async fn health_check(&self) -> Result<DexHealthStatus, crate::error::ArbError> {
@@ -329,28 +307,22 @@ impl DexClient for LifinityClient {
             is_healthy: true,
             last_successful_request: Some(std::time::Instant::now()),
             error_count: 0,
-            response_time_ms: Some(50), // Fix: Wrap in Some()
+            response_time_ms: Some(50),
             pool_count: None,
-            status_message: "Lifinity client healthy".to_string(), // Fix: Use status_message instead of error_message
+            status_message: "Lifinity client healthy".to_string(),
         })
     }
 }
-
 #[async_trait]
 impl PoolDiscoverable for LifinityClient {
-    async fn discover_pools(&self) -> AnyhowResult<Vec<PoolInfo>> {
-        // Delegate to DexClient implementation to avoid duplication
+    async fn discover_pools(&self) -> anyhow::Result<Vec<PoolInfo>> {
         <Self as DexClient>::discover_pools(self).await
     }
-
-    async fn fetch_pool_data(&self, pool_address: Pubkey) -> AnyhowResult<PoolInfo> {
-        // In production, this would fetch actual pool data using RPC client
-        // For now, create a sample pool to demonstrate functionality
+    async fn fetch_pool_data(&self, pool_address: Pubkey) -> anyhow::Result<PoolInfo> {
         warn!(
             "Lifinity: Fetching pool data for {} (using sample data)",
             pool_address
         );
-
         let sample_pool = PoolInfo {
             address: pool_address,
             name: "Lifinity Sample Pool".to_string(),
@@ -390,13 +362,17 @@ impl PoolDiscoverable for LifinityClient {
 
         Ok(sample_pool)
     }
-
     fn dex_name(&self) -> &str {
         "Lifinity"
     }
-
     fn as_any(&self) -> &dyn std::any::Any {
         self
+    }
+}
+
+impl Default for LifinityClient {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

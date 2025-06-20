@@ -501,3 +501,18 @@ pub enum ExecutionStrategy {
 // Placeholder for ArbitrageOpportunity
 #[derive(Default)]
 pub struct ArbitrageOpportunity; // not in use - Defined but not instantiated or used elsewhere in the provided codebase
+
+impl Default for EnhancedSlippageModel {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Default for VolatilityTracker {
+    fn default() -> Self {
+        Self {
+            price_history: HashMap::new(),
+            volatility_cache: HashMap::new(),
+        }
+    }
+}

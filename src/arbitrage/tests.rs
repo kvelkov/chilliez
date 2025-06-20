@@ -1,52 +1,44 @@
-use crate::arbitrage::analysis::FeeManager;
-use crate::arbitrage::opportunity::{ArbHop, MultiHopArbOpportunity};
-use crate::arbitrage::orchestrator::ArbitrageOrchestrator; // This will now be used
+use crate::config::settings::Config;
+use crate::dex::api::CommonSwapInfo;
 use crate::dex::api::{Quote, SwapInfo};
 use crate::dex::{BannedPairsManager, DexClient};
 use crate::error::{self, ArbError};
-use crate::utils::{DexType, PoolInfo, PoolToken};
-// use crate::arbitrage::detector::ArbitrageDetector; // TODO: Re-enable when banned pairs are implemented
-use crate::config::settings::Config;
-use crate::dex::api::CommonSwapInfo; // For get_swap_instruction_enhanced
 use crate::local_metrics::Metrics;
-use crate::solana::rpc::SolanaRpcClient;
+use crate::utils::{DexType, PoolInfo, PoolToken};
 use dashmap::DashMap;
-use log::info;
 use solana_sdk::{instruction::Instruction, pubkey::Pubkey};
-use std::collections::HashMap;
-use std::fs;
 use std::str::FromStr;
 use std::sync::Arc;
-use std::time::Duration;
 use tokio::sync::Mutex;
 
 // Ensure test output is visible
-use env_logger;
+// use env_logger;
 
 // Helper function to create a dummy BannedPairsManager for testing
+#[allow(dead_code)]
 fn dummy_banned_pairs_manager() -> Arc<BannedPairsManager> {
     // Create a temporary CSV file for testing
     let temp_csv_path = std::env::temp_dir().join("test_banned_pairs.csv");
     std::fs::write(&temp_csv_path, "token_a,token_b\n").unwrap_or_default();
 
     Arc::new(
-        BannedPairsManager::new(temp_csv_path.to_string_lossy().to_string()).unwrap_or_else(
-            |_| {
-                // Fallback: create with an empty temporary file
-                let fallback_path = std::env::temp_dir().join("empty_banned_pairs.csv");
-                std::fs::write(&fallback_path, "").unwrap_or_default();
-                BannedPairsManager::new(fallback_path.to_string_lossy().to_string())
-                    .expect("Failed to create fallback BannedPairsManager")
-            },
-        ),
+        BannedPairsManager::new(temp_csv_path.to_string_lossy().to_string()).unwrap_or_else(|_| {
+            // Fallback: create with an empty temporary file
+            let fallback_path = std::env::temp_dir().join("empty_banned_pairs.csv");
+            std::fs::write(&fallback_path, "").unwrap_or_default();
+            BannedPairsManager::new(fallback_path.to_string_lossy().to_string())
+                .expect("Failed to create fallback BannedPairsManager")
+        }),
     )
 }
 
+#[allow(dead_code)]
 fn dummy_config() -> Arc<Config> {
     Arc::new(Config::test_default())
 }
 
 // New test-specific config for multihop tests.
+#[allow(dead_code)]
 fn dummy_config_for_multihop_test() -> Arc<Config> {
     let mut cfg = Config::test_default();
     cfg.min_profit_pct = 0.0000001; // set almost zero percentage for pct checks
@@ -57,12 +49,14 @@ fn dummy_config_for_multihop_test() -> Arc<Config> {
 }
 
 // Dummy metrics constructor.
+#[allow(dead_code)]
 fn dummy_metrics() -> Arc<Mutex<Metrics>> {
     // Use Metrics::new() instead of Metrics::default()
     Arc::new(Mutex::new(Metrics::new()))
 }
 
 // Creates dummy pools for testing.
+#[allow(dead_code)]
 fn create_dummy_pools_map() -> Arc<DashMap<Pubkey, Arc<PoolInfo>>> {
     let token_a_mint = Pubkey::from_str("So11111111111111111111111111111111111111112").unwrap();
     let usdc_mint = Pubkey::from_str("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v").unwrap();
@@ -192,10 +186,12 @@ fn create_dummy_pools_map() -> Arc<DashMap<Pubkey, Arc<PoolInfo>>> {
 }
 
 // A simple mock for DexClient.
+#[allow(dead_code)]
 struct MockDexClient {
     name: String,
 }
 
+#[allow(dead_code)]
 impl MockDexClient {
     pub fn new(name: &str) -> Self {
         Self {
@@ -267,6 +263,10 @@ impl DexClient for MockDexClient {
 
 #[tokio::test]
 async fn test_multihop_opportunity_detection_and_ban_logic() {
+    use crate::arbitrage::{ArbHop, ArbitrageOrchestrator, MultiHopArbOpportunity};
+    use std::fs;
+    use std::time::Duration;
+
     // Initialize logger for test output.
     let _ = env_logger::builder()
         .is_test(true)
@@ -282,18 +282,16 @@ async fn test_multihop_opportunity_detection_and_ban_logic() {
     let metrics_arc = dummy_metrics();
     let dummy_dex_clients: Vec<Arc<dyn DexClient>> = vec![Arc::new(MockDexClient::new("Mock"))];
 
-    let engine = Arc::new(
-        ArbitrageOrchestrator::new(
-            pools_map_arc.clone(),
-            None,
-            None,
-            config_arc.clone(),
-            metrics_arc.clone(),
-            dummy_dex_clients,
-            dummy_banned_pairs_manager(), // banned_pairs_manager
-            None, // quicknode_opportunity_receiver
-        ),
-    );
+    let engine = Arc::new(ArbitrageOrchestrator::new(
+        pools_map_arc.clone(),
+        None,
+        None,
+        config_arc.clone(),
+        metrics_arc.clone(),
+        dummy_dex_clients,
+        dummy_banned_pairs_manager(), // banned_pairs_manager
+        None,                         // quicknode_opportunity_receiver
+    ));
 
     engine.set_min_profit_threshold_pct(0.01).await; // Set threshold to 0.01%
 
@@ -327,8 +325,10 @@ async fn test_multihop_opportunity_detection_and_ban_logic() {
     if let Ok(ref opps) = opps_result {
         println!("Number of opportunities found: {}", opps.len());
         for (i, opp) in opps.iter().enumerate() {
-            println!("Opportunity {}: id={} total_profit={:.8} profit_pct={:.4}% input_token_mint: {}", 
-                     i, opp.id, opp.total_profit, opp.profit_pct, opp.input_token_mint);
+            println!(
+                "Opportunity {}: id={} total_profit={:.8} profit_pct={:.4}% input_token_mint: {}",
+                i, opp.id, opp.total_profit, opp.profit_pct, opp.input_token_mint
+            );
             opp.log_summary();
         }
     } else {
@@ -363,6 +363,9 @@ async fn test_multihop_opportunity_detection_and_ban_logic() {
 
 #[tokio::test]
 async fn test_resolve_pools_for_opportunity_missing_pool() {
+    use crate::arbitrage::{ArbHop, ArbitrageOrchestrator, MultiHopArbOpportunity};
+    use solana_sdk::pubkey::Pubkey;
+
     let pools_map = create_dummy_pools_map();
     let config = dummy_config();
     let metrics_arc = dummy_metrics();
@@ -376,7 +379,7 @@ async fn test_resolve_pools_for_opportunity_missing_pool() {
         metrics_arc,
         dummy_dex_clients,
         dummy_banned_pairs_manager(), // banned_pairs_manager
-        None, // quicknode_opportunity_receiver
+        None,                         // quicknode_opportunity_receiver
     );
 
     let existing_pool_arc = pools_map.iter().next().unwrap().value().clone();
@@ -432,6 +435,10 @@ async fn test_resolve_pools_for_opportunity_missing_pool() {
 
 #[tokio::test]
 async fn test_engine_initialization_and_threshold() {
+    use crate::arbitrage::ArbitrageOrchestrator;
+    use crate::solana::rpc::SolanaRpcClient;
+    use std::time::Duration;
+
     let pools_map = create_dummy_pools_map();
     let mut config_mut = Config::test_default();
     config_mut.min_profit_pct = 0.005; // 0.5%
@@ -453,10 +460,11 @@ async fn test_engine_initialization_and_threshold() {
         metrics_arc,
         dummy_dex_clients,
         dummy_banned_pairs_manager(), // banned_pairs_manager
-        None, // quicknode_opportunity_receiver
+        None,                         // quicknode_opportunity_receiver
     );
 
-    let expected_threshold_pct = config.min_profit_pct * 100.0;
+    let mut expected_threshold_pct = config.min_profit_pct;
+    expected_threshold_pct *= 100.0;
     assert_eq!(
         engine.get_min_profit_threshold_pct().await,
         expected_threshold_pct
@@ -489,6 +497,9 @@ async fn test_engine_initialization_and_threshold() {
 
 #[tokio::test]
 async fn test_engine_initialization_with_dex_clients() {
+    use crate::arbitrage::ArbitrageOrchestrator;
+    use log::info;
+
     let config = Arc::new(Config::test_default());
     let pools = Arc::new(DashMap::new());
     let metrics = Arc::new(Mutex::new(Metrics::new()));
@@ -523,6 +534,9 @@ async fn test_engine_initialization_with_dex_clients() {
 
 #[tokio::test]
 async fn test_engine_all_fields_and_methods_referenced() {
+    use crate::arbitrage::{ArbitrageOrchestrator, MultiHopArbOpportunity};
+    use std::collections::HashMap;
+
     let pools_map = create_dummy_pools_map();
     let config = dummy_config();
     let metrics_arc = dummy_metrics();
@@ -535,7 +549,7 @@ async fn test_engine_all_fields_and_methods_referenced() {
         metrics_arc,
         dummy_dex_clients,
         dummy_banned_pairs_manager(), // banned_pairs_manager
-        None, // quicknode_opportunity_receiver
+        None,                         // quicknode_opportunity_receiver
     );
     let _ = engine
         .degradation_mode
@@ -553,6 +567,8 @@ async fn test_engine_all_fields_and_methods_referenced() {
 
 #[test]
 fn test_opportunity_profit_checks() {
+    use crate::arbitrage::MultiHopArbOpportunity;
+
     let mut opp = MultiHopArbOpportunity::default();
     opp.profit_pct = 1.5;
     opp.estimated_profit_usd = Some(10.0);
@@ -566,6 +582,8 @@ fn test_opportunity_profit_checks() {
 
 #[tokio::test]
 async fn test_exercise_all_fee_manager_functions() {
+    use crate::arbitrage::analysis::FeeManager;
+
     // FeeManager is imported at the module level.
     // XYKSlippageModel is also part of analysis module.
     use crate::arbitrage::analysis::XYKSlippageModel;

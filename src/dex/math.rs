@@ -1,9 +1,42 @@
 //! Advanced DEX Math Module
 //!
-//! This module provides sophisticated mathematical calculations for various DEX types,
-//! including concentrated liquidity market makers (CLMM), constant product AMMs,
-//! and stable swap curves. It uses high-precision arithmetic to ensure accuracy
-//! in quote calculations and minimize slippage discrepancies.
+//! This module provides sophisticated mathematical calculations for various DEX types.
+//!
+//! # Architecture Note
+//!
+//! Each DEX client uses its own math module for production-grade precision. For example,
+//! Orca Whirlpools (CLMM) math is implemented in `math/orca.rs` and is used directly by the Orca client.
+//! The generic math here is only used for fallback or for DEXes that do not require specialized logic.
+//!
+//! ## DEX Implementations
+//!
+//! - `math/orca.rs`: Orca Whirlpools CLMM math
+//! - `math/raydium.rs`: Raydium V4 AMM math
+//! - `math/phoenix.rs`: Phoenix order book DEX math
+//!
+//! ## High-Precision CLMM Calculations
+//!
+//! The `clmm` module provides high-precision calculations for concentrated liquidity pools,
+//! using advanced techniques to calculate output amounts and price impacts.
+//!
+//! ## Meteora-Specific Calculations
+//!
+//! The `meteora` module contains calculations for the Meteora DEX, including dynamic AMM
+//! and DLMM (Dynamic Liquidity Market Maker) calculations.
+//!
+//! ## Lifinity-Specific Calculations
+//!
+//! The `lifinity` module provides calculations for proactive market making used by the Lifinity DEX.
+//!
+//! ## Common Utilities
+//!
+//! The `utils` module provides common utility functions used across different DEX math calculations,
+//! such as slippage calculation and output validation.
+//!
+//! ## General Utility Functions
+//!
+//! The `general` module contains simple utility functions that can be used across different DEXes,
+//! such as the basic constant product AMM calculation.
 
 use anyhow::{anyhow, Result};
 use num_traits::ToPrimitive;

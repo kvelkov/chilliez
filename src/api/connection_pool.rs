@@ -476,6 +476,12 @@ pub struct RpcConnectionPool {
     round_robin_counter: Arc<Mutex<usize>>,
 }
 
+impl Default for RpcConnectionPool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl RpcConnectionPool {
     /// Create a new connection pool
     pub fn new() -> Self {

@@ -522,6 +522,12 @@ impl PoolDiscoverable for PhoenixClient {
     }
 }
 
+impl Default for PhoenixClient {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -539,13 +545,13 @@ mod tests {
 
         // Test that we can match on order sides
         match bid {
-            OrderSide::Bid => {},
+            OrderSide::Bid => {}
             OrderSide::Ask => unreachable!(),
         }
 
         match ask {
             OrderSide::Bid => unreachable!(),
-            OrderSide::Ask => {},
+            OrderSide::Ask => {}
         }
     }
 
@@ -556,12 +562,12 @@ mod tests {
 
         // Test that we can differentiate order types
         match market_order {
-            OrderType::Market => {},
+            OrderType::Market => {}
             _ => unreachable!(),
         }
 
         match limit_order {
-            OrderType::Limit => {},
+            OrderType::Limit => {}
             _ => unreachable!(),
         }
     }

@@ -3,7 +3,10 @@ use solana_arb_bot::{
     arbitrage::opportunity::{ArbHop, MultiHopArbOpportunity},
     arbitrage::orchestrator::ArbitrageOrchestrator,
     config::settings::Config,
-    dex::{api::DexClient, clients::{OrcaClient, RaydiumClient}},
+    dex::{
+        api::DexClient,
+        clients::{OrcaClient, RaydiumClient},
+    },
     utils::{DexType, PoolInfo, PoolToken},
 };
 use solana_sdk::{pubkey::Pubkey, signature::Keypair, system_program};
@@ -143,11 +146,10 @@ async fn test_jito_bundle_execution_flow() {
     let config = Arc::new(create_jito_test_config());
     let metrics = Arc::new(Mutex::new(solana_arb_bot::local_metrics::Metrics::new()));
     let hot_cache = Arc::new(DashMap::new());
-    let dex_providers: Vec<Arc<dyn DexClient>> = vec![
-        Arc::new(OrcaClient::new()),
-        Arc::new(RaydiumClient::new()),
-    ];
-    let banned_pairs_manager = Arc::new(solana_arb_bot::dex::BannedPairsManager::new("".to_string()).unwrap());
+    let dex_providers: Vec<Arc<dyn DexClient>> =
+        vec![Arc::new(OrcaClient::new()), Arc::new(RaydiumClient::new())];
+    let banned_pairs_manager =
+        Arc::new(solana_arb_bot::dex::BannedPairsManager::new("".to_string()).unwrap());
     let rpc_client = None;
     let ws_manager = None;
     let quicknode_opportunity_receiver = None;
@@ -194,7 +196,9 @@ async fn test_jito_bundle_execution_flow() {
         quicknode_opportunity_receiver,
     );
 
-    let result = orchestrator.execute_opportunity_atomic_jito(&opportunity).await;
+    let result = orchestrator
+        .execute_opportunity_atomic_jito(&opportunity)
+        .await;
     assert!(
         result.is_err(),
         "Expected Jito execution to fail without valid transactions and a real endpoint."

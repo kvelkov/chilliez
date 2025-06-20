@@ -1,19 +1,25 @@
 //! Orca Whirlpools CLMM Math Implementation
 //!
 //! This module provides production-ready mathematical calculations for Orca Whirlpools
-//! concentrated liquidity market maker (CLMM) pools. It implements the exact formulas
-//! used by Orca's on-chain program for accurate quote calculations.
+//! concentrated liquidity market maker (CLMM) pools. All functions are retained for
+//! reference, test coverage, and future extension, even if not directly called in production code.
+//!
+//! # Architecture Note
+//!
+//! This math is used directly by the Orca DEX client for all Whirlpool (CLMM) pools.
+//! Do not use generic math for these pools; always use this module for precision and correctness.
+//!
+//! # Note
+//!
+//! Some functions are only used in tests or as reference implementations. They are kept to ensure
+//! mathematical correctness and to provide a canonical source for CLMM math.
 
 use anyhow::{anyhow, Result};
-use std::cmp::{max, min};
-
-/// Orca-specific constants
-pub const MIN_SQRT_PRICE: u128 = 4295048016;
-pub const MAX_SQRT_PRICE: u128 = 79226673515401279992447579055;
-pub const Q64: u128 = 1 << 64;
+use orca_whirlpools_core::{MAX_SQRT_PRICE, MIN_SQRT_PRICE};
 
 /// Convert tick index to sqrt price (Q64.64 format)
 #[allow(dead_code)]
+/// Retained for reference and test coverage.
 pub fn tick_to_sqrt_price(tick: i32) -> Result<u128> {
     if !(-443636..=443636).contains(&tick) {
         return Err(anyhow!("Tick index out of bounds"));
@@ -32,6 +38,7 @@ pub fn tick_to_sqrt_price(tick: i32) -> Result<u128> {
 
 /// Convert sqrt price (Q64.64) to normal price
 #[allow(dead_code)]
+/// Retained for reference and test coverage.
 pub fn sqrt_price_to_price(sqrt_price: u128) -> Result<f64> {
     if sqrt_price == 0 {
         return Err(anyhow!("Sqrt price cannot be zero"));
@@ -43,6 +50,7 @@ pub fn sqrt_price_to_price(sqrt_price: u128) -> Result<f64> {
 
 /// Calculate swap output for Orca Whirlpool CLMM
 #[allow(dead_code)]
+/// Main entry point for CLMM math; used in tests and as a reference implementation.
 pub fn calculate_whirlpool_swap_output(
     input_amount: u64,
     sqrt_price: u128,
@@ -98,7 +106,6 @@ pub fn calculate_whirlpool_swap_output(
 }
 
 /// Calculate output when swapping token A for token B
-#[allow(dead_code)]
 fn calculate_a_to_b_output(input_amount: u64, sqrt_price: u128, liquidity: u128) -> Result<u64> {
     // CLMM formula: ∆y = L * (√P - √P')
     // Where ∆x = input_amount, L = liquidity, √P = current sqrt price
@@ -116,7 +123,6 @@ fn calculate_a_to_b_output(input_amount: u64, sqrt_price: u128, liquidity: u128)
 }
 
 /// Calculate output when swapping token B for token A  
-#[allow(dead_code)]
 fn calculate_b_to_a_output(input_amount: u64, sqrt_price: u128, liquidity: u128) -> Result<u64> {
     // CLMM formula: ∆x = L * (1/√P' - 1/√P)
     // Where ∆y = input_amount, L = liquidity, √P = current sqrt price
@@ -139,7 +145,6 @@ fn calculate_b_to_a_output(input_amount: u64, sqrt_price: u128, liquidity: u128)
 }
 
 /// Calculate new sqrt price after swap
-#[allow(dead_code)]
 fn calculate_new_sqrt_price(
     current_sqrt_price: u128,
     liquidity: u128,
@@ -159,7 +164,6 @@ fn calculate_new_sqrt_price(
 }
 
 /// Convert sqrt price back to tick (inverse of tick_to_sqrt_price)
-#[allow(dead_code)]
 fn sqrt_price_to_tick(sqrt_price: u128) -> Result<i32> {
     let price = sqrt_price_to_price(sqrt_price)?;
     let tick = (price.ln() / 1.0001_f64.ln()) as i32;
@@ -168,13 +172,12 @@ fn sqrt_price_to_tick(sqrt_price: u128) -> Result<i32> {
 }
 
 /// Result of a whirlpool swap calculation
-#[derive(Debug, Clone)]
 #[allow(dead_code)]
+/// Used as the return type for CLMM math; retained for reference and test coverage.
+#[derive(Debug, Clone)]
 pub struct WhirlpoolSwapResult {
     pub output_amount: u64,
-    #[allow(dead_code)]
     pub new_sqrt_price: u128,
-    #[allow(dead_code)]
     pub new_tick: i32,
     pub fee_amount: u64,
     pub price_impact: f64,
@@ -182,6 +185,7 @@ pub struct WhirlpoolSwapResult {
 
 /// Validate pool state for CLMM calculations
 #[allow(dead_code)]
+/// Used in tests and for pool state validation.
 pub fn validate_pool_state(
     sqrt_price: Option<u128>,
     liquidity: Option<u128>,
@@ -206,6 +210,7 @@ pub fn validate_pool_state(
 
 /// Calculate slippage for a trade
 #[allow(dead_code)]
+/// Used in tests and for slippage analysis.
 pub fn calculate_slippage(
     input_amount: u64,
     output_amount: u64,
@@ -220,6 +225,10 @@ pub fn calculate_slippage(
 
     Ok(slippage)
 }
+
+// Q64 is used in tests and possibly in other modules, so it is retained.
+#[allow(dead_code)]
+pub const Q64: u128 = 1 << 64;
 
 #[cfg(test)]
 mod tests {

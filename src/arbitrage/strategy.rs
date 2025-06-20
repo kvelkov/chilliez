@@ -245,8 +245,7 @@ impl MarketGraph {
                             Decimal::ONE // PATCH: return 1.0 if price_decimal is zero
                         }
                     };
-                    let rate = rate_decimal.to_f64().unwrap_or(1.0);
-                    rate
+                    rate_decimal.to_f64().unwrap_or(1.0)
                 } else {
                     // Fallback to basic AMM rate calculation using reserves
                     let reserve_a = Decimal::from(pool.token_a.reserve);
@@ -257,8 +256,7 @@ impl MarketGraph {
                         } else {
                             reserve_a / reserve_b
                         };
-                        let rate = rate_decimal.to_f64().unwrap_or(0.0);
-                        rate
+                        rate_decimal.to_f64().unwrap_or(0.0)
                     } else {
                         0.0
                     }

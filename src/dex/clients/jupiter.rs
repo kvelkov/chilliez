@@ -634,14 +634,12 @@ impl JupiterClient {
     /// Record API success for circuit breaker
     async fn record_api_success(&self) {
         let mut circuit_breaker = self.fallback_circuit_breaker.lock().await;
-        match *circuit_breaker {
-            CircuitBreakerState::HalfOpen => {
-                // Transition to closed after successful test
-                *circuit_breaker = CircuitBreakerState::Closed;
-                debug!("🟢 Jupiter circuit breaker closed after successful test");
-            }
-            _ => {} // Already closed or success in normal operation
+        if let CircuitBreakerState::HalfOpen = *circuit_breaker {
+            // Transition to closed after successful test
+            *circuit_breaker = CircuitBreakerState::Closed;
+            debug!("🟢 Jupiter circuit breaker closed after successful test");
         }
+        // Already closed or success in normal operation: do nothing
     }
 
     /// Record API failure for circuit breaker

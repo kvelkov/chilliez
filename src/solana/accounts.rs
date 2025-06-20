@@ -133,6 +133,14 @@ impl TokenMetadataCache {
     }
 }
 
+impl Default for TokenMetadataCache {
+    fn default() -> Self {
+        Self {
+            cache: Arc::new(RwLock::new(HashMap::new())),
+        }
+    }
+}
+
 #[allow(dead_code)]
 fn _suppress_dead_code_warnings_for_account_utils() {
     let _ = parse_account_data("token", &[]);

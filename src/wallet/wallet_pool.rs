@@ -82,6 +82,12 @@ impl EphemeralWallet {
     }
 }
 
+impl Default for EphemeralWallet {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Wallet pool for managing ephemeral wallets used in arbitrage operations
 pub struct WalletPool {
     wallets: VecDeque<EphemeralWallet>,
@@ -278,7 +284,7 @@ impl WalletPool {
 }
 
 /// Statistics about the wallet pool
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct WalletPoolStats {
     pub total_wallets: usize,
     pub active_wallets: usize,
@@ -287,18 +293,4 @@ pub struct WalletPoolStats {
     pub total_sweeps: u64,
     pub average_age_secs: u64,
     pub collector_address: Pubkey,
-}
-
-impl Default for WalletPoolStats {
-    fn default() -> Self {
-        Self {
-            total_wallets: 0,
-            active_wallets: 0,
-            expired_wallets: 0,
-            total_created: 0,
-            total_sweeps: 0,
-            average_age_secs: 0,
-            collector_address: Pubkey::default(),
-        }
-    }
 }

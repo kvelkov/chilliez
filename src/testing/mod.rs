@@ -127,6 +127,12 @@ impl TestSuiteRunner {
     }
 }
 
+impl Default for TestSuiteRunner {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Comprehensive test report
 #[derive(Debug, Clone)]
 pub struct TestReport {

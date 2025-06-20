@@ -539,13 +539,13 @@ mod tests {
 
         // Test that we can match on order sides
         match bid {
-            OrderSide::Bid => assert!(true),
-            OrderSide::Ask => assert!(false),
+            OrderSide::Bid => {},
+            OrderSide::Ask => unreachable!(),
         }
 
         match ask {
-            OrderSide::Bid => assert!(false),
-            OrderSide::Ask => assert!(true),
+            OrderSide::Bid => unreachable!(),
+            OrderSide::Ask => {},
         }
     }
 
@@ -556,13 +556,13 @@ mod tests {
 
         // Test that we can differentiate order types
         match market_order {
-            OrderType::Market => assert!(true),
-            _ => assert!(false),
+            OrderType::Market => {},
+            _ => unreachable!(),
         }
 
         match limit_order {
-            OrderType::Limit => assert!(true),
-            _ => assert!(false),
+            OrderType::Limit => {},
+            _ => unreachable!(),
         }
     }
 }

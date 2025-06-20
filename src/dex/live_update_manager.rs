@@ -1,7 +1,7 @@
 //! Live Update Manager Service
 //!
 //! This service creates the critical connection between the webhook system and the orchestrator's hot cache.
-//! It uses Tokio MPSC channels to feed real-time pool updates from the Helius webhook system
+//! It uses Tokio MPSC channels to feed real-time pool updates from the webhook system
 //! directly into the arbitrage engine's hot cache for sub-millisecond access.
 
 use crate::{
@@ -337,7 +337,7 @@ impl LiveUpdateManager {
             // and convert them to LiveUpdateEvents
 
             // Placeholder: In a real implementation, this would:
-            // 1. Receive HeliusWebhookNotification from webhook system
+            // 1. Receive webhook notification from webhook system
             // 2. Parse the notification to extract pool updates
             // 3. Create LiveUpdateEvent and send via update_sender
 

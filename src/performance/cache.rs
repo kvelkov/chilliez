@@ -508,10 +508,10 @@ impl CacheManager {
 /// Calculate freshness score based on quote age and market volatility
 pub fn calculate_freshness_score(quote_age: Duration, market_volatility: f64) -> f64 {
     let age_seconds = quote_age.as_secs_f64();
-    let base_freshness = (1.0 - (age_seconds / 300.0)).max(0.0); // 5 min = 0 freshness
+    let base_freshness = 1.0 - (age_seconds / 300.0); // 5 min = 0 freshness
     let volatility_penalty = market_volatility * 0.1; // Higher volatility = lower freshness
 
-    (base_freshness - volatility_penalty).max(0.0).min(1.0)
+    (base_freshness - volatility_penalty).clamp(0.0, 1.0)
 }
 
 #[cfg(test)]

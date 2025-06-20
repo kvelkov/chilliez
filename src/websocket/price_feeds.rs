@@ -282,7 +282,7 @@ impl PriceFeedManager {
         for pool in pools {
             pools_by_dex
                 .entry(pool.dex_type)
-                .or_insert_with(Vec::new)
+                .or_default()
                 .push(pool.address.to_string());
         }
 

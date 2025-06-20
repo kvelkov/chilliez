@@ -211,7 +211,7 @@ impl SolanaRpcClient {
         accounts: Option<Vec<Pubkey>>,
     ) -> Result<Vec<PrioritizationFee>, ArbError> {
         // Try primary client first
-        let accounts_ref = accounts.as_ref().map(|v| v.as_slice()).unwrap_or(&[]);
+        let accounts_ref = accounts.as_deref().unwrap_or(&[]);
         let last_error = match self
             .primary_client
             .get_recent_prioritization_fees(accounts_ref)
@@ -465,6 +465,6 @@ impl SolanaRpcClient {
 }
 
 // ---
-// NOTE: For best performance, use Helius' fast RPC endpoint for transaction sending and bundle submission (Jito).
-// Set the environment variable HELIUS_RPC_URL or SOLANA_RPC_URL to your Helius endpoint.
+// NOTE: For best performance, use QuickNode's fast RPC endpoint for transaction sending and bundle submission (Jito).
+// Set the environment variable QUICKNODE_RPC_URL or SOLANA_RPC_URL to your QuickNode endpoint.
 // ---

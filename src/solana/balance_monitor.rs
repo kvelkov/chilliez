@@ -557,7 +557,7 @@ impl BalanceMonitor {
 
         match (optimistic, confirmed) {
             (Some((opt_balance, opt_time)), Some((conf_balance, conf_time))) => {
-                let discrepancy = (opt_balance as i64 - conf_balance as i64).abs() as u64;
+                let discrepancy = (opt_balance as i64 - conf_balance as i64).unsigned_abs();
                 let time_diff = if opt_time > conf_time {
                     opt_time.duration_since(conf_time)
                 } else {

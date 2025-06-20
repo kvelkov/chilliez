@@ -155,12 +155,12 @@ pub mod meteora {
         if bin_offset > 0 {
             for _ in 0..bin_offset.min(10) {
                 // Limit iterations to prevent overflow
-                bin_multiplier = bin_multiplier * (Decimal::ONE + step_multiplier);
+                bin_multiplier *= Decimal::ONE + step_multiplier;
             }
         } else if bin_offset < 0 {
             for _ in 0..(-bin_offset).min(10) {
                 // Limit iterations to prevent overflow
-                bin_multiplier = bin_multiplier / (Decimal::ONE + step_multiplier);
+                bin_multiplier /= Decimal::ONE + step_multiplier;
             }
         }
 

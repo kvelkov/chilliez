@@ -15,7 +15,7 @@ pub const Q64: u128 = 1 << 64;
 /// Convert tick index to sqrt price (Q64.64 format)
 #[allow(dead_code)]
 pub fn tick_to_sqrt_price(tick: i32) -> Result<u128> {
-    if tick < -443636 || tick > 443636 {
+    if !(-443636..=443636).contains(&tick) {
         return Err(anyhow!("Tick index out of bounds"));
     }
 
@@ -27,7 +27,7 @@ pub fn tick_to_sqrt_price(tick: i32) -> Result<u128> {
     // Convert to Q64.64 format
     let sqrt_price_q64 = (sqrt_price * (Q64 as f64)) as u128;
 
-    Ok(max(MIN_SQRT_PRICE, min(MAX_SQRT_PRICE, sqrt_price_q64)))
+    Ok(sqrt_price_q64.clamp(MIN_SQRT_PRICE, MAX_SQRT_PRICE))
 }
 
 /// Convert sqrt price (Q64.64) to normal price
@@ -56,7 +56,7 @@ pub fn calculate_whirlpool_swap_output(
         return Err(anyhow!("Pool has no liquidity"));
     }
 
-    if sqrt_price < MIN_SQRT_PRICE || sqrt_price > MAX_SQRT_PRICE {
+    if !(MIN_SQRT_PRICE..=MAX_SQRT_PRICE).contains(&sqrt_price) {
         return Err(anyhow!("Invalid sqrt price"));
     }
 
@@ -164,8 +164,7 @@ fn sqrt_price_to_tick(sqrt_price: u128) -> Result<i32> {
     let price = sqrt_price_to_price(sqrt_price)?;
     let tick = (price.ln() / 1.0001_f64.ln()) as i32;
 
-    // Clamp to valid tick range
-    Ok(max(-443636, min(443636, tick)))
+    Ok(tick.clamp(-443636, 443636))
 }
 
 /// Result of a whirlpool swap calculation
@@ -194,11 +193,11 @@ pub fn validate_pool_state(
     let tick_current = tick_current.ok_or_else(|| anyhow!("Missing tick_current_index"))?;
     let _tick_spacing = tick_spacing.ok_or_else(|| anyhow!("Missing tick_spacing"))?;
 
-    if sqrt_price < MIN_SQRT_PRICE || sqrt_price > MAX_SQRT_PRICE {
+    if !(MIN_SQRT_PRICE..=MAX_SQRT_PRICE).contains(&sqrt_price) {
         return Err(anyhow!("Invalid sqrt_price: {}", sqrt_price));
     }
 
-    if tick_current < -443636 || tick_current > 443636 {
+    if !(-443636..=443636).contains(&tick_current) {
         return Err(anyhow!("Invalid tick_current_index: {}", tick_current));
     }
 

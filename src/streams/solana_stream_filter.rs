@@ -289,7 +289,7 @@ impl SolanaStreamFilter {
                                             transaction_signature: tx_data
                                                 .get("signatures")
                                                 .and_then(|v| v.as_array())
-                                                .and_then(|arr| arr.get(0))
+                                                .and_then(|arr| arr.first())
                                                 .and_then(|v| v.as_str())
                                                 .map(|s| s.to_string()),
                                             instruction_type: self
@@ -374,7 +374,7 @@ impl SolanaStreamFilter {
                                                                 transaction_signature: tx_data
                                                                     .get("signatures")
                                                                     .and_then(|v| v.as_array())
-                                                                    .and_then(|arr| arr.get(0))
+                                                                    .and_then(|arr| arr.first())
                                                                     .and_then(|v| v.as_str())
                                                                     .map(|s| s.to_string()),
                                                                 instruction_type: self

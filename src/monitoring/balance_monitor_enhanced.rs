@@ -550,3 +550,9 @@ impl AtomicBalanceOperations {
         Ok(())
     }
 }
+
+impl Default for AtomicBalanceOperations {
+    fn default() -> Self {
+        Self::new()
+    }
+}

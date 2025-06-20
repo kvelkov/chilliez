@@ -172,10 +172,10 @@ impl BannedPairsManager {
             })?;
 
         let mut writer = CsvWriterBuilder::new().has_headers(true).from_writer(file);
-        writer.write_record(&["token_a", "token_b"])?;
+        writer.write_record(["token_a", "token_b"])?;
 
         for pair in &self.banned_pairs {
-            writer.write_record(&[&pair.token_a, &pair.token_b])?;
+            writer.write_record([&pair.token_a, &pair.token_b])?;
         }
 
         writer.flush()?;
@@ -443,7 +443,7 @@ impl PoolDiscoveryService {
         // Check balanced reserves if required
         if self.validation_config.require_balanced_reserves {
             let ratio = pool.token_a.reserve as f64 / pool.token_b.reserve as f64;
-            if ratio < 0.1 || ratio > 10.0 {
+            if !(0.1..=10.0).contains(&ratio) {
                 return false;
             }
         }
@@ -650,7 +650,7 @@ pub fn validate_single_pool(pool: &PoolInfo, config: &PoolValidationConfig) -> b
 
     if config.require_balanced_reserves {
         let ratio = pool.token_a.reserve as f64 / pool.token_b.reserve as f64;
-        if ratio < 0.1 || ratio > 10.0 {
+        if !(0.1..=10.0).contains(&ratio) {
             return false;
         }
     }

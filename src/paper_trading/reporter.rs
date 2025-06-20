@@ -308,7 +308,7 @@ impl PaperTradingReporter {
                     slippage_bps: t.slippage_applied,
                     token_in: t.token_in.clone(),
                     token_out: t.token_out.clone(),
-                    dex: t.dex_route.get(0).cloned().unwrap_or_default(),
+                    dex: t.dex_route.first().cloned().unwrap_or_default(),
                 },
             )
             .collect();
@@ -323,7 +323,7 @@ impl PaperTradingReporter {
                     slippage_bps: t.slippage_applied,
                     token_in: t.token_in.clone(),
                     token_out: t.token_out.clone(),
-                    dex: t.dex_route.get(0).cloned().unwrap_or_default(),
+                    dex: t.dex_route.first().cloned().unwrap_or_default(),
                 },
             )
             .collect();
@@ -512,7 +512,7 @@ impl PaperTradingReporter {
             last_trade.actual_profit,
             last_trade.slippage_applied,
             last_trade.execution_success,
-            last_trade.dex_route.get(0).cloned().unwrap_or_default(),
+            last_trade.dex_route.first().cloned().unwrap_or_default(),
             analytics.total_pnl,
             analytics.opportunities_executed,
             analytics.get_success_rate()

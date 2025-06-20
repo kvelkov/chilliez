@@ -153,7 +153,7 @@ impl MockDex {
         let mut rng = thread_rng();
 
         // Common token mints for realistic pools
-        let token_mints = vec![
+        let token_mints = [
             ("SOL", Pubkey::new_unique(), 9),
             ("USDC", Pubkey::new_unique(), 6),
             ("USDT", Pubkey::new_unique(), 6),
@@ -314,7 +314,7 @@ impl MockDex {
             }
         } else {
             // Simulate various failure modes
-            let error_messages = vec![
+            let error_messages = [
                 "Insufficient liquidity",
                 "Slippage tolerance exceeded",
                 "Network congestion",
@@ -540,7 +540,7 @@ impl MockDexEnvironment {
         let mut dexes = HashMap::new();
 
         // Create mock DEXes
-        let dex_configs = vec![
+        let dex_configs = [
             ("Orca", DexType::Orca),
             ("Raydium", DexType::Raydium),
             ("Meteora", DexType::Meteora),

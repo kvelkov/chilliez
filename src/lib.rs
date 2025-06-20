@@ -6,7 +6,6 @@ pub mod config;
 pub mod dex;
 pub mod error;
 pub mod ffi; // FFI exports for JavaScript bridge
-pub mod helius_client; // Enhanced Helius SDK client with rate limiting
 pub mod local_metrics;
 pub mod monitoring; // Enhanced monitoring and alerting
 pub mod paper_trading; // Paper trading simulation system

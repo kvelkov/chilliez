@@ -214,7 +214,6 @@ impl MetricsCollector {
     pub fn new() -> Self {
         let mut system_info = System::new_all();
         system_info.refresh_all();
-
         Self {
             operation_metrics: HashMap::new(),
             system_metrics: SystemMetrics::default(),
@@ -329,7 +328,7 @@ impl MetricsCollector {
             score -= 0.1;
         }
 
-        score.max(0.0).min(1.0)
+        score.clamp(0.0, 1.0)
     }
 
     /// Get comprehensive metrics summary
@@ -455,6 +454,22 @@ impl MetricsCollector {
         }
 
         result
+    }
+}
+
+impl Default for MetricsCollector {
+    fn default() -> Self {
+        let mut system_info = System::new_all();
+        system_info.refresh_all();
+        Self {
+            operation_metrics: HashMap::new(),
+            system_metrics: SystemMetrics::default(),
+            latency_tracker: LatencyTracker::new(10000),
+            throughput_tracker: ThroughputTracker::new(Duration::from_secs(60)),
+            error_tracker: ErrorTracker::default(),
+            start_time: Instant::now(),
+            system_info,
+        }
     }
 }
 

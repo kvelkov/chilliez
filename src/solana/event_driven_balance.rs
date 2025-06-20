@@ -3,7 +3,7 @@
 
 use crate::solana::balance_monitor::{BalanceMonitor, BalanceMonitorConfig, BalanceUpdate};
 use crate::webhooks::processor::PoolUpdateProcessor;
-use crate::webhooks::types::{HeliusWebhookNotification, PoolUpdateEvent, PoolUpdateType};
+use crate::webhooks::types::{PoolUpdateEvent, PoolUpdateType};
 use anyhow::{anyhow, Result};
 use log::{debug, error, info, warn};
 use solana_sdk::pubkey::Pubkey;
@@ -89,8 +89,7 @@ pub struct EventDrivenBalanceMonitor {
 #[allow(dead_code)] // Planned for future webhook integration
 pub enum BalanceEventTrigger {
     WebhookEvent {
-        notification: HeliusWebhookNotification,
-        pool_event: PoolUpdateEvent,
+        pool_event: Box<PoolUpdateEvent>,
     },
     DirectBalanceChange {
         account: Pubkey,
@@ -186,38 +185,12 @@ impl EventDrivenBalanceMonitor {
     }
 
     /// Register a direct webhook notification handler
+    #[deprecated(note = "Helius integration removed; use QuickNode event-driven integration instead")]
     pub async fn register_webhook_notification_handler(
         &self,
-    ) -> mpsc::UnboundedSender<HeliusWebhookNotification> {
-        let (notification_sender, mut notification_receiver) =
-            mpsc::unbounded_channel::<HeliusWebhookNotification>();
-        let event_sender = self.event_sender.clone();
-        let monitored_accounts = Arc::clone(&self.monitored_accounts);
-        let stats = Arc::clone(&self.event_stats);
-
-        tokio::spawn(async move {
-            while let Some(notification) = notification_receiver.recv().await {
-                // Update stats
-                {
-                    let mut stats = stats.write().await;
-                    stats.total_webhook_events += 1;
-                    stats.last_event_timestamp = notification.timestamp;
-                }
-
-                // Process webhook notification for balance changes
-                if let Some(balance_triggers) =
-                    Self::extract_balance_triggers(&notification, &monitored_accounts).await
-                {
-                    for trigger in balance_triggers {
-                        if let Err(e) = event_sender.send(trigger) {
-                            warn!("Failed to send webhook balance trigger: {}", e);
-                        }
-                    }
-                }
-            }
-        });
-
-        notification_sender
+    ) -> () {
+        // This function is now obsolete and does nothing.
+        // All HeliusWebhookNotification logic has been removed.
     }
 
     /// Add accounts to monitor
@@ -341,62 +314,12 @@ impl EventDrivenBalanceMonitor {
     }
 
     /// Extract balance triggers from webhook notification
+    #[deprecated(note = "Helius integration removed; use QuickNode event-driven integration instead")]
     async fn extract_balance_triggers(
-        notification: &HeliusWebhookNotification,
-        monitored_accounts: &Arc<RwLock<HashSet<Pubkey>>>,
+        _notification: &(),
+        _monitored_accounts: &Arc<RwLock<HashSet<Pubkey>>>,
     ) -> Option<Vec<BalanceEventTrigger>> {
-        let mut triggers = Vec::new();
-        let accounts = monitored_accounts.read().await;
-
-        // Process native transfers
-        if let Some(ref native_transfers) = notification.native_transfers {
-            for transfer in native_transfers {
-                if let (Ok(from_account), Ok(to_account)) = (
-                    Pubkey::from_str(&transfer.from_user_account),
-                    Pubkey::from_str(&transfer.to_user_account),
-                ) {
-                    if accounts.contains(&from_account) {
-                        triggers.push(BalanceEventTrigger::DirectBalanceChange {
-                            account: from_account,
-                            new_balance: 0, // Will be queried
-                            change_amount: -(transfer.amount as i64),
-                            trigger_source: "native_transfer_out".to_string(),
-                        });
-                    }
-
-                    if accounts.contains(&to_account) {
-                        triggers.push(BalanceEventTrigger::DirectBalanceChange {
-                            account: to_account,
-                            new_balance: 0, // Will be queried
-                            change_amount: transfer.amount as i64,
-                            trigger_source: "native_transfer_in".to_string(),
-                        });
-                    }
-                }
-            }
-        }
-
-        // Process account data changes
-        if let Some(ref account_data) = notification.account_data {
-            for data in account_data {
-                if let Ok(account) = Pubkey::from_str(&data.account) {
-                    if accounts.contains(&account) && data.native_balance_change != 0 {
-                        triggers.push(BalanceEventTrigger::DirectBalanceChange {
-                            account,
-                            new_balance: 0, // Will be queried
-                            change_amount: data.native_balance_change,
-                            trigger_source: "account_data_change".to_string(),
-                        });
-                    }
-                }
-            }
-        }
-
-        if triggers.is_empty() {
-            None
-        } else {
-            Some(triggers)
-        }
+        None
     }
 
     /// Process a balance event trigger
@@ -425,7 +348,7 @@ impl EventDrivenBalanceMonitor {
                 }
 
                 // Check if change meets threshold
-                if change_amount.abs() as u64 >= config.balance_change_threshold {
+                if change_amount.unsigned_abs() >= config.balance_change_threshold {
                     debug!(
                         "🏦 Significant balance change detected for {}: {} ({})",
                         account, change_amount, trigger_source
@@ -448,15 +371,12 @@ impl EventDrivenBalanceMonitor {
                 // Implementation would query actual balances and update cache
             }
 
-            BalanceEventTrigger::WebhookEvent {
-                notification: _,
-                pool_event,
-            } => {
+            BalanceEventTrigger::WebhookEvent { pool_event } => {
                 debug!(
                     "📨 Processing webhook pool event: {:?}",
                     pool_event.update_type
                 );
-                // Process pool event for balance implications
+                // Add logic for processing pool_event if needed
             }
         }
 

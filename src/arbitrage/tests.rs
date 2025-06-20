@@ -1,3 +1,5 @@
+use crate::arbitrage::orchestrator::core::OrchestratorDeps;
+use crate::arbitrage::ArbHop;
 use crate::config::settings::Config;
 use crate::dex::api::CommonSwapInfo;
 use crate::dex::api::{Quote, SwapInfo};
@@ -263,7 +265,7 @@ impl DexClient for MockDexClient {
 
 #[tokio::test]
 async fn test_multihop_opportunity_detection_and_ban_logic() {
-    use crate::arbitrage::{ArbHop, ArbitrageOrchestrator, MultiHopArbOpportunity};
+    use crate::arbitrage::{ArbitrageOrchestrator, MultiHopArbOpportunity};
     use std::fs;
     use std::time::Duration;
 
@@ -284,13 +286,15 @@ async fn test_multihop_opportunity_detection_and_ban_logic() {
 
     let engine = Arc::new(ArbitrageOrchestrator::new(
         pools_map_arc.clone(),
-        None,
-        None,
+        OrchestratorDeps {
+            ws_manager: None,
+            rpc_client: None,
+            metrics: metrics_arc.clone(),
+            dex_providers: dummy_dex_clients,
+            banned_pairs_manager: dummy_banned_pairs_manager(),
+        },
         config_arc.clone(),
-        metrics_arc.clone(),
-        dummy_dex_clients,
-        dummy_banned_pairs_manager(), // banned_pairs_manager
-        None,                         // quicknode_opportunity_receiver
+        None,
     ));
 
     engine.set_min_profit_threshold_pct(0.01).await; // Set threshold to 0.01%
@@ -363,7 +367,7 @@ async fn test_multihop_opportunity_detection_and_ban_logic() {
 
 #[tokio::test]
 async fn test_resolve_pools_for_opportunity_missing_pool() {
-    use crate::arbitrage::{ArbHop, ArbitrageOrchestrator, MultiHopArbOpportunity};
+    use crate::arbitrage::{ArbitrageOrchestrator, MultiHopArbOpportunity};
     use solana_sdk::pubkey::Pubkey;
 
     let pools_map = create_dummy_pools_map();
@@ -371,15 +375,16 @@ async fn test_resolve_pools_for_opportunity_missing_pool() {
     let metrics_arc = dummy_metrics();
     let dummy_dex_clients: Vec<Arc<dyn DexClient>> = vec![Arc::new(MockDexClient::new("Mock"))];
     let engine = ArbitrageOrchestrator::new(
-        // Renamed ArbitrageEngine to ArbitrageOrchestrator
         pools_map.clone(),
-        None,
-        None,
+        OrchestratorDeps {
+            ws_manager: None,
+            rpc_client: None,
+            metrics: metrics_arc.clone(),
+            dex_providers: dummy_dex_clients,
+            banned_pairs_manager: dummy_banned_pairs_manager(),
+        },
         config,
-        metrics_arc,
-        dummy_dex_clients,
-        dummy_banned_pairs_manager(), // banned_pairs_manager
-        None,                         // quicknode_opportunity_receiver
+        None,
     );
 
     let existing_pool_arc = pools_map.iter().next().unwrap().value().clone();
@@ -454,13 +459,15 @@ async fn test_engine_initialization_and_threshold() {
 
     let engine = ArbitrageOrchestrator::new(
         pools_map,
-        None,
-        dummy_sol_rpc_client,
+        OrchestratorDeps {
+            ws_manager: None,
+            rpc_client: dummy_sol_rpc_client,
+            metrics: metrics_arc.clone(),
+            dex_providers: dummy_dex_clients.clone(),
+            banned_pairs_manager: dummy_banned_pairs_manager(),
+        },
         config.clone(),
-        metrics_arc,
-        dummy_dex_clients,
-        dummy_banned_pairs_manager(), // banned_pairs_manager
-        None,                         // quicknode_opportunity_receiver
+        None,
     );
 
     let mut expected_threshold_pct = config.min_profit_pct;
@@ -506,17 +513,19 @@ async fn test_engine_initialization_with_dex_clients() {
 
     let mock_dex_client1 = Arc::new(MockDexClient::new("Raydium"));
     let mock_dex_client2 = Arc::new(MockDexClient::new("Orca"));
-    let dex_clients: Vec<Arc<dyn DexClient>> = vec![mock_dex_client1, mock_dex_client2];
+    let _dex_clients: Vec<Arc<dyn DexClient>> = vec![mock_dex_client1, mock_dex_client2];
 
     let engine = ArbitrageOrchestrator::new(
         pools,
-        None,
-        None,
+        OrchestratorDeps {
+            ws_manager: None,
+            rpc_client: None,
+            metrics,
+            dex_providers: vec![], // Provide an empty Vec if no dex_providers are in scope
+            banned_pairs_manager: dummy_banned_pairs_manager(),
+        },
         config,
-        metrics,
-        dex_clients,
-        dummy_banned_pairs_manager(),
-        None, // quicknode_opportunity_receiver
+        None,
     );
 
     assert_eq!(
@@ -534,7 +543,7 @@ async fn test_engine_initialization_with_dex_clients() {
 
 #[tokio::test]
 async fn test_engine_all_fields_and_methods_referenced() {
-    use crate::arbitrage::{ArbitrageOrchestrator, MultiHopArbOpportunity};
+    use crate::arbitrage::ArbitrageOrchestrator;
     use std::collections::HashMap;
 
     let pools_map = create_dummy_pools_map();
@@ -543,13 +552,15 @@ async fn test_engine_all_fields_and_methods_referenced() {
     let dummy_dex_clients: Vec<Arc<dyn DexClient>> = vec![Arc::new(MockDexClient::new("Mock"))];
     let engine = ArbitrageOrchestrator::new(
         pools_map.clone(),
-        None,
-        None,
+        OrchestratorDeps {
+            ws_manager: None,
+            rpc_client: None,
+            metrics: metrics_arc.clone(),
+            dex_providers: dummy_dex_clients,
+            banned_pairs_manager: dummy_banned_pairs_manager(),
+        },
         config,
-        metrics_arc,
-        dummy_dex_clients,
-        dummy_banned_pairs_manager(), // banned_pairs_manager
-        None,                         // quicknode_opportunity_receiver
+        None,
     );
     let _ = engine
         .degradation_mode

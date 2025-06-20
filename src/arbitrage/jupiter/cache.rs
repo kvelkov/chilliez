@@ -243,7 +243,7 @@ impl JupiterQuoteCache {
                 metrics.hits += 1;
             }
 
-            debug!("🎯 Cache HIT for {}", key.to_string());
+            debug!("🎯 Cache HIT for {}", key);
             return quote_response;
         } else if cache.entries.contains_key(key) {
             // Entry expired - remove it
@@ -251,7 +251,7 @@ impl JupiterQuoteCache {
             if let Some(pos) = cache.access_order.iter().position(|k| k == key) {
                 cache.access_order.remove(pos);
             }
-            debug!("⏰ Cache entry expired for {}", key.to_string());
+            debug!("⏰ Cache entry expired for {}", key);
         }
 
         // Cache miss
@@ -260,7 +260,7 @@ impl JupiterQuoteCache {
             metrics.misses += 1;
         }
 
-        debug!("📡 Cache MISS for {}", key.to_string());
+        debug!("📡 Cache MISS for {}", key);
         None
     }
 
@@ -286,7 +286,7 @@ impl JupiterQuoteCache {
 
         debug!(
             "💾 Cached quote for {} (cache size: {})",
-            key.to_string(),
+            key,
             cache.entries.len()
         );
     }
@@ -302,7 +302,7 @@ impl JupiterQuoteCache {
                 metrics.evictions += 1;
             }
 
-            debug!("🗑️  Evicted LRU entry: {}", lru_key.to_string());
+            debug!("🗑️  Evicted LRU entry: {}", lru_key);
         }
     }
 
@@ -547,7 +547,7 @@ mod tests {
             .store_quote(key1.clone(), create_test_quote_response(150_000))
             .await;
         cache
-            .store_quote(key2.clone(), create_test_quote_response(2500_000))
+            .store_quote(key2.clone(), create_test_quote_response(2_500_000))
             .await;
 
         // Both should be available

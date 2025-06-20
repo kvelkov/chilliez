@@ -41,6 +41,13 @@ use std::{
 };
 use tokio::sync::{mpsc, Mutex, RwLock, Semaphore};
 
+// Type alias for trading pair locks for improved readability
+pub type TradingPairLocks = DashMap<(DexType, Pubkey, Pubkey), Arc<Mutex<()>>>;
+
+// Type alias for the quicknode opportunity receiver for improved readability
+pub type QuicknodeOpportunityReceiver =
+    Arc<Mutex<Option<mpsc::UnboundedReceiver<MultiHopArbOpportunity>>>>;
+
 // =============================================================================
 // Core Orchestrator Struct
 // =============================================================================
@@ -79,8 +86,7 @@ pub struct ArbitrageOrchestrator {
 
     // Async communication
     pub opportunity_sender: Option<mpsc::UnboundedSender<MultiHopArbOpportunity>>,
-    pub quicknode_opportunity_receiver:
-        Arc<Mutex<Option<mpsc::UnboundedReceiver<MultiHopArbOpportunity>>>>,
+    pub quicknode_opportunity_receiver: QuicknodeOpportunityReceiver,
 
     // Paper trading components
     pub paper_trading_engine: Option<Arc<SimulatedExecutionEngine>>,
@@ -92,7 +98,7 @@ pub struct ArbitrageOrchestrator {
     pub balance_monitor: Option<Arc<BalanceMonitor>>,
 
     // Thread-safe concurrency controls
-    pub trading_pairs_locks: Arc<DashMap<(DexType, Pubkey, Pubkey), Arc<Mutex<()>>>>,
+    pub trading_pairs_locks: Arc<TradingPairLocks>,
     pub execution_semaphore: Arc<Semaphore>,
     pub concurrent_executions: Arc<AtomicUsize>,
     pub max_concurrent_executions: usize,
@@ -113,6 +119,16 @@ pub struct DetectionMetrics {
     pub last_detection_timestamp: u64,
 }
 
+/// Dependencies required to construct an `ArbitrageOrchestrator`.
+/// This struct groups related services and managers to reduce argument count and improve clarity.
+pub struct OrchestratorDeps {
+    pub ws_manager: Option<Arc<Mutex<SolanaWebsocketManager>>>,
+    pub rpc_client: Option<Arc<SolanaRpcClient>>,
+    pub metrics: Arc<Mutex<Metrics>>,
+    pub dex_providers: Vec<Arc<dyn DexClient>>,
+    pub banned_pairs_manager: Arc<BannedPairsManager>,
+}
+
 // =============================================================================
 // Core Implementation
 // =============================================================================
@@ -121,12 +137,8 @@ impl ArbitrageOrchestrator {
     /// Create a new orchestrator with the given configuration
     pub fn new(
         hot_cache: Arc<DashMap<Pubkey, Arc<PoolInfo>>>,
-        ws_manager: Option<Arc<Mutex<SolanaWebsocketManager>>>,
-        rpc_client: Option<Arc<SolanaRpcClient>>,
+        deps: OrchestratorDeps,
         config: Arc<Config>,
-        metrics: Arc<Mutex<Metrics>>,
-        dex_providers: Vec<Arc<dyn DexClient>>,
-        banned_pairs_manager: Arc<BannedPairsManager>,
         quicknode_opportunity_receiver: Option<mpsc::UnboundedReceiver<MultiHopArbOpportunity>>,
     ) -> Self {
         let detector = Arc::new(Mutex::new(ArbitrageStrategy::new_from_config(&config)));
@@ -138,7 +150,7 @@ impl ArbitrageOrchestrator {
         let dynamic_threshold_updater = if config.volatility_tracker_window.is_some() {
             Some(Arc::new(DynamicThresholdUpdater::new(
                 &config,
-                Arc::clone(&metrics),
+                Arc::clone(&deps.metrics),
             )))
         } else {
             None
@@ -201,7 +213,7 @@ impl ArbitrageOrchestrator {
         };
 
         // Initialize balance monitor if RPC client is available
-        let balance_monitor = if rpc_client.is_some() {
+        let balance_monitor = if deps.rpc_client.is_some() {
             let monitor_config = crate::solana::BalanceMonitorConfig::default();
             let monitor = BalanceMonitor::new(monitor_config);
             Some(Arc::new(monitor))
@@ -223,7 +235,7 @@ impl ArbitrageOrchestrator {
 
         info!("🚀 Enhanced ArbitrageOrchestrator initialized:");
         info!("   🔥 Hot cache integration: {} pools", hot_cache.len());
-        info!("   🎯 DEX providers: {}", dex_providers.len());
+        info!("   🎯 DEX providers: {}", deps.dex_providers.len());
         info!("   ⚡ Batch execution: available");
         info!("   📊 Advanced metrics: enabled");
         info!("   🔄 Async execution pipeline: ready");
@@ -239,7 +251,8 @@ impl ArbitrageOrchestrator {
         // Initialize price aggregator with Jupiter fallback if enabled
         let price_aggregator = if config.jupiter_fallback_enabled {
             // Find Jupiter client among DEX providers
-            let jupiter_client = dex_providers
+            let jupiter_client = deps
+                .dex_providers
                 .iter()
                 .find(|_client| _client.get_name().to_lowercase().contains("jupiter"))
                 .and_then(|_client| {
@@ -249,10 +262,10 @@ impl ArbitrageOrchestrator {
                 });
 
             let aggregator = crate::arbitrage::price_aggregator::PriceAggregator::new(
-                dex_providers.clone(),
+                deps.dex_providers.clone(),
                 jupiter_client,
                 &config,
-                Arc::clone(&metrics),
+                Arc::clone(&deps.metrics),
             );
 
             info!("🪐 Price aggregator with Jupiter fallback: enabled");
@@ -265,16 +278,16 @@ impl ArbitrageOrchestrator {
         Self {
             hot_cache,
             config: config.clone(),
-            metrics,
-            rpc_client,
-            ws_manager,
-            dex_providers,
+            metrics: deps.metrics,
+            rpc_client: deps.rpc_client,
+            ws_manager: deps.ws_manager,
+            dex_providers: deps.dex_providers,
             detector,
             advanced_math: Arc::new(Mutex::new(AdvancedArbitrageMath::new(12))),
             dynamic_threshold_updater,
             price_aggregator,
             pool_validation_config,
-            banned_pairs_manager,
+            banned_pairs_manager: deps.banned_pairs_manager,
             degradation_mode: Arc::new(AtomicBool::new(false)),
             execution_enabled: Arc::new(AtomicBool::new(true)),
             last_health_check: Arc::new(RwLock::new(Instant::now())),
@@ -288,7 +301,7 @@ impl ArbitrageOrchestrator {
             paper_trading_analytics,
             paper_trading_reporter,
             balance_monitor,
-            trading_pairs_locks: Arc::new(DashMap::new()),
+            trading_pairs_locks: Arc::new(TradingPairLocks::new()),
             execution_semaphore: Arc::new(Semaphore::new(
                 config.max_concurrent_executions.unwrap_or(10),
             )),

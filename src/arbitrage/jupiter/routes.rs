@@ -306,7 +306,7 @@ impl JupiterRouteOptimizer {
             total_evaluation_time: total_time,
             routes_evaluated: successful_evals,
             routes_failed: 0, // TODO: Track failures
-            selection_reason: self.generate_selection_reason(&best_route),
+            selection_reason: self.generate_selection_reason(best_route),
         })
     }
 

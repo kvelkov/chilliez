@@ -23,7 +23,6 @@ use tokio::sync::{
 // Core modules
 pub mod calculator_tests;
 pub mod jito_client;
-pub mod jupiter_fallback_tests; // Jupiter fallback integration tests
 pub mod opportunity;
 pub mod tests; // Jito bundle client for MEV protection
 

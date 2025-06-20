@@ -15,6 +15,8 @@ pub mod webhooks;
 pub mod websocket; // Add performance module // Expose jito_bundle module
 
 use crate::arbitrage::analysis::AdvancedArbitrageMath;
+use crate::arbitrage::orchestrator::core::OrchestratorDeps;
+use crate::arbitrage::orchestrator::core::TradingPairLocks;
 use crate::arbitrage::strategy::ArbitrageStrategy;
 use crate::{
     arbitrage::orchestrator::{ArbitrageOrchestrator, PriceDataProvider},
@@ -253,7 +255,7 @@ async fn main() -> Result<(), ArbError> {
             paper_trading_analytics: None,
             paper_trading_reporter: None,
             balance_monitor: None,
-            trading_pairs_locks: Arc::new(DashMap::new()),
+            trading_pairs_locks: Arc::new(TradingPairLocks::new()),
             execution_semaphore: Arc::new(Semaphore::new(1)),
             concurrent_executions: Arc::new(AtomicUsize::new(0)),
             max_concurrent_executions: 1,
@@ -474,15 +476,20 @@ async fn main() -> Result<(), ArbError> {
     // NOTE: `opportunity_sender` is intentionally kept in scope for future event-driven integrations.
     // It will be used to send new MultiHopArbOpportunity events from other async sources (e.g., webhooks).
 
+    // Group orchestrator dependencies into OrchestratorDeps struct
+    let orchestrator_deps = OrchestratorDeps {
+        ws_manager: None, // WebSocket manager not needed with LiveUpdateManager
+        rpc_client: Some(ha_solana_rpc_client.clone()),
+        metrics: metrics.clone(),
+        dex_providers: dex_api_clients,
+        banned_pairs_manager,
+    };
+
     // Initialize modern arbitrage engine with hot cache and real-time updates
     let arbitrage_engine = Arc::new(ArbitrageOrchestrator::new(
         hot_cache.clone(),
-        None, // WebSocket manager not needed with LiveUpdateManager
-        Some(ha_solana_rpc_client.clone()),
+        orchestrator_deps,
         app_config.clone(),
-        metrics.clone(),
-        dex_api_clients,
-        banned_pairs_manager,
         Some(opportunity_receiver), // Pass the receiver for QuickNode opportunities
     ));
     arbitrage_engine.spawn_quicknode_opportunity_task().await;

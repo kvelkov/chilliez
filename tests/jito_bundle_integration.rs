@@ -13,6 +13,8 @@ use solana_sdk::{pubkey::Pubkey, signature::Keypair, system_program};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
+use solana_arb_bot::arbitrage::orchestrator::core::OrchestratorDeps;
+
 // Helper to create a default config for testing Jito integration.
 fn create_jito_test_config() -> Config {
     // A dummy keypair for testing purposes.
@@ -187,12 +189,14 @@ async fn test_jito_bundle_execution_flow() {
 
     let orchestrator = ArbitrageOrchestrator::new(
         hot_cache,
-        ws_manager,
-        rpc_client,
+        OrchestratorDeps {
+            ws_manager,
+            rpc_client,
+            metrics,
+            dex_providers,
+            banned_pairs_manager,
+        },
         config.clone(),
-        metrics,
-        dex_providers,
-        banned_pairs_manager,
         quicknode_opportunity_receiver,
     );
 

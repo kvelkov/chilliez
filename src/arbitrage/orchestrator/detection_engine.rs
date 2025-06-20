@@ -175,7 +175,7 @@ impl ArbitrageOrchestrator {
             };
 
             // Reject if reserves are too imbalanced (more than 10:1 ratio)
-            if reserve_ratio > 10.0 || reserve_ratio < 0.1 {
+            if !(0.1..=10.0).contains(&reserve_ratio) {
                 debug!(
                     "⚖️ Pool rejected: imbalanced reserves ratio {:.2}",
                     reserve_ratio

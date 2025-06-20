@@ -1,4 +1,5 @@
 use dashmap::DashMap;
+use solana_arb_bot::arbitrage::orchestrator::core::OrchestratorDeps;
 use solana_arb_bot::arbitrage::orchestrator::ArbitrageOrchestrator;
 use solana_arb_bot::config::settings::Config;
 use solana_arb_bot::dex::{BannedPairsManager, DexClient}; // DexClient is used by ArbitrageOrchestrator initialization
@@ -116,13 +117,15 @@ async fn reference_all_engine_methods_and_fields() {
     let banned_pairs_manager = dummy_banned_pairs_manager();
     let _engine = ArbitrageOrchestrator::new(
         pools,
-        ws_manager,
-        rpc_client,
+        OrchestratorDeps {
+            ws_manager,
+            rpc_client,
+            metrics,
+            dex_providers: dex_api_clients,
+            banned_pairs_manager,
+        },
         config.clone(),
-        metrics,
-        dex_api_clients,
-        banned_pairs_manager,
-        None, // No QuickNode opportunity receiver for this test
+        None,
     );
 
     // Reference degradation_mode field: set and read

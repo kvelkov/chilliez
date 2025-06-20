@@ -108,7 +108,7 @@ impl PriceAggregator {
         let config = PriceAggregatorConfig {
             enable_jupiter_fallback: system_config.jupiter_fallback_enabled,
             jupiter_fallback_min_profit_pct: system_config.jupiter_fallback_min_profit_pct,
-            max_quote_age_ms: system_config.jupiter_api_timeout_ms as u64,
+            max_quote_age_ms: system_config.jupiter_api_timeout_ms,
             min_confidence_threshold: 0.7,
             enable_quote_comparison: true,
             max_price_deviation_pct: 2.0,

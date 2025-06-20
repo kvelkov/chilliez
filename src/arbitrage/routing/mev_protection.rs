@@ -362,7 +362,7 @@ impl MevProtectedRouter {
 
         // Calculate priority fee adjustments
         let priority_fee_adjustments = self
-            .calculate_priority_fee_adjustments(&threat_analysis)
+            .calculate_priority_fee_adjustments(threat_analysis)
             .await?;
 
         // Generate Jito bundle config if needed
@@ -405,7 +405,7 @@ impl MevProtectedRouter {
         let route_key_clone = route_key.clone();
         self.attack_history
             .entry(route_key)
-            .or_insert_with(Vec::new)
+            .or_default()
             .push(threat_analysis);
 
         // Keep only last 100 entries per route
@@ -432,7 +432,7 @@ impl MevProtectedRouter {
             .map(|step| {
                 // Estimate impact based on amount vs pool size ratio
                 let impact_ratio =
-                    step.amount_in as f64 / step.pool_liquidity.max(1_000_000.0) as f64;
+                    step.amount_in / step.pool_liquidity.max(1_000_000.0);
                 impact_ratio * 0.2
             })
             .sum::<f64>()
@@ -537,8 +537,8 @@ impl MevProtectedRouter {
             // Adjust step amounts proportionally
             let ratio = sub_amount as f64 / total_amount as f64;
             for step in &mut sub_route.steps {
-                step.amount_in = step.amount_in * ratio;
-                step.amount_out = step.amount_out * ratio;
+                step.amount_in *= ratio;
+                step.amount_out *= ratio;
             }
 
             obfuscated_routes.push(sub_route);

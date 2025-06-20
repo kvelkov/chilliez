@@ -265,11 +265,11 @@ impl RoutingGraph {
         // Add edges to adjacency list
         self.adjacency
             .entry(pool_info.token_a.mint)
-            .or_insert_with(Vec::new)
+            .or_default()
             .push(edge_a_to_b);
         self.adjacency
             .entry(pool_info.token_b.mint)
-            .or_insert_with(Vec::new)
+            .or_default()
             .push(edge_b_to_a);
 
         // Store pool
@@ -557,7 +557,7 @@ impl RoutingGraph {
     fn calculate_liquidity_depth_score(&self, pool_info: &PoolInfo) -> f64 {
         let liquidity = self.calculate_liquidity_score(pool_info);
         // Normalize to 0-1 scale (using log scale for wide range)
-        (liquidity.ln() / 30.0).min(1.0).max(0.0) // Assumes max liquidity ~1e13
+        (liquidity.ln() / 30.0).clamp(0.0, 1.0) // Assumes max liquidity ~1e13
     }
 
     /// Calculate spread quality score

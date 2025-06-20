@@ -584,7 +584,7 @@ impl JitoHandler {
             .enumerate()
         {
             // Calculate compute units needed for this opportunity
-            let estimated_cu = self.estimate_compute_units(&instructions).await;
+            let estimated_cu = self.estimate_compute_units(instructions).await;
 
             if total_compute_units + estimated_cu > MAX_COMPUTE_UNITS_PER_TX {
                 warn!("⚠️ Opportunity {} would exceed compute unit limit, creating separate transaction", i); // not in use - Path only taken if CU limit exceeded for a single opportunity.

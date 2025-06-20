@@ -484,7 +484,7 @@ impl FailoverRouter {
                     result: ExecutionResult::RetryableFailure,
                     error_details: Some(format!(
                         "DEX {} is unavailable",
-                        step.dex_type.to_string()
+                        step.dex_type
                     )),
                     response_time_ms: Some(0),
                 });

@@ -1,5 +1,5 @@
-use crate::arbitrage::orchestrator::core::OrchestratorDeps;
 use crate::arbitrage::ArbHop;
+use crate::arbitrage::orchestrator::core::OrchestratorDeps;
 use crate::config::settings::Config;
 use crate::dex::api::CommonSwapInfo;
 use crate::dex::api::{Quote, SwapInfo};
@@ -12,9 +12,6 @@ use solana_sdk::{instruction::Instruction, pubkey::Pubkey};
 use std::str::FromStr;
 use std::sync::Arc;
 use tokio::sync::Mutex;
-
-// Ensure test output is visible
-// use env_logger;
 
 // Helper function to create a dummy BannedPairsManager for testing
 #[allow(dead_code)]
@@ -632,5 +629,6 @@ async fn test_exercise_all_fee_manager_functions() {
         }
     }
 
-    let _ = XYKSlippageModel::default();
+    // let _ = XYKSlippageModel::default();
+    let _ = XYKSlippageModel {};
 }

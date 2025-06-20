@@ -136,18 +136,14 @@ mod meteora_tests {
     #[test]
     fn test_meteora_program_id_identification() {
         // Test Dynamic AMM identification
-        let dynamic_type = MeteoraPoolParser::identify_pool_type(
-            &METEORA_DYNAMIC_AMM_PROGRAM_ID,
-            DYNAMIC_AMM_POOL_STATE_SIZE,
-        );
-        assert_eq!(dynamic_type, Some(MeteoraPoolType::DynamicAmm));
+        let dynamic_data = vec![1u8; DYNAMIC_AMM_POOL_STATE_SIZE];
+        let dynamic_type = MeteoraPoolParser::identify_pool_type_from_data(&dynamic_data).unwrap();
+        assert_eq!(dynamic_type, MeteoraPoolType::DynamicAmm);
 
         // Test DLMM identification
-        let dlmm_type = MeteoraPoolParser::identify_pool_type(
-            &METEORA_DLMM_PROGRAM_ID,
-            DLMM_LB_PAIR_STATE_SIZE,
-        );
-        assert_eq!(dlmm_type, Some(MeteoraPoolType::Dlmm));
+        let dlmm_data = vec![1u8; DLMM_LB_PAIR_STATE_SIZE];
+        let dlmm_type = MeteoraPoolParser::identify_pool_type_from_data(&dlmm_data).unwrap();
+        assert_eq!(dlmm_type, MeteoraPoolType::Dlmm);
     }
 
     #[tokio::test]

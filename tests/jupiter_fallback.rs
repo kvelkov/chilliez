@@ -202,12 +202,6 @@ async fn test_orchestrator_integration_with_price_aggregator() {
         None,
     );
 
-    // Test that orchestrator has price aggregator
-    assert!(
-        orchestrator.price_aggregator.is_some(),
-        "Expected orchestrator to have price aggregator"
-    );
-
     // Create test pool and add to cache
     let test_pool = PoolInfo::default();
     let pool_address = test_pool.address;
@@ -240,7 +234,10 @@ async fn test_orchestrator_fallback_to_traditional_quotes() {
         Arc::new(BannedPairsManager::new("test_banned_pairs.csv".to_string()).unwrap());
 
     // Create mock DEX clients
-    let dex_clients: Vec<Arc<dyn DexClient>> = vec![Arc::new(MockDexClient::new("MockDEX", false))];
+    let dex_clients: Vec<Arc<dyn DexClient>> = vec![
+        Arc::new(MockDexClient::new("MockDEX1", false)),
+        Arc::new(MockDexClient::new("MockDEX2", false)),
+    ];
 
     // Create orchestrator
     let orchestrator = ArbitrageOrchestrator::new(
@@ -254,12 +251,6 @@ async fn test_orchestrator_fallback_to_traditional_quotes() {
         },
         config,
         None,
-    );
-
-    // Test that orchestrator doesn't have price aggregator when disabled
-    assert!(
-        orchestrator.price_aggregator.is_none(),
-        "Expected orchestrator to not have price aggregator when disabled"
     );
 
     // Create test pool

@@ -426,7 +426,7 @@ impl RouteOptimizer {
     fn build_constraints(&self, request: &RouteRequest) -> OptimizationConstraints {
         OptimizationConstraints {
             max_hops: request.constraints.execution_deadline.map(|_| 3), // Shorter deadline = fewer hops
-            max_gas_cost: request.constraints.max_gas_cost.map(|gas| gas as u64),
+            max_gas_cost: request.constraints.max_gas_cost,
             max_execution_time: request.constraints.execution_deadline,
             min_output_amount: request.min_amount_out.map(|amt| amt as f64),
             max_price_impact: request.max_slippage,
@@ -981,7 +981,7 @@ impl RouteOptimizer {
 
         let avg_liquidity =
             steps.iter().map(|s| s.pool_liquidity).sum::<f64>() / steps.len() as f64;
-        let liquidity_score = (avg_liquidity.ln() / 30.0).min(1.0).max(0.0);
+        let liquidity_score = (avg_liquidity.ln() / 30.0).clamp(0.0, 1.0);
 
         let avg_impact = steps.iter().map(|s| s.price_impact).sum::<f64>() / steps.len() as f64;
         let impact_score = (1.0 - avg_impact).max(0.0);
@@ -999,7 +999,7 @@ impl RouteOptimizer {
             .iter()
             .map(|s| s.pool_liquidity)
             .fold(f64::INFINITY, f64::min);
-        (min_liquidity.ln() / 25.0).min(1.0).max(0.0)
+        (min_liquidity.ln() / 25.0).clamp(0.0, 1.0)
     }
 
     #[allow(dead_code)]

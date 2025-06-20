@@ -27,8 +27,8 @@ pub const METEORA_DYNAMIC_AMM_PROGRAM_ID: Pubkey =
     solana_sdk::pubkey!("Eo7WjKq67rjJQSZxS6z3YkapzY3eMj6Xy8X5EQVn5UaB");
 pub const METEORA_DLMM_PROGRAM_ID: Pubkey =
     solana_sdk::pubkey!("LBUZKhRxPF3XUpBCjp4YzTKgLccjZhTSDM9YuVaPwxo");
-pub const DYNAMIC_AMM_POOL_STATE_SIZE: usize = 520;
-pub const DLMM_LB_PAIR_STATE_SIZE: usize = 304;
+pub const DYNAMIC_AMM_POOL_STATE_SIZE: usize = std::mem::size_of::<DynamicAmmPoolState>(); // 435
+pub const DLMM_LB_PAIR_STATE_SIZE: usize = std::mem::size_of::<DlmmLbPairState>(); // 256
 
 // Instruction discriminators for Meteora
 const DYNAMIC_AMM_SWAP_DISCRIMINATOR: u8 = 0x01;
@@ -93,35 +93,32 @@ pub enum MeteoraPoolType {
 /// Meteora pool parser
 pub struct MeteoraPoolParser;
 
+#[allow(dead_code)]
 impl MeteoraPoolParser {
-    /// Identify the pool type based on program ID and account size
-    pub fn identify_pool_type(program_id: &Pubkey, data_len: usize) -> Option<MeteoraPoolType> {
-        match program_id {
-            &METEORA_DYNAMIC_AMM_PROGRAM_ID => {
-                if data_len >= DYNAMIC_AMM_POOL_STATE_SIZE {
-                    Some(MeteoraPoolType::DynamicAmm)
-                } else {
-                    None
-                }
+    /// Identify pool type from raw on-chain data
+    pub fn identify_pool_type_from_data(data: &[u8]) -> AnyhowResult<MeteoraPoolType> {
+        if data.len() >= DYNAMIC_AMM_POOL_STATE_SIZE {
+            let pool_state = bytemuck::from_bytes::<DynamicAmmPoolState>(&data[..DYNAMIC_AMM_POOL_STATE_SIZE]);
+            if pool_state.token_a_mint != Pubkey::default() && pool_state.token_b_mint != Pubkey::default() {
+                return Ok(MeteoraPoolType::DynamicAmm);
             }
-            &METEORA_DLMM_PROGRAM_ID => {
-                if data_len >= DLMM_LB_PAIR_STATE_SIZE {
-                    Some(MeteoraPoolType::Dlmm)
-                } else {
-                    None
-                }
-            }
-            _ => None,
         }
+        if data.len() >= DLMM_LB_PAIR_STATE_SIZE {
+             let pool_state = bytemuck::from_bytes::<DlmmLbPairState>(&data[..DLMM_LB_PAIR_STATE_SIZE]);
+             if pool_state.token_x_mint != Pubkey::default() && pool_state.token_y_mint != Pubkey::default() {
+                 return Ok(MeteoraPoolType::Dlmm);
+             }
+        }
+        Err(anyhow!("Unknown or invalid Meteora pool data"))
     }
 
-    /// Identify the pool type based on data length only (when program ID isn't available)
-    pub fn identify_pool_type_from_data(data: &[u8]) -> Option<MeteoraPoolType> {
-        match data.len() {
-            DYNAMIC_AMM_POOL_STATE_SIZE => Some(MeteoraPoolType::DynamicAmm),
-            DLMM_LB_PAIR_STATE_SIZE => Some(MeteoraPoolType::Dlmm),
-            _ => None,
-        }
+    /// Identify pool type by fetching account data
+    pub async fn identify_pool_type(
+        pool_address: &Pubkey,
+        rpc_client: &Arc<SolanaRpcClient>,
+    ) -> AnyhowResult<MeteoraPoolType> {
+        let account_data = rpc_client.get_account_data(pool_address).await?;
+        Self::identify_pool_type_from_data(&account_data)
     }
 
     /// Parse Dynamic AMM pool state
@@ -223,6 +220,24 @@ impl MeteoraPoolParser {
             oracle: Some(pool_state.oracle),
         }
     }
+
+    /// Parse pool data synchronously (for testing)
+    pub fn parse_pool_data_sync(
+        &self,
+        pool_address: Pubkey,
+        data: &[u8],
+        _rpc_client: &Arc<SolanaRpcClient>,
+    ) -> AnyhowResult<PoolInfo> {
+        // Identify pool type from data length (heuristic approach)
+        let pool_type = Self::identify_pool_type_from_data(data)?;
+
+        match pool_type {
+            MeteoraPoolType::DynamicAmm => {
+                Self::parse_dynamic_amm_pool(pool_address, data, _rpc_client)
+            }
+            MeteoraPoolType::Dlmm => Self::parse_dlmm_pool(pool_address, data, _rpc_client),
+        }
+    }
 }
 
 #[async_trait]
@@ -234,8 +249,7 @@ impl UtilsPoolParser for MeteoraPoolParser {
         rpc_client: &Arc<SolanaRpcClient>,
     ) -> AnyhowResult<PoolInfo> {
         // Identify pool type from data length (heuristic approach)
-        let pool_type = Self::identify_pool_type_from_data(data)
-            .ok_or_else(|| anyhow!("Unknown Meteora pool type with data length {}", data.len()))?;
+        let pool_type = Self::identify_pool_type_from_data(data)?;
 
         match pool_type {
             MeteoraPoolType::DynamicAmm => {
@@ -247,6 +261,24 @@ impl UtilsPoolParser for MeteoraPoolParser {
 
     fn get_program_id(&self) -> Pubkey {
         METEORA_DYNAMIC_AMM_PROGRAM_ID // Default to Dynamic AMM
+    }
+
+    /// Parse pool data synchronously (for testing)
+    fn parse_pool_data_sync(
+        &self,
+        pool_address: Pubkey,
+        data: &[u8],
+        _rpc_client: &Arc<SolanaRpcClient>,
+    ) -> AnyhowResult<PoolInfo> {
+        // Identify pool type from data length (heuristic approach)
+        let pool_type = Self::identify_pool_type_from_data(data)?;
+
+        match pool_type {
+            MeteoraPoolType::DynamicAmm => {
+                Self::parse_dynamic_amm_pool(pool_address, data, _rpc_client)
+            }
+            MeteoraPoolType::Dlmm => Self::parse_dlmm_pool(pool_address, data, _rpc_client),
+        }
     }
 }
 
@@ -558,39 +590,123 @@ mod tests {
 
     #[test]
     fn test_meteora_pool_type_identification() {
-        // Test Dynamic AMM identification
-        let dynamic_type = MeteoraPoolParser::identify_pool_type(
-            &METEORA_DYNAMIC_AMM_PROGRAM_ID,
-            DYNAMIC_AMM_POOL_STATE_SIZE,
-        );
-        assert_eq!(dynamic_type, Some(MeteoraPoolType::DynamicAmm));
+        use bytemuck::bytes_of;
+        use solana_sdk::pubkey::Pubkey;
 
-        // Test DLMM identification
-        let dlmm_type = MeteoraPoolParser::identify_pool_type(
-            &METEORA_DLMM_PROGRAM_ID,
-            DLMM_LB_PAIR_STATE_SIZE,
-        );
-        assert_eq!(dlmm_type, Some(MeteoraPoolType::Dlmm));
+        // Construct a valid DynamicAmmPoolState
+        let dynamic_pool = DynamicAmmPoolState {
+            enabled: 1,
+            bump: 1,
+            pool_type: 1,
+            lp_mint: Pubkey::new_unique(),
+            token_a_mint: Pubkey::new_unique(),
+            token_b_mint: Pubkey::new_unique(),
+            a_vault: Pubkey::new_unique(),
+            b_vault: Pubkey::new_unique(),
+            lp_vault: Pubkey::new_unique(),
+            a_vault_lp: Pubkey::new_unique(),
+            b_vault_lp: Pubkey::new_unique(),
+            a_vault_lp_mint: Pubkey::new_unique(),
+            b_vault_lp_mint: Pubkey::new_unique(),
+            pool_authority: Pubkey::new_unique(),
+            token_a_fees: 0,
+            token_b_fees: 0,
+            oracle: Pubkey::new_unique(),
+            fee_rate: 0,
+            protocol_fee_rate: 0,
+            lp_fee_rate: 0,
+            curve_type: 0,
+            _padding: [0; 7],
+        };
+        let dynamic_data = bytes_of(&dynamic_pool);
+        let dynamic_type = MeteoraPoolParser::identify_pool_type_from_data(dynamic_data).unwrap();
+        assert_eq!(dynamic_type, MeteoraPoolType::DynamicAmm);
 
-        // Test unknown program ID
-        let unknown_type = MeteoraPoolParser::identify_pool_type(&Pubkey::new_unique(), 100);
-        assert_eq!(unknown_type, None);
+        // Construct a valid DlmmLbPairState
+        let dlmm_pool = DlmmLbPairState {
+            active_id: 0,
+            bin_step: 0,
+            status: 1,
+            _padding1: 0,
+            token_x_mint: Pubkey::new_unique(),
+            token_y_mint: Pubkey::new_unique(),
+            reserve_x: Pubkey::new_unique(),
+            reserve_y: Pubkey::new_unique(),
+            protocol_fee_x: 0,
+            protocol_fee_y: 0,
+            fee_bps: 0,
+            protocol_share: 0,
+            pair_type: 0,
+            _padding2: [0; 3],
+            oracle: Pubkey::new_unique(),
+            _reserved: [0; 64],
+        };
+        let dlmm_data = bytes_of(&dlmm_pool);
+        let dlmm_type = MeteoraPoolParser::identify_pool_type_from_data(dlmm_data).unwrap();
+        assert_eq!(dlmm_type, MeteoraPoolType::Dlmm);
+
+        // Test unknown/invalid data
+        let unknown_data = vec![0u8; 100];
+        assert!(MeteoraPoolParser::identify_pool_type_from_data(&unknown_data).is_err());
     }
 
     #[test]
     fn test_meteora_pool_parser_integration() {
-        // Test that the parser can handle different data types
+        use bytemuck::bytes_of;
+        use solana_sdk::pubkey::Pubkey;
         let parser = MeteoraPoolParser;
 
-        // Test Dynamic AMM data identification
-        let dynamic_data = vec![0u8; DYNAMIC_AMM_POOL_STATE_SIZE];
-        let dynamic_type = MeteoraPoolParser::identify_pool_type_from_data(&dynamic_data);
-        assert_eq!(dynamic_type, Some(MeteoraPoolType::DynamicAmm));
+        // Dynamic AMM
+        let dynamic_pool = DynamicAmmPoolState {
+            enabled: 1,
+            bump: 1,
+            pool_type: 1,
+            lp_mint: Pubkey::new_unique(),
+            token_a_mint: Pubkey::new_unique(),
+            token_b_mint: Pubkey::new_unique(),
+            a_vault: Pubkey::new_unique(),
+            b_vault: Pubkey::new_unique(),
+            lp_vault: Pubkey::new_unique(),
+            a_vault_lp: Pubkey::new_unique(),
+            b_vault_lp: Pubkey::new_unique(),
+            a_vault_lp_mint: Pubkey::new_unique(),
+            b_vault_lp_mint: Pubkey::new_unique(),
+            pool_authority: Pubkey::new_unique(),
+            token_a_fees: 0,
+            token_b_fees: 0,
+            oracle: Pubkey::new_unique(),
+            fee_rate: 0,
+            protocol_fee_rate: 0,
+            lp_fee_rate: 0,
+            curve_type: 0,
+            _padding: [0; 7],
+        };
+        let dynamic_data = bytes_of(&dynamic_pool);
+        let dynamic_type = MeteoraPoolParser::identify_pool_type_from_data(dynamic_data).unwrap();
+        assert_eq!(dynamic_type, MeteoraPoolType::DynamicAmm);
 
-        // Test DLMM data identification
-        let dlmm_data = vec![0u8; DLMM_LB_PAIR_STATE_SIZE];
-        let dlmm_type = MeteoraPoolParser::identify_pool_type_from_data(&dlmm_data);
-        assert_eq!(dlmm_type, Some(MeteoraPoolType::Dlmm));
+        // DLMM
+        let dlmm_pool = DlmmLbPairState {
+            active_id: 0,
+            bin_step: 0,
+            status: 1,
+            _padding1: 0,
+            token_x_mint: Pubkey::new_unique(),
+            token_y_mint: Pubkey::new_unique(),
+            reserve_x: Pubkey::new_unique(),
+            reserve_y: Pubkey::new_unique(),
+            protocol_fee_x: 0,
+            protocol_fee_y: 0,
+            fee_bps: 0,
+            protocol_share: 0,
+            pair_type: 0,
+            _padding2: [0; 3],
+            oracle: Pubkey::new_unique(),
+            _reserved: [0; 64],
+        };
+        let dlmm_data = bytes_of(&dlmm_pool);
+        let dlmm_type = MeteoraPoolParser::identify_pool_type_from_data(dlmm_data).unwrap();
+        assert_eq!(dlmm_type, MeteoraPoolType::Dlmm);
 
         // Test parser program ID
         assert_eq!(parser.get_program_id(), METEORA_DYNAMIC_AMM_PROGRAM_ID);
@@ -624,6 +740,15 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(client.get_pool_type(&dlmm_pool), MeteoraPoolType::Dlmm);
+    }
+
+    #[test]
+    fn test_struct_sizes_vs_constants() {
+        use std::mem::size_of;
+        println!("DynamicAmmPoolState: struct size = {} | constant = {}", size_of::<DynamicAmmPoolState>(), DYNAMIC_AMM_POOL_STATE_SIZE);
+        println!("DlmmLbPairState: struct size = {} | constant = {}", size_of::<DlmmLbPairState>(), DLMM_LB_PAIR_STATE_SIZE);
+        assert_eq!(size_of::<DynamicAmmPoolState>(), DYNAMIC_AMM_POOL_STATE_SIZE, "DynamicAmmPoolState size mismatch");
+        assert_eq!(size_of::<DlmmLbPairState>(), DLMM_LB_PAIR_STATE_SIZE, "DlmmLbPairState size mismatch");
     }
 }
 

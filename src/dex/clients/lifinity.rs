@@ -148,6 +148,87 @@ impl UtilsPoolParser for LifinityPoolParser {
         Ok(pool_info)
     }
 
+    /// Parse Lifinity pool data synchronously from on-chain account data.
+    fn parse_pool_data_sync(
+        &self,
+        pool_address: Pubkey,
+        data: &[u8],
+        _rpc_client: &Arc<SolanaRpcClient>,
+    ) -> anyhow::Result<PoolInfo> {
+        if data.len() < LIFINITY_POOL_STATE_SIZE {
+            return Err(crate::error::ArbError::ParseError(format!(
+                "Invalid Lifinity pool data size: expected {}, got {}",
+                LIFINITY_POOL_STATE_SIZE,
+                data.len()
+            ))
+            .into());
+        }
+        let pool_state =
+            bytemuck::from_bytes::<LifinityPoolState>(&data[..LIFINITY_POOL_STATE_SIZE]);
+
+        // Use the sync RpcClient for blocking calls
+        // NOTE: This assumes SolanaRpcClient exposes a sync RpcClient or its endpoint
+        let rpc_url = "https://api.mainnet-beta.solana.com"; // TODO: Replace with actual endpoint from rpc_client if possible
+        let sync_client = RpcClient::new(rpc_url.to_string());
+
+        let token_a_account_data = sync_client
+            .get_account_data(&pool_state.token_a_vault)
+            .map_err(|e| crate::error::ArbError::ParseError(e.to_string()))?;
+        let token_b_account_data = sync_client
+            .get_account_data(&pool_state.token_b_vault)
+            .map_err(|e| crate::error::ArbError::ParseError(e.to_string()))?;
+        let token_a_mint_data = sync_client
+            .get_account_data(&pool_state.token_a_mint)
+            .map_err(|e| crate::error::ArbError::ParseError(e.to_string()))?;
+        let token_b_mint_data = sync_client
+            .get_account_data(&pool_state.token_b_mint)
+            .map_err(|e| crate::error::ArbError::ParseError(e.to_string()))?;
+
+        // Unpack token account data
+        let token_a_data = TokenAccount::unpack(&token_a_account_data)
+            .map_err(|e| crate::error::ArbError::ParseError(e.to_string()))?;
+        let token_b_data = TokenAccount::unpack(&token_b_account_data)
+            .map_err(|e| crate::error::ArbError::ParseError(e.to_string()))?;
+        let token_a_mint = Mint::unpack(&token_a_mint_data)
+            .map_err(|e| crate::error::ArbError::ParseError(e.to_string()))?;
+        let token_b_mint = Mint::unpack(&token_b_mint_data)
+            .map_err(|e| crate::error::ArbError::ParseError(e.to_string()))?;
+
+        let pool_info = PoolInfo {
+            address: pool_address,
+            name: "Lifinity Pool".to_string(),
+            token_a: PoolToken {
+                mint: pool_state.token_a_mint,
+                symbol: "Unknown".to_string(),
+                decimals: token_a_mint.decimals,
+                reserve: token_a_data.amount,
+            },
+            token_b: PoolToken {
+                mint: pool_state.token_b_mint,
+                symbol: "Unknown".to_string(),
+                decimals: token_b_mint.decimals,
+                reserve: token_b_data.amount,
+            },
+            token_a_vault: pool_state.token_a_vault,
+            token_b_vault: pool_state.token_b_vault,
+            fee_numerator: Some(pool_state.fee_numerator as u64),
+            fee_denominator: Some(pool_state.fee_denominator as u64),
+            fee_rate_bips: Some(pool_state.fee_rate_bips),
+            last_update_timestamp: pool_state.last_rebalance_timestamp as u64,
+            dex_type: DexType::Lifinity,
+            liquidity: Some(pool_state.liquidity),
+            sqrt_price: Some(pool_state.sqrt_price),
+            tick_current_index: Some(pool_state.tick_current),
+            tick_spacing: Some(pool_state.concentration),
+            tick_array_0: None,
+            tick_array_1: None,
+            tick_array_2: None,
+            oracle: Some(pool_state.oracle),
+        };
+
+        Ok(pool_info)
+    }
+
     fn get_program_id(&self) -> Pubkey {
         LIFINITY_PROGRAM_ID
     }

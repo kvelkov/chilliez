@@ -54,10 +54,9 @@ pub mod strategy; // Opportunity detection and path finding // Advanced multi-ho
 // Primary exports from new consolidated modules
 pub use self::analysis::ArbitragePath;
 pub use self::analysis::{
-    ArbitrageAnalyzer, ContractSelector, DynamicThresholdUpdater, ExecutionStrategy, FeeBreakdown,
-    OpportunityCalculationResult, OptimalArbitrageResult, OptimalInputResult,
-    SimulationResult as AnalysisSimulationResult, SlippageModel, VolatilityTracker,
-    XYKSlippageModel,
+    ArbitrageAnalyzer, ContractSelector, ExecutionStrategy, FeeBreakdown,
+    OpportunityCalculationResult, OptimalArbitrageResult,
+    XYKSlippageModel, SlippageModel,
 };
 pub use self::jito_client::{
     BundleBuilder, BundleStats, JitoClient, JitoConfig as JitoClientConfig,

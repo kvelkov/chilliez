@@ -123,7 +123,7 @@ impl Eq for PathNode {}
 
 impl PartialOrd for PathNode {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        other.distance.partial_cmp(&self.distance) // Reverse for min-heap
+        Some(self.cmp(other))
     }
 }
 
@@ -251,7 +251,7 @@ impl PathFinder {
         }
 
         let search_time = start_time.elapsed();
-        let algorithm = self.config.algorithm.clone();
+        let algorithm = self.config.algorithm;
         let paths_for_stats = paths.clone();
         self.update_algorithm_stats(&algorithm, search_time, !paths.is_empty(), &paths_for_stats);
 
@@ -742,7 +742,7 @@ impl PathFinder {
 
         let avg_liquidity =
             steps.iter().map(|s| s.pool_liquidity).sum::<f64>() / steps.len() as f64;
-        let liquidity_score = (avg_liquidity.ln() / 30.0).min(1.0).max(0.0);
+        let liquidity_score = (avg_liquidity.ln() / 30.0).clamp(0.0, 1.0);
 
         let avg_impact = steps.iter().map(|s| s.price_impact).sum::<f64>() / steps.len() as f64;
         let impact_score = (1.0 - avg_impact).max(0.0);

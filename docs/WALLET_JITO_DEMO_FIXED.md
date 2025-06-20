@@ -71,19 +71,16 @@ The demo now runs successfully and demonstrates:
 
 **Transaction Failures are Expected and Correct!**
 
-```
 Transaction simulation failed: Attempt to debit an account but found no record of a prior credit.
-```
 
 This proves the system is working correctly:
-- ✅ Generates unfunded ephemeral wallets (safe for demo)
-- ✅ Attempts real blockchain transactions
-- ✅ Handles failures gracefully
-- ✅ Provides educational error messaging
+✅ Generates unfunded ephemeral wallets (safe for demo)
+✅ Attempts real blockchain transactions
+✅ Handles failures gracefully
+✅ Provides educational error messaging
 
 ### 📋 **Demo Output Highlights**
 
-```
 [INFO] 🚀 Starting Wallet-Jito Integration Demo
 [INFO] 📦 Collector wallet: G2DSM5252H2k9kGSJ8DK8YkgQMWTu47BKpU3c2QccD6E
 [INFO] ✅ Integrated wallet-Jito system initialized
@@ -96,7 +93,6 @@ This proves the system is working correctly:
 [INFO] 💡 Demo uses unfunded wallets - transaction failures are expected
 [INFO] ✅ Correctly rejected low profit trade: Expected profit 1000 below threshold 50000
 [INFO] 🎉 Wallet-Jito Integration Demo completed successfully
-```
 
 ### 🔧 **For Production Use**
 

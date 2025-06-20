@@ -174,7 +174,7 @@ impl ArbitrageOrchestrator {
 
         // Factor 2: Gas costs vs profit
         let estimated_gas_cost = self.estimate_execution_cost(opportunity).await?;
-        if estimated_gas_cost > opportunity.total_profit as f64 * 0.5 {
+        if estimated_gas_cost > opportunity.total_profit * 0.5 {
             risk_factors.push("High gas cost ratio".to_string());
             competitive_score -= Decimal::from(30);
         }

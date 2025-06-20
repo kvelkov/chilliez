@@ -14,7 +14,7 @@ mod utils;
 pub mod webhooks;
 pub mod websocket; // Add performance module // Expose jito_bundle module
 
-use crate::arbitrage::analysis::AdvancedArbitrageMath;
+use crate::arbitrage::analysis::EnhancedSlippageModel;
 use crate::arbitrage::orchestrator::core::OrchestratorDeps;
 use crate::arbitrage::orchestrator::core::TradingPairLocks;
 use crate::arbitrage::strategy::ArbitrageStrategy;
@@ -235,13 +235,13 @@ async fn main() -> Result<(), ArbError> {
             ws_manager: None,
             dex_providers: vec![],
             detector: Arc::new(Mutex::new(ArbitrageStrategy::new_from_config(&app_config))),
-            advanced_math: Arc::new(Mutex::new(AdvancedArbitrageMath::new(12))),
-            dynamic_threshold_updater: None,
-            price_aggregator: None,
-            pool_validation_config: PoolValidationConfig::default(),
-            banned_pairs_manager: Arc::new(
-                BannedPairsManager::new("banned_pairs_log.csv".to_string()).unwrap(),
-            ),
+            slippage_model: Arc::new(Mutex::new(EnhancedSlippageModel::new())),
+            pool_validation_config: PoolValidationConfig {
+                min_liquidity_usd: 1000.0,
+                max_price_impact_bps: 500,
+                require_balanced_reserves: false,
+            },
+            banned_pairs_manager: Arc::new(BannedPairsManager::new("config/banned_pairs_log.csv".to_string()).unwrap()),
             degradation_mode: Arc::new(AtomicBool::new(false)),
             execution_enabled: Arc::new(AtomicBool::new(true)),
             last_health_check: Arc::new(tokio::sync::RwLock::new(Instant::now())),
@@ -260,7 +260,7 @@ async fn main() -> Result<(), ArbError> {
             concurrent_executions: Arc::new(AtomicUsize::new(0)),
             max_concurrent_executions: 1,
             performance_manager: None,
-            jito_client: None, // Add this line for compatibility
+            jito_client: None,
         };
         let orca_json_path = "config/orca_whirlpool_pools.json";
         match fake_orchestrator
@@ -461,15 +461,7 @@ async fn main() -> Result<(), ArbError> {
 
     // Create banned pairs manager
     let banned_pairs_manager = Arc::new(
-        BannedPairsManager::new("banned_pairs_log.csv".to_string()) // Fix: Pass String instead of Path
-            .unwrap_or_else(|e| {
-                warn!(
-                    "Failed to load banned pairs: {}, creating minimal manager",
-                    e
-                );
-                // Since constructor requires CSV file, use a fallback or handle error
-                panic!("Cannot initialize banned pairs manager: {}", e);
-            }),
+        BannedPairsManager::new("config/banned_pairs_log.csv".to_string()).unwrap()
     );
 
     // --- QuickNode Opportunity Channel Initialization ---

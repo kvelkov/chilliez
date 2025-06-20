@@ -23,12 +23,14 @@ The system is designed with a layered and modular architecture:
 - **utils**: Contains shared utilities and helper functions used across the codebase.
 
 #### Architectural Layers (Conceptual)
+
 - **Market Intelligence**: Real-time data from DEXs via WebSockets, managing pool states efficiently, enabling rapid price discovery. ML-powered opportunity prediction is a future goal.
 - **Opportunity Detection**: AdvancedPathFinder discovers multi-hop arbitrage paths, applies filters for liquidity, slippage, and profitability, and scores opportunities.
 - **Execution Engine**: AdvancedBatchExecutor groups opportunities into atomic transactions, manages potential conflicts, optimizes gas, and includes MEV protection strategies.
 - **Risk Management & Optimization**: Dynamic profit thresholds, intelligent capital allocation, real-time slippage protection, and emergency systems like circuit breakers.
 
 #### Execution Flow
+
 - Data Collection & Pool Management: Real-time price and pool data is ingested from multiple DEXs via WebSocket streams. DEX-specific clients fetch and parse detailed pool information. A central PoolDiscovery service identifies and maintains an up-to-date map of tradable pools, often cached for quick access.
 - Opportunity Identification: ArbitrageEngine orchestrates the detection process. AdvancedPathFinder analyzes the live pool data to find potential multi-hop arbitrage opportunities across configured DEXs. Calculations account for token prices, pool liquidity, DEX fees, estimated transaction (gas) fees, and potential slippage.
 - Profitability Analysis & Risk Assessment: Identified paths are evaluated for profitability against configured thresholds. Risk parameters (e.g., slippage tolerance, maximum capital allocation per trade) are checked.

@@ -7,7 +7,7 @@ use crate::dex::api::{
     CommonSwapInfo, DexClient, DexHealthStatus, PoolDiscoverable, Quote, SwapInfo,
 };
 use crate::solana::rpc::SolanaRpcClient;
-use crate::utils::{DexType, PoolInfo, PoolParser as UtilsPoolParser, PoolToken};
+use crate::utils::{DexType, PoolInfo, PoolParser, PoolToken};
 use anyhow::{anyhow, Result as AnyhowResult};
 use async_trait::async_trait;
 use bytemuck::{Pod, Zeroable};
@@ -91,7 +91,7 @@ pub struct LiquidityStateV4 {
 pub struct RaydiumPoolParser;
 
 #[async_trait]
-impl UtilsPoolParser for RaydiumPoolParser {
+impl PoolParser for RaydiumPoolParser {
     async fn parse_pool_data(
         &self,
         pool_address: Pubkey,

@@ -233,7 +233,7 @@ impl SafeTransactionHandler {
         Self {
             _rpc_client: rpc_client,
             config,
-            _slippage_model: EnhancedSlippageModel::default(),
+            _slippage_model: EnhancedSlippageModel::new(),
             execution_history: Arc::new(RwLock::new(Vec::new())),
             _balance_cache: Arc::new(RwLock::new(None)),
         }

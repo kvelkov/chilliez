@@ -107,22 +107,6 @@ impl FeeManager {
         }
     }
 
-    pub fn default() -> Self {
-        // For backwards compatibility - creates a minimal instance
-        use std::time::Duration;
-        Self {
-            config: DynamicFeeConfig::default(),
-            rpc_client: Arc::new(SolanaRpcClient::new(
-                "https://api.mainnet-beta.solana.com",
-                vec![],                      // No fallback endpoints for default
-                3,                           // Default retries
-                Duration::from_millis(1000), // Default retry delay
-            )),
-            congestion_cache: Arc::new(RwLock::new(None)),
-            fee_history: Arc::new(RwLock::new(Vec::new())),
-        }
-    }
-
     /// Calculate comprehensive fee breakdown for arbitrage opportunity
     pub async fn calculate_multihop_fees(
         &self,
@@ -409,6 +393,23 @@ impl FeeManager {
             fee_per_signature: base_fee as f64,
             network_congestion: NetworkCongestionLevel::Medium, // Default value
         })
+    }
+}
+
+impl Default for FeeManager {
+    fn default() -> Self {
+        use std::time::Duration;
+        Self {
+            config: DynamicFeeConfig::default(),
+            rpc_client: Arc::new(SolanaRpcClient::new(
+                "https://api.mainnet-beta.solana.com",
+                vec![],
+                3,
+                Duration::from_millis(1000),
+            )),
+            congestion_cache: Arc::new(RwLock::new(None)),
+            fee_history: Arc::new(RwLock::new(Vec::new())),
+        }
     }
 }
 

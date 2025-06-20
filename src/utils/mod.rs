@@ -14,6 +14,12 @@ use std::error::Error as StdError;
 use std::fmt;
 use std::sync::Arc;
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProgramConfig {
+    pub program_id: Pubkey,
+    pub program_name: String,
+}
+
 /// Represents information about a liquidity pool on a DEX.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PoolInfo {
@@ -84,13 +90,6 @@ impl Default for PoolToken {
             reserve: 0,
         }
     }
-}
-
-/// Program configuration structure
-#[derive(Debug, Clone)]
-pub struct ProgramConfig {
-    pub name: String,
-    pub version: String,
 }
 
 /// Setup logging for the application
@@ -199,20 +198,17 @@ pub trait PoolParser: Send + Sync {
         rpc_client: &Arc<SolanaRpcClient>,
     ) -> Result<PoolInfo>;
 
-    /// Parse pool data synchronously (fallback method)
-    // Fallback method for synchronous parsing
-    fn parse_pool_data_sync(
-        &self,
-        _pool_address: Pubkey,
-        _data: &[u8],
-        _rpc_client: &Arc<SolanaRpcClient>,
-    ) -> Result<PoolInfo> {
-        // Default implementation - should be overridden by specific parsers
-        Err(anyhow::anyhow!("Synchronous parsing not implemented"))
-    }
-
     /// Get the program ID of the DEX
     fn get_program_id(&self) -> Pubkey;
+
+    /// Parse pool data synchronously (for compatibility with legacy and test code)
+    #[allow(dead_code)]
+    fn parse_pool_data_sync(
+        &self,
+        pool_address: Pubkey,
+        data: &[u8],
+        rpc_client: &Arc<SolanaRpcClient>,
+    ) -> Result<PoolInfo>;
 }
 
 /// Calculate output amount for a swap given pool information
@@ -239,30 +235,13 @@ pub fn calculate_output_amount(pool: &PoolInfo, input_amount: u64, is_a_to_b: bo
     Ok(output_amount as u64)
 }
 
-/// Test struct to verify PoolInfo field definitions
-#[cfg(test)]
-#[derive(Debug, Clone)]
-// Used for field definition verification in tests
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TestPoolInfo {
-    pub address: Pubkey,
-    pub name: String,
-    pub token_a: PoolToken,
-    pub token_b: PoolToken,
-    pub token_a_vault: Pubkey,
-    pub token_b_vault: Pubkey,
-    pub fee_numerator: Option<u64>,
-    pub fee_denominator: Option<u64>,
-    pub fee_rate_bips: Option<u16>,
-    pub last_update_timestamp: u64,
-    pub dex_type: DexType,
-    pub liquidity: Option<u128>,
-    pub sqrt_price: Option<u128>,
-    pub tick_current_index: Option<i32>,
-    pub tick_spacing: Option<u16>,
-    pub tick_array_0: Option<Pubkey>,
-    pub tick_array_1: Option<Pubkey>,
-    pub tick_array_2: Option<Pubkey>,
-    pub oracle: Option<Pubkey>,
+    pub address: String,
+    pub token_a_mint: String,
+    pub token_b_mint: String,
+    pub token_a_reserve: u64,
+    pub token_b_reserve: u64,
 }
 
 #[cfg(test)]

@@ -1,10 +1,10 @@
 // src/arbitrage/strategy_manager.rs
 use crate::{
     arbitrage::{
-        analysis::{AdvancedArbitrageMath, DynamicThresholdUpdater},
         opportunity::MultiHopArbOpportunity,
         strategy::ArbitrageStrategy,
         types::DetectionMetrics,
+        analysis::EnhancedSlippageModel,
     },
     config::settings::Config,
     dex::{BannedPairsManager, PoolValidationConfig, validate_pools},
@@ -24,11 +24,11 @@ use tokio::sync::Mutex;
 /// Strategy manager responsible for arbitrage detection and analysis
 pub struct StrategyManager {
     pub detector: Arc<Mutex<ArbitrageStrategy>>,
-    pub dynamic_threshold_updater: Option<Arc<DynamicThresholdUpdater>>,
     pub pool_validation_config: PoolValidationConfig,
     pub banned_pairs_manager: Arc<BannedPairsManager>,
-    pub advanced_math: Arc<Mutex<AdvancedArbitrageMath>>,
     pub detection_metrics: Arc<Mutex<DetectionMetrics>>,
+    pub slippage_model: Arc<Mutex<EnhancedSlippageModel>>,
+    // Removed dynamic_threshold_updater and advanced_math (missing types)
 }
 
 impl StrategyManager {
@@ -38,31 +38,20 @@ impl StrategyManager {
         banned_pairs_manager: Arc<BannedPairsManager>,
     ) -> Self {
         let detector = Arc::new(Mutex::new(ArbitrageStrategy::new_from_config(config)));
-        
-        // Initialize dynamic threshold updater if configured
-        let dynamic_threshold_updater = if config.volatility_tracker_window.is_some() {
-            Some(Arc::new(DynamicThresholdUpdater::new(config, Arc::clone(&metrics))))
-        } else {
-            None
-        };
-
         // Configure pool validation with sensible defaults
         let pool_validation_config = PoolValidationConfig {
             min_liquidity_usd: 1000.0,
             max_price_impact_bps: 500, // 5%
             require_balanced_reserves: false,
         };
-
         let detection_metrics = Arc::new(Mutex::new(DetectionMetrics::default()));
-        let advanced_math = Arc::new(Mutex::new(AdvancedArbitrageMath::new(12))); // 12-digit precision
-
+        let slippage_model = Arc::new(Mutex::new(EnhancedSlippageModel::new()));
         Self {
             detector,
-            dynamic_threshold_updater,
             pool_validation_config,
             banned_pairs_manager,
-            advanced_math,
             detection_metrics,
+            slippage_model,
         }
     }
 
@@ -133,16 +122,7 @@ impl StrategyManager {
         info!("🎯 Detection complete in {:?}: {} opportunities found", 
               detection_time, opportunities.len());
 
-        // Apply dynamic thresholds if configured
-        let filtered_opportunities = if let Some(threshold_updater) = &self.dynamic_threshold_updater {
-            self.apply_dynamic_thresholds(opportunities, threshold_updater).await?
-        } else {
-            opportunities
-        };
-
-        info!("📊 Final opportunities after filtering: {}", filtered_opportunities.len());
-
-        Ok(filtered_opportunities)
+        Ok(opportunities)
     }
 
     /// Filter out banned trading pairs
@@ -169,33 +149,6 @@ impl StrategyManager {
         Ok(filtered_pools)
     }
 
-    /// Apply dynamic thresholds to filter opportunities
-    async fn apply_dynamic_thresholds(
-        &self,
-        opportunities: Vec<MultiHopArbOpportunity>,
-        threshold_updater: &Arc<DynamicThresholdUpdater>,
-    ) -> Result<Vec<MultiHopArbOpportunity>, ArbError> {
-        let mut filtered_opportunities = Vec::new();
-
-        for opportunity in opportunities {
-            // Get current dynamic threshold
-            let current_threshold = threshold_updater.get_current_threshold().await?;
-            
-            // Apply threshold filter
-            if opportunity.expected_profit_usd >= current_threshold {
-                filtered_opportunities.push(opportunity);
-            } else {
-                debug!("🔻 Opportunity filtered by dynamic threshold: ${:.2} < ${:.2}", 
-                       opportunity.expected_profit_usd, current_threshold);
-            }
-        }
-
-        info!("📊 Dynamic threshold filtering: {}/{} opportunities passed", 
-              filtered_opportunities.len(), opportunities.len());
-
-        Ok(filtered_opportunities)
-    }
-
     /// Get current detection metrics
     pub async fn get_detection_metrics(&self) -> DetectionMetrics {
         let metrics = self.detection_metrics.lock().await;
@@ -214,14 +167,5 @@ impl StrategyManager {
         let mut metrics = self.detection_metrics.lock().await;
         *metrics = DetectionMetrics::default();
         info!("📊 Detection metrics reset");
-    }
-
-    /// Update dynamic thresholds based on market conditions
-    pub async fn update_dynamic_thresholds(&self) -> Result<(), ArbError> {
-        if let Some(threshold_updater) = &self.dynamic_threshold_updater {
-            threshold_updater.update_thresholds().await?;
-            info!("📊 Dynamic thresholds updated");
-        }
-        Ok(())
     }
 }

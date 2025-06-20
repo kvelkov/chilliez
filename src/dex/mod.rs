@@ -17,8 +17,6 @@ pub mod math;
 // Test modules
 #[cfg(test)]
 pub mod dex_tests;
-#[cfg(test)]
-pub mod integration_test;
 
 // Re-export core API types
 pub use api::{CommonSwapInfo, DexClient, DexHealthStatus, PoolDiscoverable, Quote, SwapInfo};

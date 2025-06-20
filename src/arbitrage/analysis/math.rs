@@ -11,7 +11,7 @@ use num_traits::{FromPrimitive, ToPrimitive};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::time::{Duration, Instant};
+use std::time::{Instant};
 
 // =============================================================================
 // Slippage Models & Traits
@@ -67,8 +67,6 @@ impl Default for MarketConditions {
 // =============================================================================
 
 pub struct EnhancedSlippageModel {
-    #[allow(dead_code)] // Used for future volatility calculations
-    volatility_tracker: VolatilityTracker, // not in use - Field is marked dead_code
     slippage_config: SlippageConfig,
     pool_analytics: HashMap<String, PoolAnalytics>,
 }
@@ -111,19 +109,13 @@ pub struct PoolAnalytics {
 impl EnhancedSlippageModel {
     pub fn new() -> Self {
         Self {
-            volatility_tracker: VolatilityTracker::new(),
             slippage_config: SlippageConfig::default(),
             pool_analytics: HashMap::new(),
         }
     }
 
-    pub fn default() -> Self {
-        Self::new()
-    }
-
     pub fn with_config(config: SlippageConfig) -> Self {
         Self {
-            volatility_tracker: VolatilityTracker::new(),
             slippage_config: config,
             pool_analytics: HashMap::new(),
         }
@@ -278,8 +270,7 @@ impl EnhancedSlippageModel {
         };
 
         (base_confidence - volatility_penalty - congestion_penalty + liquidity_bonus)
-            .max(0.2)
-            .min(0.95)
+            .clamp(0.2, 0.95)
     }
 
     /// Update pool analytics with fresh market data
@@ -311,17 +302,17 @@ impl SlippageModel for EnhancedSlippageModel {
     }
 }
 
+impl Default for EnhancedSlippageModel {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 // =============================================================================
 // Legacy XYK Slippage Model (for backwards compatibility)
 // =============================================================================
 
 pub struct XYKSlippageModel;
-
-impl XYKSlippageModel {
-    pub fn default() -> Self {
-        XYKSlippageModel
-    }
-}
 
 impl SlippageModel for XYKSlippageModel {
     fn calculate_slippage(&self, _amount: Decimal, _pool_info: &PoolInfo) -> Decimal {
@@ -346,97 +337,6 @@ impl SlippageModel for XYKSlippageModel {
         }
     }
 }
-
-// =============================================================================
-// Volatility Tracking
-// =============================================================================
-
-pub struct VolatilityTracker {
-    price_history: HashMap<String, Vec<(Instant, f64)>>,
-    #[allow(dead_code)] // Will be used for caching volatility calculations
-    volatility_cache: HashMap<String, (f64, Instant)>, // not in use - Field is marked dead_code
-}
-
-impl VolatilityTracker {
-    pub fn new() -> Self {
-        Self {
-            price_history: HashMap::new(),
-            volatility_cache: HashMap::new(),
-        }
-    }
-
-    pub fn add_price_data(&mut self, token_symbol: String, price: f64) {
-        let entry = self
-            .price_history
-            .entry(token_symbol)
-            .or_insert_with(Vec::new);
-        entry.push((Instant::now(), price));
-
-        // Keep only last 24 hours of data
-        let cutoff = Instant::now() - Duration::from_secs(24 * 60 * 60);
-        entry.retain(|(timestamp, _)| *timestamp > cutoff);
-    }
-
-    pub fn calculate_volatility(&self, token_symbol: &str, window_hours: u64) -> Option<f64> {
-        let history = self.price_history.get(token_symbol)?;
-        if history.len() < 2 {
-            return None;
-        }
-
-        let window_start = Instant::now() - Duration::from_secs(window_hours * 60 * 60);
-        let relevant_prices: Vec<f64> = history
-            .iter()
-            .filter(|(timestamp, _)| *timestamp > window_start)
-            .map(|(_, price)| *price)
-            .collect();
-
-        if relevant_prices.len() < 2 {
-            return None;
-        }
-
-        // Calculate standard deviation of returns
-        let returns: Vec<f64> = relevant_prices
-            .windows(2)
-            .map(|window| (window[1] / window[0] - 1.0).abs())
-            .collect();
-
-        let mean_return: f64 = returns.iter().sum::<f64>() / returns.len() as f64;
-        let variance: f64 = returns
-            .iter()
-            .map(|return_rate| (return_rate - mean_return).powi(2))
-            .sum::<f64>()
-            / returns.len() as f64;
-
-        Some(variance.sqrt())
-    }
-}
-
-pub struct AdvancedArbitrageMath {
-    pub precision: u32,
-}
-impl AdvancedArbitrageMath {
-    pub fn new(precision: u32) -> Self {
-        AdvancedArbitrageMath { precision }
-    }
-}
-
-// =============================================================================
-// Additional Legacy Types (for backwards compatibility)
-// =============================================================================
-
-pub struct DynamicThresholdUpdater;
-impl DynamicThresholdUpdater {
-    pub fn new(
-        _config: &crate::config::settings::Config,
-        _metrics: std::sync::Arc<tokio::sync::Mutex<crate::local_metrics::Metrics>>,
-    ) -> Self {
-        DynamicThresholdUpdater
-    }
-}
-
-pub struct SimulationResult; // not in use - Defined but not instantiated or used elsewhere in the provided codebase
-pub struct OptimalInputResult; // not in use - Defined but not instantiated or used elsewhere in the provided codebase
-pub struct ArbitrageCostFunction; // not in use - Defined but not instantiated or used elsewhere in the provided codebase
 
 #[derive(Debug, Clone)]
 pub struct OpportunityCalculationResult {
@@ -501,18 +401,3 @@ pub enum ExecutionStrategy {
 // Placeholder for ArbitrageOpportunity
 #[derive(Default)]
 pub struct ArbitrageOpportunity; // not in use - Defined but not instantiated or used elsewhere in the provided codebase
-
-impl Default for EnhancedSlippageModel {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl Default for VolatilityTracker {
-    fn default() -> Self {
-        Self {
-            price_history: HashMap::new(),
-            volatility_cache: HashMap::new(),
-        }
-    }
-}

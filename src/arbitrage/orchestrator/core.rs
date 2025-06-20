@@ -4,9 +4,9 @@
 
 use crate::{
     arbitrage::{
-        analysis::{AdvancedArbitrageMath, DynamicThresholdUpdater},
         opportunity::MultiHopArbOpportunity,
         strategy::ArbitrageStrategy,
+        analysis::EnhancedSlippageModel,
     },
     config::settings::Config,
     dex::{BannedPairsManager, DexClient, PoolValidationConfig},
@@ -68,9 +68,7 @@ pub struct ArbitrageOrchestrator {
 
     // Strategy and analysis
     pub detector: Arc<Mutex<ArbitrageStrategy>>,
-    pub advanced_math: Arc<Mutex<AdvancedArbitrageMath>>,
-    pub dynamic_threshold_updater: Option<Arc<DynamicThresholdUpdater>>,
-    pub price_aggregator: Option<Arc<crate::arbitrage::price_aggregator::PriceAggregator>>,
+    pub slippage_model: Arc<Mutex<EnhancedSlippageModel>>,
 
     // Configuration and validation
     pub pool_validation_config: PoolValidationConfig,
@@ -145,16 +143,6 @@ impl ArbitrageOrchestrator {
         let health_check_interval =
             Duration::from_secs(config.health_check_interval_secs.unwrap_or(60));
         let max_ws_reconnect_attempts = config.max_ws_reconnect_attempts.unwrap_or(5) as u64;
-
-        // Initialize dynamic threshold updater if configured
-        let dynamic_threshold_updater = if config.volatility_tracker_window.is_some() {
-            Some(Arc::new(DynamicThresholdUpdater::new(
-                &config,
-                Arc::clone(&deps.metrics),
-            )))
-        } else {
-            None
-        };
 
         // Configure pool validation with sensible defaults
         let pool_validation_config = if config.paper_trading {
@@ -249,7 +237,7 @@ impl ArbitrageOrchestrator {
         );
 
         // Initialize price aggregator with Jupiter fallback if enabled
-        let price_aggregator = if config.jupiter_fallback_enabled {
+        let _price_aggregator = if config.jupiter_fallback_enabled {
             // Find Jupiter client among DEX providers
             let jupiter_client = deps
                 .dex_providers
@@ -283,9 +271,7 @@ impl ArbitrageOrchestrator {
             ws_manager: deps.ws_manager,
             dex_providers: deps.dex_providers,
             detector,
-            advanced_math: Arc::new(Mutex::new(AdvancedArbitrageMath::new(12))),
-            dynamic_threshold_updater,
-            price_aggregator,
+            slippage_model: Arc::new(Mutex::new(EnhancedSlippageModel::new())),
             pool_validation_config,
             banned_pairs_manager: deps.banned_pairs_manager,
             degradation_mode: Arc::new(AtomicBool::new(false)),
@@ -724,12 +710,8 @@ impl ArbitrageOrchestrator {
         pool: &PoolInfo,
         input_amount: u64,
     ) -> Result<crate::arbitrage::price_aggregator::AggregatedQuote, ArbError> {
-        if let Some(ref price_aggregator) = self.price_aggregator {
-            price_aggregator.get_best_quote(pool, input_amount).await
-        } else {
-            // Fallback to traditional DEX client approach
-            self.get_traditional_dex_quote(pool, input_amount).await
-        }
+        // Fallback to traditional DEX client approach only
+        self.get_traditional_dex_quote(pool, input_amount).await
     }
 
     /// Traditional DEX quote method (used when price aggregator is not available)

@@ -1,9 +1,6 @@
 # QuickNode Stream Configuration
 # Configuration for setting up real-time streams for arbitrage detection
 
-# Your QuickNode WebSocket endpoint
-QUICKNODE_WS_URL=wss://little-convincing-borough.solana-mainnet.quiknode.pro/2c994d6eb71f3f58812833ce0783ae95f75e1820
-
 # Stream subscriptions to set up
 [streams]
 

@@ -1,4 +1,4 @@
-// src/paper_trading/reporter.rs
+// src/simulation/reporter.rs
 //! Reporting module for paper trading analytics and trade logs.
 
 use super::{PaperTradingAnalytics, VirtualPortfolio};

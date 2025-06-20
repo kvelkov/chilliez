@@ -109,9 +109,9 @@ impl StressTestSuite {
             }
         }
         
-        let metrics = Arc::new(tokio::sync::Mutex::new(crate::local_metrics::Metrics::new(150.0, None)));
+        let metrics = Arc::new(tokio::sync::Mutex::new(crate::monitoring::metrics::Metrics::new(150.0, None)));
         let dex_clients = self.mock_environment.get_dex_clients();
-        let config = Arc::new(crate::config::settings::Config::test_default());
+        let config = Arc::new(crate::config::Config::test_default());
         
         let arbitrage_engine = Arc::new(ArbitrageEngine::new(
             hot_cache,

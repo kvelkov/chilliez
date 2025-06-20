@@ -78,11 +78,11 @@ impl Portfolio {
 }
 
 #[derive(Debug)]
-pub struct PaperTradingEngine {
+pub struct SimulationEngine {
     portfolio: Portfolio,
 }
 
-impl PaperTradingEngine {
+impl SimulationEngine {
     pub fn new(portfolio: Portfolio) -> Self {
         Self { portfolio }
     }
@@ -191,7 +191,7 @@ pub struct ValidationResults {
 pub struct LongTermValidator {
     config: ValidationConfig,
     performance_manager: Arc<PerformanceManager>,
-    paper_trading_engine: PaperTradingEngine,
+    simulation_engine: SimulationEngine,
     _smart_router: SmartRouter, // Prefixed as it's not read
     validation_results: ValidationResults,
     security_audit_log: Vec<SecurityEvent>,
@@ -237,7 +237,7 @@ impl LongTermValidator {
         let mut portfolio = Portfolio::new();
         portfolio.add_balance("USDC".to_string(), config.starting_balance);
 
-        let paper_trading_engine = PaperTradingEngine::new(portfolio);
+        let simulation_engine = SimulationEngine::new(portfolio);
 
         // Initialize smart router
         let router_config = SmartRouterConfig::default();
@@ -266,7 +266,7 @@ impl LongTermValidator {
         Ok(Self {
             config,
             performance_manager,
-            paper_trading_engine,
+            simulation_engine,
             _smart_router: smart_router,
             validation_results,
             security_audit_log: Vec::new(),
@@ -409,7 +409,7 @@ impl LongTermValidator {
         };
 
         // Update paper trading portfolio
-        self.paper_trading_engine.update_balance(
+        self.simulation_engine.update_balance(
             &opportunity.output_token,
             result.actual_profit - result.gas_cost,
         );
@@ -566,7 +566,7 @@ impl LongTermValidator {
         let elapsed = start_time.elapsed();
         let progress = elapsed.as_secs_f64() / self.config.total_duration.as_secs_f64() * 100.0;
 
-        let current_portfolio_value = self.paper_trading_engine.get_total_value();
+        let current_portfolio_value = self.simulation_engine.get_total_value();
         let current_return = (current_portfolio_value - self.config.starting_balance)
             / self.config.starting_balance
             * 100.0;
@@ -613,7 +613,7 @@ impl LongTermValidator {
 
         // Calculate final portfolio value
         self.validation_results.ending_portfolio_value =
-            self.paper_trading_engine.get_total_value();
+            self.simulation_engine.get_total_value();
         self.validation_results.total_return_percent =
             (self.validation_results.ending_portfolio_value
                 - self.validation_results.starting_portfolio_value)

@@ -5,11 +5,11 @@
 
 use crate::{
     arbitrage::jupiter::{integration::JupiterIntegrationConfig, JupiterFallbackManager},
-    config::settings::Config,
+    config::Config,
     dex::clients::jupiter::JupiterClient,
     dex::{api::Quote, DexClient},
     error::ArbError,
-    local_metrics::Metrics,
+    monitoring::LocalMetrics as Metrics,
     utils::PoolInfo,
 };
 use log::{debug, error, info, warn};

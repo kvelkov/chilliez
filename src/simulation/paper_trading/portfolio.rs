@@ -1,4 +1,4 @@
-// src/paper_trading/portfolio.rs
+// src/simulation/portfolio.rs
 //! Virtual portfolio management for paper trading
 
 use anyhow::{anyhow, Result};
@@ -215,7 +215,7 @@ impl SafeVirtualPortfolio {
 
     /// Create a new thread-safe virtual portfolio from config
     pub async fn from_config(
-        config: &crate::paper_trading::config::PaperTradingConfig,
+        config: &crate::simulation::config::PaperTradingConfig,
     ) -> Result<Arc<Self>> {
         let mut initial_balances = config.initial_balances.clone();
 

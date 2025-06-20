@@ -49,7 +49,7 @@ pub use discovery::{
 
 // Imports for client aggregation
 use crate::cache::Cache;
-use crate::config::settings::Config;
+use crate::config::Config;
 use log::info;
 use std::sync::Arc;
 

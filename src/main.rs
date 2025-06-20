@@ -5,14 +5,13 @@ mod config;
 mod dex;
 mod error;
 pub mod jito_bundle;
-mod local_metrics;
-pub mod paper_trading; // Add paper trading module
-pub mod performance;
+pub mod monitoring;
 pub mod quicknode;
+pub mod simulation;
 mod solana;
 mod utils;
 pub mod webhooks;
-pub mod websocket; // Add performance module // Expose jito_bundle module
+pub mod websocket;
 
 use crate::arbitrage::analysis::EnhancedSlippageModel;
 use crate::arbitrage::orchestrator::core::OrchestratorDeps;
@@ -21,14 +20,14 @@ use crate::arbitrage::strategy::ArbitrageStrategy;
 use crate::{
     arbitrage::orchestrator::{ArbitrageOrchestrator, PriceDataProvider},
     cache::Cache,
-    config::settings::Config,
+    config::Config,
     dex::{
         discovery::{BannedPairsManager, PoolDiscoveryService, PoolValidationConfig},
         get_all_clients_arc, get_all_discoverable_clients,
         live_update_manager::{LiveUpdateConfig, LiveUpdateManager, LiveUpdateManagerBuilder},
     },
     error::ArbError,
-    local_metrics::Metrics,
+    monitoring::LocalMetrics as Metrics,
     solana::rpc::SolanaRpcClient,
     utils::{setup_logging, PoolInfo},
     webhooks::integration::WebhookIntegrationService,
@@ -82,9 +81,9 @@ async fn main() -> Result<(), ArbError> {
         .version("2.1.4")
         .about("Modern Solana arbitrage bot with real-time webhook architecture")
         .arg(
-            Arg::new("paper-trading")
-                .long("paper-trading")
-                .help("Enable paper trading mode (simulated trades with virtual money)")
+            Arg::new("simulation")
+                .long("simulation")
+                .help("Enable simulation mode (simulated trades with virtual money)")
                 .action(clap::ArgAction::SetTrue),
         )
         .arg(
@@ -94,21 +93,21 @@ async fn main() -> Result<(), ArbError> {
                 .action(clap::ArgAction::SetTrue),
         )
         .arg(
-            Arg::new("paper-logs-dir")
-                .long("paper-logs-dir")
-                .help("Directory for paper trading logs")
+            Arg::new("simulation-logs-dir")
+                .long("simulation-logs-dir")
+                .help("Directory for simulation logs")
                 .value_name("DIR")
-                .default_value("./paper_trading_logs"),
+                .default_value("./simulation_logs"),
         )
         .get_matches();
 
-    let paper_trading_enabled = matches.get_flag("paper-trading");
+    let simulation_enabled = matches.get_flag("simulation");
     let real_trading_enabled = matches.get_flag("real-trading");
-    let paper_logs_dir = matches.get_one::<String>("paper-logs-dir").unwrap();
+    let simulation_logs_dir = matches.get_one::<String>("simulation-logs-dir").unwrap();
 
     // Validation: cannot enable both modes
-    if paper_trading_enabled && real_trading_enabled {
-        error!("❌ Cannot enable both --paper-trading and --real-trading modes simultaneously");
+    if simulation_enabled && real_trading_enabled {
+        error!("❌ Cannot enable both --simulation and --real-trading modes simultaneously");
         std::process::exit(1);
     }
 
@@ -116,9 +115,9 @@ async fn main() -> Result<(), ArbError> {
     info!("🚀 SOLANA ARBITRAGE BOT v2.1.4 - Modern Real-Time Architecture");
     info!("🚀 ═══════════════════════════════════════════════════════════════════════════");
 
-    if paper_trading_enabled {
-        info!("📄 TRADING MODE: Paper Trading (Virtual Portfolio)");
-        info!("📁 Logs Directory: {}", paper_logs_dir);
+    if simulation_enabled {
+        info!("📄 TRADING MODE: Simulation (Virtual Portfolio)");
+        info!("📁 Logs Directory: {}", simulation_logs_dir);
         info!("💡 Safe testing environment with simulated funds");
     } else if real_trading_enabled {
         info!("💰 TRADING MODE: Real Trading (Live Portfolio)");
@@ -126,19 +125,19 @@ async fn main() -> Result<(), ArbError> {
         warn!("⚠️  Ensure wallet security and risk management settings!");
     } else {
         info!("📊 TRADING MODE: Analysis Only (No Execution)");
-        info!("💡 Use --paper-trading or --real-trading to enable execution");
+        info!("💡 Use --simulation or --real-trading to enable execution");
     }
 
     // --- Configuration & Initialization ---
-    let mut app_config = if paper_trading_enabled {
-        // Only load the default .env file for paper trading
+    let mut app_config = if simulation_enabled {
+        // Only load the default .env file for simulation
         Config::from_env()
     } else {
         Config::from_env()
     };
 
-    // Override paper trading setting from CLI arguments
-    if paper_trading_enabled {
+    // Override simulation setting from CLI arguments
+    if simulation_enabled {
         app_config.paper_trading = true;
     } else if real_trading_enabled {
         app_config.paper_trading = false;
@@ -250,10 +249,10 @@ async fn main() -> Result<(), ArbError> {
             max_ws_reconnect_attempts: 5,
             opportunity_sender: None,
             quicknode_opportunity_receiver: Arc::new(Mutex::new(None)),
-            paper_trading_engine: None,
-            paper_trading_portfolio: None,
-            paper_trading_analytics: None,
-            paper_trading_reporter: None,
+            simulation_engine: None,
+            simulation_portfolio: None,
+            simulation_analytics: None,
+            simulation_reporter: None,
             balance_monitor: None,
             trading_pairs_locks: Arc::new(TradingPairLocks::new()),
             execution_semaphore: Arc::new(Semaphore::new(1)),
@@ -449,7 +448,7 @@ async fn main() -> Result<(), ArbError> {
     } else {
         if app_config.paper_trading {
             info!("💼 WALLET CONFIGURATION:");
-            info!("   • Status: ➖ Not required (Paper Trading Mode)");
+            info!("   • Status: ➖ Not required (Simulation Mode)");
             info!("   • Virtual Portfolio: Ready for simulated trading");
         } else {
             warn!("⚠️  WALLET CONFIGURATION:");
@@ -705,7 +704,7 @@ async fn main() -> Result<(), ArbError> {
     info!("   • Monitoring: Comprehensive real-time performance tracking");
 
     if app_config.paper_trading {
-        info!("🎯 TRADING STATUS: � Paper Trading Mode - Safe testing environment");
+        info!("🎯 TRADING STATUS: � Simulation Mode - Safe testing environment");
     } else {
         info!("🎯 TRADING STATUS: 💰 Live Trading Mode - Real funds at risk");
     }

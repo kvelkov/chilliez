@@ -1,14 +1,14 @@
-// src/paper_trading/config.rs
-//! Configuration for paper trading mode
+// src/simulation/config.rs
+//! Configuration for simulation mode
 
 use serde::{Deserialize, Serialize};
 use solana_sdk::pubkey::Pubkey;
 use std::collections::HashMap;
 
-/// Configuration for paper trading mode
+/// Configuration for simulation mode
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PaperTradingConfig {
-    /// Whether paper trading mode is enabled
+pub struct SimulationConfig {
+    /// Whether simulation mode is enabled
     pub enabled: bool,
 
     /// Initial virtual balances for different tokens (in base units)
@@ -35,7 +35,7 @@ pub struct PaperTradingConfig {
     /// Whether to log all simulated trades
     pub log_trades: bool,
 
-    /// Output directory for paper trading reports
+    /// Output directory for simulation reports
     pub reports_dir: String,
 
     /// Whether to save detailed analytics
@@ -45,7 +45,7 @@ pub struct PaperTradingConfig {
     pub max_concurrent_trades: usize,
 }
 
-impl Default for PaperTradingConfig {
+impl Default for SimulationConfig {
     fn default() -> Self {
         let mut initial_balances = HashMap::new();
 
@@ -63,20 +63,20 @@ impl Default for PaperTradingConfig {
             simulate_failures: true,
             failure_rate: 0.02, // 2% failure rate
             log_trades: true,
-            reports_dir: "./paper_trading_reports".to_string(),
+            reports_dir: "./simulation_reports".to_string(),
             save_analytics: true,
             max_concurrent_trades: 10,
         }
     }
 }
 
-impl PaperTradingConfig {
-    /// Create a new paper trading config with reasonable defaults
+impl SimulationConfig {
+    /// Create a new simulation config with reasonable defaults
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Enable paper trading mode with custom initial balances
+    /// Enable simulation mode with custom initial balances
     pub fn with_balances(mut self, balances: HashMap<Pubkey, u64>) -> Self {
         self.enabled = true;
         self.initial_balances = balances;
@@ -90,7 +90,7 @@ impl PaperTradingConfig {
         self
     }
 
-    /// Enable paper trading with default settings
+    /// Enable simulation with default settings
     pub fn enabled() -> Self {
         Self {
             enabled: true,

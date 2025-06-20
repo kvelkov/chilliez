@@ -10,9 +10,9 @@ use solana_arb_bot::{
         routes::{RouteCacheConfig, RouteOptimizationConfig, RouteScoringConfig},
         JupiterFallbackManager,
     },
-    config::settings::Config,
+    config::Config,
     dex::clients::jupiter::JupiterClient,
-    local_metrics::Metrics,
+    monitoring::LocalMetrics as Metrics,
 };
 use std::sync::Arc;
 use tokio::sync::Mutex;

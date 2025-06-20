@@ -6,10 +6,8 @@ pub mod dex;
 pub mod error;
 pub mod ffi; // FFI exports for JavaScript bridge
 pub mod jito_bundle;
-pub mod local_metrics;
 pub mod monitoring; // Enhanced monitoring and alerting
-pub mod paper_trading; // Paper trading simulation system
-pub mod performance; // NEW: Performance optimization and monitoring
+pub mod simulation; // Simulation system (was paper_trading)
 pub mod solana;
 pub mod streams;
 pub mod testing; // Testing infrastructure
@@ -29,8 +27,9 @@ pub use api::{
     RpcConnectionPool,
 };
 
-// Re-export key performance components
-pub use performance::{
-    BenchmarkResults, BenchmarkRunner, CacheManager, CacheStats, MetricsCollector, MetricsSummary,
-    ParallelExecutor, ParallelStats, PerformanceConfig, PerformanceManager, PerformanceReport,
+// Re-export key monitoring and performance components
+pub use monitoring::{
+    BenchmarkResults, BenchmarkRunner, PerformanceMetricsCollector, PerformanceConfig, 
+    PerformanceManager, PerformanceReport, PerformanceSummary,
+    HealthMonitor, HealthStatus,
 };

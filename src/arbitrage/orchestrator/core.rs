@@ -8,19 +8,16 @@ use crate::{
         strategy::ArbitrageStrategy,
         analysis::EnhancedSlippageModel,
     },
-    config::settings::Config,
+    config::Config,
     dex::{BannedPairsManager, DexClient, PoolValidationConfig},
     error::ArbError,
-    local_metrics::Metrics,
-    paper_trading::{
-        PaperTradingAnalytics, PaperTradingConfig, PaperTradingReporter, SafeVirtualPortfolio,
-        SimulatedExecutionEngine,
-    },
+    monitoring::LocalMetrics as Metrics,
+    simulation,
     solana::{rpc::SolanaRpcClient, websocket::SolanaWebsocketManager, BalanceMonitor},
     utils::{DexType, PoolInfo},
 };
 
-use crate::performance::PerformanceManager;
+use crate::monitoring::PerformanceManager;
 
 use dashmap::DashMap;
 use log::{debug, error, info, warn};
@@ -86,11 +83,11 @@ pub struct ArbitrageOrchestrator {
     pub opportunity_sender: Option<mpsc::UnboundedSender<MultiHopArbOpportunity>>,
     pub quicknode_opportunity_receiver: QuicknodeOpportunityReceiver,
 
-    // Paper trading components
-    pub paper_trading_engine: Option<Arc<SimulatedExecutionEngine>>,
-    pub paper_trading_portfolio: Option<Arc<SafeVirtualPortfolio>>,
-    pub paper_trading_analytics: Option<Arc<Mutex<PaperTradingAnalytics>>>,
-    pub paper_trading_reporter: Option<Arc<PaperTradingReporter>>,
+    // Simulation trading components
+    pub simulation_engine: Option<Arc<simulation::SimulatedExecutionEngine>>,
+    pub simulation_portfolio: Option<Arc<simulation::SafeVirtualPortfolio>>,
+    pub simulation_analytics: Option<Arc<Mutex<simulation::SimulationAnalytics>>>,
+    pub simulation_reporter: Option<Arc<simulation::SimulationReporter>>,
 
     // Balance monitoring
     pub balance_monitor: Option<Arc<BalanceMonitor>>,
@@ -162,18 +159,18 @@ impl ArbitrageOrchestrator {
         // Initialize async communication channel
         let (opportunity_sender, _opportunity_receiver) = mpsc::unbounded_channel();
 
-        // Initialize paper trading components if enabled
+        // Initialize simulation trading components if enabled
         let (
-            paper_trading_engine,
-            paper_trading_portfolio,
-            paper_trading_analytics,
-            paper_trading_reporter,
+            simulation_engine,
+            simulation_portfolio,
+            simulation_analytics,
+            simulation_reporter,
         ) = if config.paper_trading {
-            info!("📄 Paper trading mode ENABLED - initializing simulation components");
+            info!("📄 Simulation mode ENABLED - initializing components");
 
-            let paper_config = PaperTradingConfig::default();
+            let paper_config = simulation::SimulationConfig::default();
 
-            // Create initial balances for paper trading
+            // Create initial balances for simulation
             let mut initial_balances = HashMap::new();
             let sol_mint = solana_sdk::system_program::id();
             let usdc_mint = Pubkey::new_unique();
@@ -183,15 +180,16 @@ impl ArbitrageOrchestrator {
             let mut paper_config_with_balances = paper_config.clone();
             paper_config_with_balances.initial_balances = initial_balances.clone();
 
-            let portfolio = Arc::new(SafeVirtualPortfolio::new(initial_balances));
-            let analytics = Arc::new(Mutex::new(PaperTradingAnalytics::new()));
-            let reporter = PaperTradingReporter::new("./paper_trading_logs")
-                .map_err(|e| warn!("Failed to create paper trading reporter: {}", e))
+            let portfolio = Arc::new(simulation::SafeVirtualPortfolio::new(initial_balances));
+            let analytics = Arc::new(Mutex::new(simulation::SimulationAnalytics::new()));
+            let reporter = simulation::SimulationReporter::new("./simulation_logs")
+                .map_err(|e| warn!("Failed to create simulation reporter: {}", e))
                 .ok()
                 .map(Arc::new);
-            let engine = Arc::new(SimulatedExecutionEngine::new(
+            let engine = Arc::new(simulation::SimulatedExecutionEngine::new(
                 paper_config_with_balances,
                 portfolio.clone(),
+                Pubkey::default(), // TODO: Use real SOL mint pubkey if available
             ));
 
             (Some(engine), Some(portfolio), Some(analytics), reporter)
@@ -228,7 +226,7 @@ impl ArbitrageOrchestrator {
         info!("   📊 Advanced metrics: enabled");
         info!("   🔄 Async execution pipeline: ready");
         info!(
-            "   📄 Paper trading: {}",
+            "   📄 Simulation trading: {}",
             if config.paper_trading {
                 "enabled"
             } else {
@@ -282,10 +280,10 @@ impl ArbitrageOrchestrator {
             max_ws_reconnect_attempts,
             opportunity_sender: Some(opportunity_sender),
             quicknode_opportunity_receiver: Arc::new(Mutex::new(quicknode_opportunity_receiver)),
-            paper_trading_engine,
-            paper_trading_portfolio,
-            paper_trading_analytics,
-            paper_trading_reporter,
+            simulation_engine,
+            simulation_portfolio,
+            simulation_analytics,
+            simulation_reporter,
             balance_monitor,
             trading_pairs_locks: Arc::new(TradingPairLocks::new()),
             execution_semaphore: Arc::new(Semaphore::new(
@@ -311,7 +309,7 @@ impl ArbitrageOrchestrator {
             max_concurrent_executions: self.max_concurrent_executions,
             ws_reconnect_attempts: self.ws_reconnect_attempts.load(Ordering::Relaxed),
             last_health_check_elapsed: last_health_check.elapsed(),
-            paper_trading_enabled: self.paper_trading_engine.is_some(),
+            simulation_enabled: self.simulation_engine.is_some(),
             balance_monitor_active: self.balance_monitor.is_some(),
         }
     }
@@ -350,21 +348,27 @@ impl ArbitrageOrchestrator {
         for opportunity in opportunities {
             if self.execution_enabled.load(Ordering::Relaxed) {
                 if self.config.paper_trading {
-                    // --- Paper Trading Execution ---
-                    if let Some(engine) = &self.paper_trading_engine {
+                    // --- Simulation Trading Execution ---
+                    if let Some(engine) = &self.simulation_engine {
                         info!(
-                            "📄 Executing paper trade for opportunity: {}",
+                            "📄 Executing simulation trade for opportunity: {}",
                             opportunity.id
                         );
-                        debug!("[DEBUG] Paper trading engine: {:#?}", engine);
+                        debug!("[DEBUG] Simulation trading engine: {:#?}", engine);
                         match engine
-                            .simulate_arbitrage_execution(&opportunity, &self.dex_providers)
+                            .simulate_arbitrage_execution(
+                                &opportunity,
+                                &self.dex_providers.iter().enumerate().map(|(i, arc)| {
+                                    // TODO: Use real DEX name as key if available
+                                    (format!("dex_{}", i), arc.clone())
+                                }).collect::<HashMap<_, _>>()
+                            )
                             .await
                         {
                             Ok(receipt) => {
-                                info!("✅ Paper trade successful: {:?}", receipt);
-                                debug!("[DEBUG] Paper trade receipt: {:#?}", receipt);
-                                if let Some(analytics) = &self.paper_trading_analytics {
+                                info!("✅ Simulation trade successful: {:?}", receipt);
+                                debug!("[DEBUG] Simulation trade receipt: {:#?}", receipt);
+                                if let Some(analytics) = &self.simulation_analytics {
                                     let mut analytics_lock = analytics.lock().await;
                                     let dex_name = opportunity
                                         .hops
@@ -373,53 +377,42 @@ impl ArbitrageOrchestrator {
                                         .unwrap_or_else(|| "Unknown".to_string());
                                     analytics_lock.record_trade_execution(&receipt, &dex_name);
 
-                                    if let Some(reporter) = &self.paper_trading_reporter {
-                                        let actual_profit = receipt.output_amount as i64
+                                    if let Some(reporter) = &self.simulation_reporter {
+                                        let _actual_profit = receipt.output_amount as i64
                                             - receipt.input_amount as i64;
-                                        let slippage_applied =
+                                        let _slippage_applied =
                                             receipt.slippage_bps as f64 / 10_000.0;
 
                                         let log_entry =
-                                            PaperTradingReporter::create_trade_log_entry(
+                                            simulation::SimulationReporter::create_trade_log_entry(
                                                 &opportunity,
-                                                receipt.input_amount,
-                                                receipt.output_amount,
-                                                actual_profit,
-                                                slippage_applied,
-                                                receipt.fee_amount, // fees_paid
-                                                receipt.success,
-                                                receipt.error_message.clone(),
-                                                receipt.fee_amount, // gas_cost
-                                                None,               // dex_error_details
-                                                0,                  // rent_paid
-                                                0,                  // account_creation_fees
+                                                &receipt,
+                                                self.simulation_portfolio.as_ref().expect("Simulation portfolio must exist for logging")
                                             );
 
                                         if let Err(e) = reporter.log_trade(log_entry.clone()) {
-                                            warn!("Failed to log paper trade: {}", e);
+                                            warn!("Failed to log simulation trade: {}", e);
                                         }
                                         // Pass the SafeVirtualPortfolio reference to the live summary
-                                        if let Some(portfolio) = &self.paper_trading_portfolio {
+                                        if let Some(portfolio) = &self.simulation_portfolio {
                                             // Pass a reference to the inner VirtualPortfolio
                                             let portfolio_snapshot = portfolio.snapshot();
                                             reporter.print_live_trade_summary(
-                                                &analytics_lock,
-                                                &log_entry,
                                                 &portfolio_snapshot,
                                             );
                                         } else {
-                                            warn!("No paper trading portfolio available for live summary");
+                                            warn!("No simulation trading portfolio available for live summary");
                                         }
                                     }
                                 }
                             }
                             Err(e) => {
-                                error!("❌ Paper trade failed: {}", e);
-                                debug!("[DEBUG] Paper trade error: {:#?}", e);
+                                error!("❌ Simulation trade failed: {}", e);
+                                debug!("[DEBUG] Simulation trade error: {:#?}", e);
                             }
                         }
                     } else {
-                        warn!("Paper trading is enabled, but no simulation engine configured. Skipping execution.");
+                        warn!("Simulation trading is enabled, but no simulation engine configured. Skipping execution.");
                     }
                 } else {
                     // --- Real Trading Execution ---
@@ -820,6 +813,6 @@ pub struct OrchestratorStatus {
     pub max_concurrent_executions: usize,
     pub ws_reconnect_attempts: u64,
     pub last_health_check_elapsed: Duration,
-    pub paper_trading_enabled: bool,
+    pub simulation_enabled: bool,
     pub balance_monitor_active: bool,
 }

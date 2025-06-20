@@ -1,4 +1,4 @@
-// src/paper_trading/engine.rs
+// src/simulation/engine.rs
 //! Simulated execution engine for paper trading
 
 use super::{config::PaperTradingConfig, portfolio::SafeVirtualPortfolio};

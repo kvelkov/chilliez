@@ -1,11 +1,11 @@
 use crate::arbitrage::ArbHop;
-use crate::arbitrage::orchestrator::core::OrchestratorDeps;
-use crate::config::settings::Config;
+use crate::config::Config;
 use crate::dex::api::CommonSwapInfo;
 use crate::dex::api::{Quote, SwapInfo};
 use crate::dex::{BannedPairsManager, DexClient};
+use crate::arbitrage::OrchestratorDeps;
 use crate::error::{self, ArbError};
-use crate::local_metrics::Metrics;
+use crate::monitoring::metrics::Metrics;
 use crate::utils::{DexType, PoolInfo, PoolToken};
 use dashmap::DashMap;
 use solana_sdk::{instruction::Instruction, pubkey::Pubkey};
@@ -30,6 +30,23 @@ fn dummy_banned_pairs_manager() -> Arc<BannedPairsManager> {
         }),
     )
 }
+
+// REMOVE the local ArbHop struct definition to avoid type conflicts with crate::arbitrage::ArbHop
+// #[derive(Debug, Clone)]
+// pub struct ArbHop {
+//     /// The DEX used for the swap.
+//     pub dex: DexType,
+//     /// The pool where the swap takes place.
+//     pub pool: Pubkey,
+//     /// The symbol of the input token.
+//     pub input_token: String,
+//     /// The symbol of the output token.
+//     pub output_token: String,
+//     /// The amount of input tokens committed to the swap.
+//     pub input_amount: f64,
+//     /// The expected amount of output tokens from the swap.
+//     pub expected_output: f64,
+// }
 
 #[allow(dead_code)]
 fn dummy_config() -> Arc<Config> {
@@ -263,6 +280,7 @@ impl DexClient for MockDexClient {
 #[tokio::test]
 async fn test_multihop_opportunity_detection_and_ban_logic() {
     use crate::arbitrage::{ArbitrageOrchestrator, MultiHopArbOpportunity};
+    use crate::arbitrage::orchestrator::core::OrchestratorDeps;
     use std::fs;
     use std::time::Duration;
 
@@ -365,6 +383,7 @@ async fn test_multihop_opportunity_detection_and_ban_logic() {
 #[tokio::test]
 async fn test_resolve_pools_for_opportunity_missing_pool() {
     use crate::arbitrage::{ArbitrageOrchestrator, MultiHopArbOpportunity};
+    use crate::arbitrage::orchestrator::core::OrchestratorDeps;
     use solana_sdk::pubkey::Pubkey;
 
     let pools_map = create_dummy_pools_map();
@@ -629,6 +648,5 @@ async fn test_exercise_all_fee_manager_functions() {
         }
     }
 
-    // let _ = XYKSlippageModel::default();
-    let _ = XYKSlippageModel {};
+    let _ = XYKSlippageModel::default();
 }

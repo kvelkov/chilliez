@@ -1,7 +1,7 @@
 use dashmap::DashMap;
 use solana_arb_bot::arbitrage::orchestrator::core::OrchestratorDeps;
 use solana_arb_bot::arbitrage::orchestrator::ArbitrageOrchestrator;
-use solana_arb_bot::config::settings::Config;
+use solana_arb_bot::config::Config;
 use solana_arb_bot::dex::{BannedPairsManager, DexClient}; // DexClient is used by ArbitrageOrchestrator initialization
 use solana_arb_bot::utils::PoolInfo;
 use solana_sdk::pubkey::Pubkey;
@@ -112,7 +112,7 @@ async fn reference_all_engine_methods_and_fields() {
         jito_bundle_status_timeout_secs: None,
         jito_enabled: Some(false), // <-- Added for compatibility
     }); // Semicolon was missing here, added for correctness
-    let metrics = Arc::new(Mutex::new(solana_arb_bot::local_metrics::Metrics::new()));
+    let metrics = Arc::new(Mutex::new(solana_arb_bot::monitoring::LocalMetrics::new()));
     let dex_api_clients: Vec<Arc<dyn DexClient>> = vec![];
     let banned_pairs_manager = dummy_banned_pairs_manager();
     let _engine = ArbitrageOrchestrator::new(

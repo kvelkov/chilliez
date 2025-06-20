@@ -1,10 +1,10 @@
 // Example: How to set up paper trading with virtual funds
 
-use solana_arb_bot::paper_trading::{PaperTradingConfig, SafeVirtualPortfolio};
+use solana_arb_bot::simulation::{SimulationConfig, SafeVirtualPortfolio};
 use solana_sdk::pubkey::Pubkey;
 use std::collections::HashMap;
 
-fn setup_paper_trading_with_funds() -> PaperTradingConfig {
+fn setup_paper_trading_with_funds() -> SimulationConfig {
     let mut initial_balances = HashMap::new();
 
     // Define token mints (these would be real token addresses in production)
@@ -17,8 +17,8 @@ fn setup_paper_trading_with_funds() -> PaperTradingConfig {
     initial_balances.insert(usdc_mint, 50_000_000_000); // 50,000 USDC (in micro-USDC)
     initial_balances.insert(usdt_mint, 25_000_000_000); // 25,000 USDT (in micro-USDT)
 
-    // Create paper trading config with your virtual funds
-    PaperTradingConfig {
+    // Create simulation config with your virtual funds
+    SimulationConfig {
         enabled: true,
         initial_balances,
         default_sol_balance: 100_000_000_000, // 100 SOL fallback

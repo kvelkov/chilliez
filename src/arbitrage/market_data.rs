@@ -1,6 +1,6 @@
 // src/arbitrage/market_data.rs
 use crate::{
-    config::settings::Config,
+    config::Config,
     dex::DexClient,
     error::ArbError,
     metrics::Metrics,

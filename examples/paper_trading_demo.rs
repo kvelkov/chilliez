@@ -4,8 +4,8 @@
 use solana_arb_bot::{
     arbitrage::opportunity::ArbHop,
     arbitrage::opportunity::MultiHopArbOpportunity,
-    paper_trading::{
-        PaperTradingAnalytics, PaperTradingConfig, PaperTradingReporter, SafeVirtualPortfolio,
+    simulation::{
+        SimulationAnalytics, SimulationConfig, SimulationReporter, SafeVirtualPortfolio,
         SimulatedExecutionEngine,
     },
     utils::DexType,
@@ -27,7 +27,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     initial_balances.insert(usdc_mint, 10_000_000_000); // 10,000 USDC
 
     // Configure paper trading
-    let config = PaperTradingConfig {
+    let config = SimulationConfig {
         enabled: true,
         initial_balances: initial_balances.clone(),
         default_sol_balance: 5_000_000_000,   // 5 SOL
@@ -44,9 +44,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Initialize components
     let portfolio = Arc::new(SafeVirtualPortfolio::new(initial_balances));
-    let analytics = Arc::new(Mutex::new(PaperTradingAnalytics::new()));
-    let engine = SimulatedExecutionEngine::new(config, portfolio.clone());
-    let reporter = PaperTradingReporter::new("./demo_paper_logs")?;
+    let analytics = Arc::new(Mutex::new(SimulationAnalytics::new()));
+    let sol_mint: Pubkey = "So11111111111111111111111111111111111111112".parse()?;
+    let engine = SimulatedExecutionEngine::new(config, portfolio.clone(), sol_mint);
+    let reporter = SimulationReporter::new("./demo_paper_logs")?;
 
     println!("💰 Initial Portfolio:");
     println!("  SOL: {} lamports", portfolio.get_balance(&sol_mint));
@@ -105,7 +106,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     for i in 1..=5 {
         println!("\n🔄 Executing trade {} of 5...", i);
 
-        match engine.simulate_arbitrage_execution(&opportunity, &[]).await {
+        let empty_dex_clients = std::collections::HashMap::new();
+        match engine.simulate_arbitrage_execution(&opportunity, &empty_dex_clients).await {
             Ok(result) => {
                 println!(
                     "  ✅ Trade {}: {}",
@@ -139,35 +141,32 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                 if result.success {
                     analytics_guard.record_successful_execution(
+                        "SOL", // token_in
+                        "USDC", // token_out
                         result.input_amount,
                         result.output_amount,
                         result.output_amount as i64 - result.input_amount as i64,
+                        result.execution_time_ms as f64,
+                        result.slippage_bps as f64,
                         result.fee_amount,
+                        "simulated",
                     );
                 } else {
                     analytics_guard.record_failed_execution(
+                        "SOL", // token_in
+                        "USDC", // token_out
                         result.input_amount,
-                        result.fee_amount,
-                        error_message_for_analytics.unwrap_or_default(),
-                        None,
-                        None,
+                        &error_message_for_analytics.unwrap_or_default(),
+                        result.execution_time_ms as f64,
+                        "simulated",
                     );
                 }
 
                 // Log trade
-                let trade_entry = PaperTradingReporter::create_trade_log_entry(
+                let trade_entry = SimulationReporter::create_trade_log_entry(
                     &opportunity,
-                    result.input_amount,
-                    result.output_amount,
-                    result.output_amount as i64 - result.input_amount as i64,
-                    result.slippage_bps as f64 / 10000.0,
-                    result.fee_amount,
-                    result.success,
-                    error_message_for_log,
-                    0,
-                    None,
-                    0, // rent_paid
-                    0, // account_creation_fees
+                    &result,
+                    &portfolio,
                 );
 
                 if let Err(e) = reporter.log_trade(trade_entry) {
@@ -179,11 +178,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                 let mut analytics_guard = analytics.lock().await;
                 analytics_guard.record_failed_execution(
+                    "SOL", // token_in
+                    "USDC", // token_out
                     (opportunity.input_amount * 1_000_000.0) as u64,
-                    0,
-                    format!("Simulation error: {}", e),
-                    None,
-                    None,
+                    &format!("Simulation error: {}", e),
+                    0.0, // execution_time_ms
+                    "simulated",
                 );
             }
         }

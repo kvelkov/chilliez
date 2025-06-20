@@ -10,9 +10,9 @@ use solana_arb_bot::{
         orchestrator::ArbitrageOrchestrator,
         price_aggregator::{PriceAggregator, QuoteSource},
     },
-    config::settings::Config,
+    config::Config,
     dex::{api::Quote, BannedPairsManager, DexClient},
-    local_metrics::Metrics,
+    monitoring::LocalMetrics as Metrics,
     utils::PoolInfo,
 };
 use solana_sdk::pubkey::Pubkey;

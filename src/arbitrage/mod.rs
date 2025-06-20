@@ -8,7 +8,7 @@
 //! - mev: MEV protection and Jito integration
 //! - safety: Transaction safety, retry logic, and recovery
 use crate::error::ArbError;
-use crate::local_metrics::Metrics;
+use crate::monitoring::LocalMetrics as Metrics;
 use log::{error, info};
 use std::sync::Arc;
 use tokio::sync::{
@@ -66,6 +66,8 @@ pub use self::price_aggregator::{
     AggregatedQuote, PriceAggregator, PriceAggregatorConfig, QuoteSource,
 };
 pub use self::strategy::ArbitrageStrategy;
+pub use self::opportunity::ArbHop;
+pub use self::orchestrator::core::OrchestratorDeps;
 
 // New modular components (temporarily disabled)
 // pub use self::types::{ExecutionStrategy as TypesExecutionStrategy, CompetitivenessAnalysis, ExecutionRecommendation, DetectionMetrics};
@@ -77,7 +79,7 @@ pub use self::mev::{
     MevProtectionStatus, MevProtectionStrategy, NetworkConditions,
 };
 pub use self::opportunity::{
-    AdvancedMultiHopOpportunity, ArbHop, EnhancedArbHop, MultiHopArbOpportunity,
+    AdvancedMultiHopOpportunity, EnhancedArbHop, MultiHopArbOpportunity,
 };
 pub use self::safety::{
     BalanceValidationConfig, ConfirmationConfig, FailureRecoveryStrategy,

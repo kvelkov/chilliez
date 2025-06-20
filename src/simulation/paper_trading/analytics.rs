@@ -1,4 +1,4 @@
-// src/paper_trading/analytics.rs
+// src/simulation/analytics.rs
 //! Analytics and performance tracking for paper trading
 
 use super::{engine::SimulatedTradeResult, portfolio::PortfolioSummary};

@@ -6,7 +6,7 @@ use crate::{
         types::DetectionMetrics,
         analysis::EnhancedSlippageModel,
     },
-    config::settings::Config,
+    config::Config,
     dex::{BannedPairsManager, PoolValidationConfig, validate_pools},
     error::ArbError,
     metrics::Metrics,

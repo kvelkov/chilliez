@@ -7,7 +7,7 @@ use crate::{
     dex::clients::jupiter::JupiterClient,
     dex::clients::jupiter_api::{QuoteRequest, QuoteResponse, RoutePlan},
     error::ArbError,
-    local_metrics::Metrics,
+    monitoring::LocalMetrics as Metrics,
 };
 use log::{debug, info, warn};
 use serde::{Deserialize, Serialize};

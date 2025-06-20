@@ -7,34 +7,41 @@ pub mod math;
 pub use fee::*;
 pub use math::*;
 
-use crate::config::settings::Config;
-use crate::local_metrics::Metrics;
+use crate::config::Config;
+use crate::monitoring::metrics::Metrics;
 use crate::solana::rpc::SolanaRpcClient;
 use anyhow::Result;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
 pub struct ArbitrageAnalyzer {
-    pub slippage_model: Box<dyn math::SlippageModel>,
+    pub advanced_math: math::AdvancedArbitrageMath,
     pub fee_manager: fee::FeeManager,
+    pub threshold_updater: math::DynamicThresholdUpdater,
+    #[allow(dead_code)]
+    pub slippage_model: Box<dyn math::SlippageModel>, // not in use - Field is marked dead_code and not used by ArbitrageAnalyzer's methods
 }
 
 impl ArbitrageAnalyzer {
-    pub fn new(_config: &Config, _metrics: Arc<Mutex<Metrics>>) -> Self {
+    pub fn new(config: &Config, metrics: Arc<Mutex<Metrics>>) -> Self {
         Self {
-            slippage_model: Box::new(math::EnhancedSlippageModel::new()),
+            advanced_math: math::AdvancedArbitrageMath::new(12),
             fee_manager: fee::FeeManager::default(),
+            threshold_updater: math::DynamicThresholdUpdater::new(config, metrics),
+            slippage_model: Box::new(math::XYKSlippageModel),
         }
     }
 
     pub fn new_with_rpc(
-        _config: &Config,
-        _metrics: Arc<Mutex<Metrics>>,
+        config: &Config,
+        metrics: Arc<Mutex<Metrics>>,
         rpc_client: Arc<SolanaRpcClient>,
     ) -> Self {
         Self {
-            slippage_model: Box::new(math::EnhancedSlippageModel::new()),
+            advanced_math: math::AdvancedArbitrageMath::new(12),
             fee_manager: fee::FeeManager::new(rpc_client),
+            threshold_updater: math::DynamicThresholdUpdater::new(config, metrics),
+            slippage_model: Box::new(math::EnhancedSlippageModel::new()),
         }
     }
 

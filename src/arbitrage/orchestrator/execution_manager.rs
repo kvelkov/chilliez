@@ -5,6 +5,7 @@
 
 use super::core::ArbitrageOrchestrator;
 use crate::{arbitrage::opportunity::MultiHopArbOpportunity, error::ArbError};
+use crate::simulation;
 
 use log::{debug, info, warn};
 use rust_decimal::Decimal;
@@ -70,9 +71,9 @@ impl ArbitrageOrchestrator {
         }
 
         // Check if paper trading mode
-        if let Some(ref paper_engine) = self.paper_trading_engine {
+        if let Some(ref simulation_engine) = self.simulation_engine {
             return self
-                .execute_paper_trading_opportunity(opportunity, paper_engine)
+                .execute_paper_trading_opportunity(opportunity, simulation_engine)
                 .await;
         }
 
@@ -315,7 +316,7 @@ impl ArbitrageOrchestrator {
     async fn execute_paper_trading_opportunity(
         &self,
         opportunity: &MultiHopArbOpportunity,
-        _paper_engine: &crate::paper_trading::SimulatedExecutionEngine,
+        _paper_engine: &simulation::SimulatedExecutionEngine, // TODO: If crate name changes, update this import accordingly
     ) -> Result<(), ArbError> {
         debug!("📄 Executing opportunity in paper trading mode");
 

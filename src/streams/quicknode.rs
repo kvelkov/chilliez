@@ -249,7 +249,7 @@ impl DexSwapEvent {
     }
 }
 
-// 🧪 PAPER TRADING: QuickNode DEX Analysis Integration
+// 🧪 SIMULATION TRADING: QuickNode DEX Analysis Integration
 // These structures match the JSON output from our JavaScript QuickNode analyzer
 
 /// DEX Analysis data from JavaScript QuickNode analyzer
@@ -287,7 +287,7 @@ pub struct DexProgramMetrics {
     pub success_rate: String, // e.g., "100.00%"
 }
 
-/// 🧪 PAPER TRADING: Arbitrage opportunity detected from DEX analysis
+/// 🧪 SIMULATION TRADING: Arbitrage opportunity detected from DEX analysis
 #[derive(Debug, Clone)]
 pub struct DexArbitrageOpportunity {
     pub dex_name: String,
@@ -302,7 +302,7 @@ pub struct DexArbitrageOpportunity {
     pub block_time: u64,
 }
 
-// 🧪 PAPER TRADING: QuickNode DEX Analysis Client
+// 🧪 SIMULATION TRADING: QuickNode DEX Analysis Client
 /// Client for receiving and processing DEX analysis from JavaScript
 pub struct QuickNodeDexAnalysisClient {
     /// Minimum success rate to consider an opportunity (e.g., 90.0)
@@ -315,7 +315,7 @@ pub struct QuickNodeDexAnalysisClient {
 
 impl QuickNodeDexAnalysisClient {
     /// Create a new DEX analysis client with paper trading parameters
-    pub fn new_for_paper_trading() -> Self {
+    pub fn new_for_simulation() -> Self {
         Self {
             min_success_rate: 90.0,
             min_transaction_volume: 5,
@@ -323,7 +323,7 @@ impl QuickNodeDexAnalysisClient {
         }
     }
 
-    /// 🧪 PAPER TRADING: Process DEX analysis data from JavaScript
+    /// 🧪 SIMULATION TRADING: Process DEX analysis data from JavaScript
     /// This method receives the JSON data from our JavaScript analyzer
     pub fn process_dex_analysis(
         &self,
@@ -347,7 +347,7 @@ impl QuickNodeDexAnalysisClient {
         opportunities
     }
 
-    /// 🧪 PAPER TRADING: Evaluate if a DEX program presents a trading opportunity
+    /// 🧪 SIMULATION TRADING: Evaluate if a DEX program presents a trading opportunity
     fn evaluate_opportunity(
         &self,
         program_id: &str,
@@ -408,7 +408,7 @@ impl QuickNodeDexAnalysisClient {
         sol_str.trim_end_matches(" SOL").parse::<f64>().ok()
     }
 
-    /// 🧪 PAPER TRADING: Calculate confidence score for opportunity
+    /// 🧪 SIMULATION TRADING: Calculate confidence score for opportunity
     /// Returns value between 0.0 and 1.0
     fn calculate_confidence_score(
         &self,
@@ -435,7 +435,7 @@ impl QuickNodeDexAnalysisClient {
             + value_weight * value_score
     }
 
-    /// 🧪 PAPER TRADING: Estimate profit potential
+    /// 🧪 SIMULATION TRADING: Estimate profit potential
     /// Simplified model for paper trading simulation
     fn estimate_profit(
         &self,
@@ -451,7 +451,7 @@ impl QuickNodeDexAnalysisClient {
         base_profit * volume_multiplier * success_multiplier
     }
 
-    /// 🧪 PAPER TRADING: Generate trade recommendation
+    /// 🧪 SIMULATION TRADING: Generate trade recommendation
     pub fn generate_trade_recommendation(
         &self,
         opportunity: &DexArbitrageOpportunity,
@@ -502,7 +502,7 @@ impl QuickNodeDexAnalysisClient {
     }
 }
 
-/// 🧪 PAPER TRADING: Trade recommendation generated from DEX analysis
+/// 🧪 SIMULATION TRADING: Trade recommendation generated from DEX analysis
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TradeRecommendation {
     pub dex_name: String,
@@ -546,13 +546,13 @@ impl std::fmt::Display for RiskLevel {
     }
 }
 
-// 🧪 PAPER TRADING: Integration point for JavaScript bridge
+// 🧪 SIMULATION TRADING: Integration point for JavaScript bridge
 /// This function will be called from JavaScript with DEX analysis data
-pub fn process_quicknode_dex_analysis_for_paper_trading(
+pub fn process_quicknode_dex_analysis_for_simulation(
     analysis_json: &str,
 ) -> Result<Vec<TradeRecommendation>> {
     let analysis: QuickNodeDexAnalysis = serde_json::from_str(analysis_json)?;
-    let client = QuickNodeDexAnalysisClient::new_for_paper_trading();
+    let client = QuickNodeDexAnalysisClient::new_for_simulation();
 
     let opportunities = client.process_dex_analysis(analysis);
     let recommendations = opportunities
@@ -586,7 +586,7 @@ pub unsafe extern "C" fn process_quicknode_dex_analysis_ffi(
     };
 
     // Process the analysis
-    let result = match process_quicknode_dex_analysis_for_paper_trading(c_str) {
+    let result = match process_quicknode_dex_analysis_for_simulation(c_str) {
         Ok(recommendations) => {
             // Convert recommendations to JSON for JavaScript
             match serde_json::to_string(&recommendations) {

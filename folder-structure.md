@@ -16316,7 +16316,6 @@ chilliez
 │   ├── status_Orca.json [590 bytes]
 │   └── status_Raydium.json [593 bytes]
 ├── paper_trading_reports/
-├── scripts/
 ├── src/
 │   ├── ai/
 │   │   └── mod.rs [1.89 KB]
@@ -16490,7 +16489,6 @@ chilliez
 │   ├── jito_bundle.rs [4.49 KB]
 │   ├── lib.rs [1.37 KB]
 │   └── main.rs [34.41 KB]
-├── streams/
 ├── target/
 │   ├── debug/
 │   │   ├── build/
@@ -25520,13 +25518,13 @@ chilliez
 │   │   │   │   │   └── work-products.bin [5.99 KB]
 │   │   │   │   └── s-h8h6s9n9w2-1hvfwy0.lock [0 bytes]
 │   │   │   ├── jito_bundle_integration-1dge53mgkijb4/
-│   │   │   │   ├── s-h8h6sek8ns-1eph4h7-emtw7js2c6y3c2axv0pljd2bc/
+│   │   │   │   ├── s-h8h74vvqkd-1cbrpbz-emtw7js2c6y3c2axv0pljd2bc/
 │   │   │   │   │   ├── dep-graph.bin [2.14 MB]
 │   │   │   │   │   ├── query-cache.bin [678.91 KB]
 │   │   │   │   │   └── work-products.bin [50 bytes]
-│   │   │   │   └── s-h8h6sek8ns-1eph4h7.lock [0 bytes]
+│   │   │   │   └── s-h8h74vvqkd-1cbrpbz.lock [0 bytes]
 │   │   │   ├── jito_bundle_integration-393p628qzp33r/
-│   │   │   │   ├── s-h8h6savgfv-1mei9k6-a53sd4ahrabd9hr5pww60hi41/
+│   │   │   │   ├── s-h8h74vgyhe-05192kk-a53sd4ahrabd9hr5pww60hi41/
 │   │   │   │   │   ├── 056q77t87dmpk249nutxv028v.o [3.01 KB]
 │   │   │   │   │   ├── 0g7uo14w7umgg870rc4v9kgfd.o [162.98 KB]
 │   │   │   │   │   ├── 0i9h6k95l7dmnh2g6n25r3kv5.o [18.46 KB]
@@ -25593,7 +25591,7 @@ chilliez
 │   │   │   │   │   ├── d7oqxbfkevl79g2nkf4hnxvvj.o [69.23 KB]
 │   │   │   │   │   ├── dbgpro2bu3a4gom5h62k50fni.o [2.78 KB]
 │   │   │   │   │   ├── dcblb7d3k6roa2na1ype6op07.o [6.06 KB]
-│   │   │   │   │   ├── dep-graph.bin [6.13 MB]
+│   │   │   │   │   ├── dep-graph.bin [6.12 MB]
 │   │   │   │   │   ├── diho5z05p52n9g3c1oydtk6n6.o [10.68 KB]
 │   │   │   │   │   ├── dm6thmw1au8qjndtkid70lfv6.o [5.74 KB]
 │   │   │   │   │   ├── dwoggsn8t4ov027ur9h6esuvd.o [79.13 KB]
@@ -25607,7 +25605,7 @@ chilliez
 │   │   │   │   │   ├── f13y7fsrimhjwt89z4qak2d42.o [8.12 KB]
 │   │   │   │   │   ├── query-cache.bin [2.25 MB]
 │   │   │   │   │   └── work-products.bin [5.76 KB]
-│   │   │   │   └── s-h8h6savgfv-1mei9k6.lock [0 bytes]
+│   │   │   │   └── s-h8h74vgyhe-05192kk.lock [0 bytes]
 │   │   │   ├── jupiter_cache_demo-2slozhn9akfmz/
 │   │   │   │   ├── s-h8h6s8wsbu-1pj2oc5-btjcwwhmgt90se4yw158qswhi/
 │   │   │   │   │   ├── 0j4k38qapa9yocr83hga3hiym.o [2.76 KB]
@@ -32908,7 +32906,7 @@ chilliez
 
 ```plaintext
 Root Folder: chilliez
-Total Folders: 3384
+Total Folders: 3382
 Total Files: 29515
 File Types:
   - .lock Files: 66
@@ -33008,7 +33006,7 @@ File Types:
   - .rst Files: 1
 Largest File: libsolana_rpc_client-a7cd7e8ad6b4f985.rlib [144.45 MB]
 Smallest File: wallet_integr.md [0 bytes]
-Total Project Size: 5816.02 MB
+Total Project Size: 5816.00 MB
 Ignored Files and Folders:
   - None
 ```

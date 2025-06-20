@@ -7,7 +7,7 @@ use crate::{
         strategy_manager::StrategyManager,
         types::DetectionMetrics,
     },
-    config::settings::Config,
+    config::Config,
     dex::{BannedPairsManager, DexClient},
     error::ArbError,
     metrics::Metrics,

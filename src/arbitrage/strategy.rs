@@ -6,7 +6,7 @@
 use crate::arbitrage::opportunity::MultiHopArbOpportunity;
 use crate::config::Config;
 use crate::error::ArbError;
-use crate::local_metrics::Metrics;
+use crate::monitoring::LocalMetrics as Metrics;
 use crate::utils::PoolInfo;
 use chrono;
 use log::{debug, info, warn};

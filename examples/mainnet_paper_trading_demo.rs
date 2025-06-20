@@ -18,7 +18,7 @@ use tokio::time::sleep;
 
 use solana_arb_bot::{
     api::{EnhancedApiErrorHandler, EnhancedRetryExecutor},
-    paper_trading::{PaperTradingConfig, SafeVirtualPortfolio, SimulatedExecutionEngine},
+    simulation::{SimulationConfig, SafeVirtualPortfolio, SimulatedExecutionEngine},
 };
 
 #[tokio::main]
@@ -189,7 +189,7 @@ async fn main() -> Result<()> {
         .parse()
         .unwrap_or(100_000_000); // 0.1 SOL
 
-    let mut config = PaperTradingConfig::new();
+    let mut config = SimulationConfig::new();
     config.enabled = true;
     config.default_sol_balance = initial_sol_balance;
     config.default_usdc_balance = 100_000_000_000; // 100k USDC
@@ -204,7 +204,10 @@ async fn main() -> Result<()> {
 
     // Initialize paper trading portfolio
     let portfolio = SafeVirtualPortfolio::from_config(&config).await?;
-    let _engine = SimulatedExecutionEngine::new(config.clone(), portfolio.clone());
+    
+    // SOL mint address
+    let sol_mint: solana_sdk::pubkey::Pubkey = "So11111111111111111111111111111111111111112".parse()?;
+    let _engine = SimulatedExecutionEngine::new(config.clone(), std::sync::Arc::new(portfolio.clone()), sol_mint);
 
     info!(
         "✅ Paper trading engine initialized with {} SOL starting balance",
@@ -277,7 +280,7 @@ async fn main() -> Result<()> {
             portfolio.get_total_value() as f64 / 1_000_000_000.0
         );
         info!("    • Trade Count: {}", portfolio_summary.total_trades);
-        info!("    • Success Rate: {:.1}%", portfolio_summary.success_rate);
+        info!("    • Total Fees: {} lamports", portfolio_summary.total_fees_paid);
 
         // Show API health status
         let orca_status = orca_executor.get_ban_status();
@@ -331,7 +334,7 @@ async fn main() -> Result<()> {
         portfolio.get_total_value() as f64 / 1_000_000_000.0
     );
     info!("  • Total Trades: {}", final_portfolio.total_trades);
-    info!("  • Success Rate: {:.1}%", final_portfolio.success_rate);
+    info!("  • Total Fees: {} lamports", final_portfolio.total_fees_paid);
     info!("  • Error Handling: ✅ All APIs monitored with ban detection");
 
     info!("🚀 System is ready for live trading with proper configuration!");

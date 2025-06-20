@@ -8,11 +8,11 @@ use crate::{
     arbitrage::jupiter::routes::{
         JupiterRouteOptimizer, MultiRouteResult, RouteOptimizationConfig,
     },
-    config::settings::Config,
+    config::Config,
     dex::clients::jupiter::JupiterClient,
     dex::clients::jupiter_api::QuoteResponse,
     error::ArbError,
-    local_metrics::Metrics,
+    monitoring::LocalMetrics as Metrics,
 };
 use log::{debug, error, info, warn};
 use serde::{Deserialize, Serialize};
@@ -488,7 +488,7 @@ pub enum CacheEfficiency {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::settings::Config;
+    use crate::config::Config;
 
     #[test]
     fn test_jupiter_integration_config_from_system_config() {

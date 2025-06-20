@@ -12,7 +12,7 @@ use spl_token::state::Mint as SplMint; // For creating mock mint data
 use solana_program::program_pack::Pack; // For SplMint::pack
 
 use crate::{
-    config::settings::{Config, RpcConfig}, // Assuming RpcConfig is part of your Config
+    config::Config,
     solana::rpc::SolanaRpcClient,
     utils::{PoolInfo, PoolParser, PoolToken, DexType},
     // Import your DEX parsers
@@ -217,7 +217,7 @@ mod existing_tests { // Assuming these were from your original file
     use std::collections::HashMap;
     use tokio::sync::{Mutex, RwLock};
     use crate::arbitrage::engine::ArbitrageEngine; // Adjust path if needed
-    use crate::local_metrics::Metrics; // Adjust path if needed
+    use crate::monitoring::LocalMetrics as Metrics; // Adjust path if needed
     use crate::dex::DexClient; // Adjust path if needed
     use super::*;
 

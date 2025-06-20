@@ -2,7 +2,7 @@ use dashmap::DashMap;
 use solana_arb_bot::{
     arbitrage::opportunity::{ArbHop, MultiHopArbOpportunity},
     arbitrage::orchestrator::ArbitrageOrchestrator,
-    config::settings::Config,
+    config::Config,
     dex::{
         api::DexClient,
         clients::{OrcaClient, RaydiumClient},
@@ -146,7 +146,7 @@ fn create_mock_opportunity() -> MultiHopArbOpportunity {
 #[ignore] // This test makes real network calls and requires a valid QuickNode endpoint.
 async fn test_jito_bundle_execution_flow() {
     let config = Arc::new(create_jito_test_config());
-    let metrics = Arc::new(Mutex::new(solana_arb_bot::local_metrics::Metrics::new()));
+    let metrics = Arc::new(Mutex::new(solana_arb_bot::monitoring::LocalMetrics::new()));
     let hot_cache = Arc::new(DashMap::new());
     let dex_providers: Vec<Arc<dyn DexClient>> =
         vec![Arc::new(OrcaClient::new()), Arc::new(RaydiumClient::new())];

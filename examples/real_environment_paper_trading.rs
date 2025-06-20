@@ -14,8 +14,8 @@ use solana_arb_bot::{
     arbitrage::opportunity::ArbHop,
     arbitrage::opportunity::MultiHopArbOpportunity,
     error::ArbError,
-    paper_trading::{
-        PaperTradingAnalytics, PaperTradingConfig, PaperTradingReporter, SafeVirtualPortfolio,
+    simulation::{
+        SimulationAnalytics, SimulationConfig, SimulationReporter, SafeVirtualPortfolio,
         SimulatedExecutionEngine,
     },
     utils::{DexType, PoolInfo},
@@ -61,7 +61,7 @@ async fn main() -> Result<()> {
 }
 
 /// Load configuration from environment variables
-fn load_config_from_env() -> Result<PaperTradingConfig> {
+fn load_config_from_env() -> Result<SimulationConfig> {
     let mut initial_balances = HashMap::new();
 
     // Parse token mints
@@ -85,7 +85,7 @@ fn load_config_from_env() -> Result<PaperTradingConfig> {
     initial_balances.insert(usdc_mint, 10_000_000_000); // 10,000 USDC
     initial_balances.insert(usdt_mint, 5_000_000_000); // 5,000 USDT
 
-    let config = PaperTradingConfig {
+    let config = SimulationConfig {
         enabled: true,
         initial_balances,
         default_sol_balance: initial_sol,
@@ -168,19 +168,20 @@ async fn test_network_connectivity() -> Result<()> {
 
 /// Initialize the paper trading system components
 async fn initialize_paper_trading_system(
-    config: PaperTradingConfig,
+    config: SimulationConfig,
 ) -> Result<(
     Arc<SafeVirtualPortfolio>,
-    Arc<Mutex<PaperTradingAnalytics>>,
+    Arc<Mutex<SimulationAnalytics>>,
     SimulatedExecutionEngine,
-    PaperTradingReporter,
+    SimulationReporter,
 )> {
     info!("🔧 Initializing paper trading system...");
 
     let portfolio = Arc::new(SafeVirtualPortfolio::new(config.initial_balances.clone()));
-    let analytics = Arc::new(Mutex::new(PaperTradingAnalytics::new()));
-    let engine = SimulatedExecutionEngine::new(config, portfolio.clone());
-    let reporter = PaperTradingReporter::new("./paper_trading_reports")?;
+    let analytics = Arc::new(Mutex::new(SimulationAnalytics::new()));
+    let sol_mint: Pubkey = "So11111111111111111111111111111111111111112".parse()?;
+    let engine = SimulatedExecutionEngine::new(config, portfolio.clone(), sol_mint);
+    let reporter = SimulationReporter::new("./paper_trading_reports")?;
 
     info!("✅ Paper trading system initialized");
 
@@ -224,9 +225,9 @@ async fn display_initial_portfolio(portfolio: &SafeVirtualPortfolio) {
 /// Run paper trading simulation with realistic market scenarios
 async fn run_real_market_simulation(
     _portfolio: &SafeVirtualPortfolio,
-    analytics: &Arc<Mutex<PaperTradingAnalytics>>,
+    analytics: &Arc<Mutex<SimulationAnalytics>>,
     engine: &SimulatedExecutionEngine,
-    _reporter: &PaperTradingReporter,
+    _reporter: &SimulationReporter,
 ) -> Result<()> {
     info!("📊 Running real market simulation...");
 
@@ -252,7 +253,8 @@ async fn run_real_market_simulation(
         info!("  Expected Profit: {:.2}%", scenario.profit_pct);
 
         // Execute the simulated trade
-        match engine.simulate_arbitrage_execution(scenario, &[]).await {
+        let empty_dex_clients = std::collections::HashMap::new();
+        match engine.simulate_arbitrage_execution(scenario, &empty_dex_clients).await {
             Ok(result) => {
                 let mut analytics_guard = analytics.lock().await;
                 analytics_guard.record_opportunity_analyzed();
@@ -265,10 +267,15 @@ async fn run_real_market_simulation(
                     info!("    Execution time: {}ms", result.execution_time_ms);
 
                     analytics_guard.record_successful_execution(
+                        "SOL", // token_in
+                        "USDC", // token_out
                         result.input_amount,
                         result.output_amount,
                         result.output_amount.saturating_sub(result.input_amount) as i64,
+                        result.execution_time_ms as f64,
+                        result.slippage_bps as f64,
                         result.fee_amount,
+                        "simulated",
                     );
                 } else {
                     let error_msg = result
@@ -277,11 +284,12 @@ async fn run_real_market_simulation(
                         .unwrap_or_else(|| "Unknown error".to_string());
                     info!("  ❌ Trade failed: {}", error_msg);
                     analytics_guard.record_failed_execution(
+                        "SOL", // token_in
+                        "USDC", // token_out
                         result.input_amount,
-                        result.fee_amount,
-                        error_msg,
-                        None,
-                        None,
+                        &error_msg,
+                        result.execution_time_ms as f64,
+                        "simulated",
                     );
                 }
 
@@ -447,8 +455,8 @@ fn create_mock_pool_info(token_a: Pubkey, token_b: Pubkey) -> PoolInfo {
 /// Generate final performance report
 async fn generate_final_report(
     portfolio: &SafeVirtualPortfolio,
-    analytics: &Arc<Mutex<PaperTradingAnalytics>>,
-    _reporter: &PaperTradingReporter,
+    analytics: &Arc<Mutex<SimulationAnalytics>>,
+    _reporter: &SimulationReporter,
 ) -> Result<()> {
     info!("📊 Generating final performance report...");
 
@@ -491,14 +499,14 @@ async fn generate_final_report(
     info!("📊 Portfolio Summary:");
     info!("  Total Trades: {}", portfolio_summary.total_trades);
     info!(
-        "  Successful Trades: {}",
-        portfolio_summary.successful_trades
+        "  Total Trades: {}",
+        portfolio_summary.total_trades
     );
     info!(
-        "  Success Rate: {:.2}%",
-        portfolio_summary.success_rate * 100.0
+        "  Total Fees Paid: {} lamports",
+        portfolio_summary.total_fees_paid
     );
-    info!("  Uptime: {} seconds", portfolio_summary.uptime_seconds);
+    info!("  Portfolio Balances: {} tokens", portfolio_summary.balances.len());
     info!("===============================================");
 
     // Log final analytics

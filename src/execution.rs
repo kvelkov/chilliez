@@ -16,11 +16,11 @@ use crate::{
         safety::{SafeTransactionHandler, TransactionSafetyConfig},
     },
     cache::Cache, // Redis cache
-    config::settings::Config,
+    config::Config,
     dex::api::DexClient,
     error::ArbError,
     jito_bundle::{create_tip_instruction, poll_bundle_status, select_random_tip_account, send_jito_bundle},
-    local_metrics::Metrics,
+    monitoring::LocalMetrics as Metrics,
     solana::rpc::SolanaRpcClient,
     utils::{DexType, PoolInfo, TokenAmount}, // Added PoolInfo import
 };

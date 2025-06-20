@@ -333,7 +333,7 @@ impl JupiterClient {
     }
 
     /// Create a new Jupiter client from application config
-    pub fn from_config(config: &crate::config::settings::Config) -> Self {
+    pub fn from_config(config: &crate::config::Config) -> Self {
         let client = Client::builder()
             .timeout(Duration::from_millis(config.jupiter_api_timeout_ms))
             .user_agent("SolanaArbBot/1.0")

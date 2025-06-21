@@ -153,7 +153,7 @@ impl Default for PerformanceConfig {
             parallel_task_timeout: Duration::from_secs(10),
             max_cache_size: 10000,
             metrics_retention: Duration::from_secs(24 * 3600), // 24 hours
-            route_cache_ttl: Duration::from_secs(300), // 5 minutes
+            route_cache_ttl: Duration::from_secs(300),         // 5 minutes
             quote_cache_ttl: Duration::from_secs(5),
             metrics_enabled: true,
             benchmark_interval: Duration::from_secs(60),
@@ -315,21 +315,21 @@ impl BenchmarkRunner {
     /// Run comprehensive performance benchmarks
     pub async fn run_full_benchmark_suite(&self) -> Result<Vec<BenchmarkResults>> {
         info!("Starting comprehensive performance benchmark suite");
-        
+
         let mut results = Vec::new();
-        
+
         // Route calculation performance
         results.push(self.benchmark_route_calculation().await?);
-        
+
         // Quote fetching performance
         results.push(self.benchmark_quote_fetching().await?);
-        
+
         // Cache performance
         results.push(self.benchmark_cache_performance().await?);
-        
+
         // Parallel processing performance
         results.push(self.benchmark_parallel_processing().await?);
-        
+
         info!("Benchmark suite completed with {} tests", results.len());
         Ok(results)
     }
@@ -341,19 +341,24 @@ impl BenchmarkRunner {
         let mut latencies = Vec::new();
         let mut successful_ops = 0u64;
 
-        info!("Benchmarking route calculation performance with {} operations", OPERATIONS);
+        info!(
+            "Benchmarking route calculation performance with {} operations",
+            OPERATIONS
+        );
 
         for i in 0..OPERATIONS {
             let op_start = Instant::now();
-            
+
             match timeout(
                 self.config.route_calculation_timeout,
-                self.simulate_route_calculation(i as usize)
-            ).await {
+                self.simulate_route_calculation(i as usize),
+            )
+            .await
+            {
                 Ok(Ok(_)) => {
                     successful_ops += 1;
                     latencies.push(op_start.elapsed());
-                },
+                }
                 Ok(Err(_)) | Err(_) => {
                     latencies.push(op_start.elapsed());
                 }
@@ -377,19 +382,24 @@ impl BenchmarkRunner {
         let mut latencies = Vec::new();
         let mut successful_ops = 0u64;
 
-        info!("Benchmarking quote fetching performance with {} operations", OPERATIONS);
+        info!(
+            "Benchmarking quote fetching performance with {} operations",
+            OPERATIONS
+        );
 
         for i in 0..OPERATIONS {
             let op_start = Instant::now();
-            
+
             match timeout(
                 self.config.quote_fetch_timeout,
-                self.simulate_quote_fetching(i as usize)
-            ).await {
+                self.simulate_quote_fetching(i as usize),
+            )
+            .await
+            {
                 Ok(Ok(_)) => {
                     successful_ops += 1;
                     latencies.push(op_start.elapsed());
-                },
+                }
                 Ok(Err(_)) | Err(_) => {
                     latencies.push(op_start.elapsed());
                 }
@@ -413,11 +423,14 @@ impl BenchmarkRunner {
         let mut latencies = Vec::new();
         let mut successful_ops = 0u64;
 
-        info!("Benchmarking cache performance with {} operations", OPERATIONS);
+        info!(
+            "Benchmarking cache performance with {} operations",
+            OPERATIONS
+        );
 
         for i in 0..OPERATIONS {
             let op_start = Instant::now();
-            
+
             // Alternate between read and write operations
             let result = if i % 2 == 0 {
                 self.simulate_cache_read(i as usize).await
@@ -429,7 +442,7 @@ impl BenchmarkRunner {
                 Ok(_) => {
                     successful_ops += 1;
                     latencies.push(op_start.elapsed());
-                },
+                }
                 Err(_) => {
                     latencies.push(op_start.elapsed());
                 }
@@ -453,7 +466,10 @@ impl BenchmarkRunner {
         let mut latencies = Vec::new();
         let mut successful_ops = 0u64;
 
-        info!("Benchmarking parallel processing with {} operations", OPERATIONS);
+        info!(
+            "Benchmarking parallel processing with {} operations",
+            OPERATIONS
+        );
 
         // Run operations in parallel batches
         let batch_size = self.config.max_concurrent_workers;
@@ -477,7 +493,7 @@ impl BenchmarkRunner {
                         if success {
                             successful_ops += 1;
                         }
-                    },
+                    }
                     Err(_) => {
                         latencies.push(Duration::from_secs(1)); // Timeout latency
                     }
@@ -496,9 +512,12 @@ impl BenchmarkRunner {
     }
 
     /// Run stress test
-    pub async fn run_stress_test(&self, stress_config: StressTestConfig) -> Result<BenchmarkResults> {
+    pub async fn run_stress_test(
+        &self,
+        stress_config: StressTestConfig,
+    ) -> Result<BenchmarkResults> {
         info!("Starting stress test for {:?}", stress_config.duration);
-        
+
         let start_time = Instant::now();
         let mut latencies = Vec::new();
         let mut successful_ops = 0u64;
@@ -508,7 +527,7 @@ impl BenchmarkRunner {
 
         while Instant::now() < end_time {
             let mut tasks = Vec::new();
-            
+
             // Launch concurrent operations
             for i in 0..stress_config.concurrent_operations {
                 let task = tokio::spawn(async move {
@@ -528,7 +547,7 @@ impl BenchmarkRunner {
                         if success {
                             successful_ops += 1;
                         }
-                    },
+                    }
                     Err(_) => {
                         latencies.push(Duration::from_secs(1));
                         operation_count += 1;
@@ -584,10 +603,11 @@ impl BenchmarkRunner {
         // Calculate percentiles
         let mut sorted_latencies = latencies.clone();
         sorted_latencies.sort();
-        
+
         let p95_latency = if !sorted_latencies.is_empty() {
             let index = (sorted_latencies.len() as f64 * 0.95) as usize;
-            sorted_latencies.get(index.min(sorted_latencies.len() - 1))
+            sorted_latencies
+                .get(index.min(sorted_latencies.len() - 1))
                 .copied()
                 .unwrap_or(Duration::ZERO)
         } else {
@@ -596,7 +616,8 @@ impl BenchmarkRunner {
 
         let p99_latency = if !sorted_latencies.is_empty() {
             let index = (sorted_latencies.len() as f64 * 0.99) as usize;
-            sorted_latencies.get(index.min(sorted_latencies.len() - 1))
+            sorted_latencies
+                .get(index.min(sorted_latencies.len() - 1))
                 .copied()
                 .unwrap_or(Duration::ZERO)
         } else {
@@ -626,7 +647,7 @@ impl BenchmarkRunner {
     /// Generate performance report
     pub fn generate_performance_report(&self, results: &[BenchmarkResults]) -> String {
         let mut report = String::new();
-        
+
         report.push_str("PERFORMANCE BENCHMARK REPORT\n");
         report.push_str("============================\n\n");
 
@@ -765,7 +786,8 @@ impl PerformanceMetricsCollector {
     /// Record an operation's completion
     pub fn record_operation(&mut self, operation_name: &str, duration: Duration, success: bool) {
         // Update operation-specific metrics
-        let metrics = self.operation_metrics
+        let metrics = self
+            .operation_metrics
             .entry(operation_name.to_string())
             .or_insert_with(OperationMetrics::default);
 
@@ -782,24 +804,36 @@ impl PerformanceMetricsCollector {
         }
 
         // Update min/max durations
-        metrics.min_duration = Some(metrics.min_duration.map_or(duration, |min| min.min(duration)));
-        metrics.max_duration = Some(metrics.max_duration.map_or(duration, |max| max.max(duration)));
+        metrics.min_duration = Some(
+            metrics
+                .min_duration
+                .map_or(duration, |min| min.min(duration)),
+        );
+        metrics.max_duration = Some(
+            metrics
+                .max_duration
+                .map_or(duration, |max| max.max(duration)),
+        );
 
         // Calculate average duration
         if metrics.total_operations > 0 {
             metrics.avg_duration = Duration::from_nanos(
-                metrics.total_duration.as_nanos() as u64 / metrics.total_operations
+                metrics.total_duration.as_nanos() as u64 / metrics.total_operations,
             );
         }
 
         // Record in latency tracker for percentile calculations
         self.latency_tracker.record(duration);
-        
+
         // Record throughput
         self.throughput_tracker.record_operation();
 
-        debug!("Recorded operation: {} ({}ms, success: {})", 
-               operation_name, duration.as_millis(), success);
+        debug!(
+            "Recorded operation: {} ({}ms, success: {})",
+            operation_name,
+            duration.as_millis(),
+            success
+        );
     }
 
     /// Increment opportunities detected counter
@@ -865,7 +899,8 @@ impl PerformanceMetricsCollector {
         }
 
         // Penalize high memory usage (> 90%)
-        let memory_usage_percent = self.system_metrics.memory_usage_mb / self.system_metrics.memory_total_mb;
+        let memory_usage_percent =
+            self.system_metrics.memory_usage_mb / self.system_metrics.memory_total_mb;
         if memory_usage_percent > 0.9 {
             score *= 0.6;
         } else if memory_usage_percent > 0.8 {
@@ -1003,7 +1038,7 @@ impl ThroughputTracker {
 
     pub fn record_operation(&mut self) {
         let now = Instant::now();
-        
+
         // Remove old operations outside the window
         while let Some(&front_time) = self.operations.front() {
             if now.duration_since(front_time) > self.window {
@@ -1023,7 +1058,7 @@ impl ThroughputTracker {
 
         let count = self.operations.len() as f64;
         let window_secs = self.window.as_secs_f64();
-        
+
         if window_secs > 0.0 {
             count / window_secs
         } else {
@@ -1041,12 +1076,13 @@ impl ErrorTracker {
     pub fn record_error(&mut self, error_type: &str) {
         self.total_operations += 1;
         self.failed_operations += 1;
-        
+
         *self.error_types.entry(error_type.to_string()).or_insert(0) += 1;
-        
+
         // Keep recent errors for analysis
-        self.recent_errors.push_back((Instant::now(), error_type.to_string()));
-        
+        self.recent_errors
+            .push_back((Instant::now(), error_type.to_string()));
+
         // Limit recent errors to last 1000
         if self.recent_errors.len() > 1000 {
             self.recent_errors.pop_front();

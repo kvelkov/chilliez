@@ -383,8 +383,8 @@ mod phoenix_tests {
 mod integration_tests {
     use super::super::clients; // Add direct import for clients module
     use super::super::*;
-    use crate::cache::Cache;
     use crate::config::Config;
+    use crate::data::cache;
     use std::sync::Arc;
 
     #[tokio::test]

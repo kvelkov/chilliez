@@ -94,7 +94,8 @@ impl Metrics {
     /// Logs the number of opportunities detected during a detection scan
     pub fn log_opportunities_detected(&self, count: u64) {
         counter!("opportunities_detected");
-        self.opportunities_detected.fetch_add(count, Ordering::Relaxed);
+        self.opportunities_detected
+            .fetch_add(count, Ordering::Relaxed);
     }
 
     /// Increments the opportunities_detected counter
@@ -103,27 +104,31 @@ impl Metrics {
         self.opportunities_detected.fetch_add(1, Ordering::Relaxed);
     }
 
-    /// Log opportunity executed successfully 
+    /// Log opportunity executed successfully
     pub fn log_opportunity_executed_success(&self) {
         counter!("opportunities_executed_success");
-        self.opportunities_executed_success.fetch_add(1, Ordering::Relaxed);
+        self.opportunities_executed_success
+            .fetch_add(1, Ordering::Relaxed);
     }
 
     /// Increments the opportunities_executed_success counter
     pub fn increment_opportunities_executed_success(&self) {
-        self.opportunities_executed_success.fetch_add(1, Ordering::SeqCst);
+        self.opportunities_executed_success
+            .fetch_add(1, Ordering::SeqCst);
     }
 
     /// Call this method immediately after a failed execution
     pub fn log_opportunity_executed_failure(&self) {
         counter!("opportunities_executed_failure");
-        self.opportunities_executed_failure.fetch_add(1, Ordering::SeqCst);
+        self.opportunities_executed_failure
+            .fetch_add(1, Ordering::SeqCst);
         info!("Metrics: Failed execution recorded");
     }
 
     /// Increments the opportunities_executed_failure counter
     pub fn increment_opportunities_executed_failure(&self) {
-        self.opportunities_executed_failure.fetch_add(1, Ordering::SeqCst);
+        self.opportunities_executed_failure
+            .fetch_add(1, Ordering::SeqCst);
     }
 
     /// Records an opportunity detection with detailed information
@@ -155,7 +160,8 @@ impl Metrics {
         counter!("execution_count");
 
         self.execution_count.fetch_add(1, Ordering::Relaxed);
-        self.total_execution_ms.fetch_add(duration_ms, Ordering::Relaxed);
+        self.total_execution_ms
+            .fetch_add(duration_ms, Ordering::Relaxed);
     }
 
     /// Records execution time using Duration
@@ -171,7 +177,8 @@ impl Metrics {
 
     /// Adds to the total_execution_ms counter
     pub fn add_to_total_execution_ms(&self, latency_ms: u64) {
-        self.total_execution_ms.fetch_add(latency_ms, Ordering::Relaxed);
+        self.total_execution_ms
+            .fetch_add(latency_ms, Ordering::Relaxed);
         histogram!("execution_time_ms").record(latency_ms as f64);
     }
 
@@ -213,13 +220,15 @@ impl Metrics {
     pub fn log_dynamic_threshold_update(&self, new_threshold: f64) {
         counter!("dynamic_threshold_updates");
         gauge!("current_dynamic_threshold").set(new_threshold);
-        self.dynamic_threshold_updates.fetch_add(1, Ordering::Relaxed);
+        self.dynamic_threshold_updates
+            .fetch_add(1, Ordering::Relaxed);
         info!("Dynamic threshold updated to: {:.4}%", new_threshold);
     }
 
     /// Increments the dynamic_threshold_updates counter
     pub fn increment_dynamic_threshold_updates(&self) {
-        self.dynamic_threshold_updates.fetch_add(1, Ordering::SeqCst);
+        self.dynamic_threshold_updates
+            .fetch_add(1, Ordering::SeqCst);
     }
 
     // =============================================================================
@@ -235,14 +244,35 @@ impl Metrics {
     pub fn log_metrics(&self) {
         info!("Current Metrics:");
         info!("  New Pools: {}", self.pools_new.load(Ordering::SeqCst));
-        info!("  Updated Pools: {}", self.pools_updated.load(Ordering::SeqCst));
+        info!(
+            "  Updated Pools: {}",
+            self.pools_updated.load(Ordering::SeqCst)
+        );
         info!("  Total Pools: {}", self.total_pools.load(Ordering::SeqCst));
-        info!("  Opportunities Detected: {}", self.opportunities_detected.load(Ordering::SeqCst));
-        info!("  Opportunities Executed (Success): {}", self.opportunities_executed_success.load(Ordering::SeqCst));
-        info!("  Opportunities Executed (Failure): {}", self.opportunities_executed_failure.load(Ordering::SeqCst));
-        info!("  Execution Count: {}", self.execution_count.load(Ordering::SeqCst));
-        info!("  Total Execution Time (ms): {}", self.total_execution_ms.load(Ordering::SeqCst));
-        info!("  Dynamic Threshold Updates: {}", self.dynamic_threshold_updates.load(Ordering::SeqCst));
+        info!(
+            "  Opportunities Detected: {}",
+            self.opportunities_detected.load(Ordering::SeqCst)
+        );
+        info!(
+            "  Opportunities Executed (Success): {}",
+            self.opportunities_executed_success.load(Ordering::SeqCst)
+        );
+        info!(
+            "  Opportunities Executed (Failure): {}",
+            self.opportunities_executed_failure.load(Ordering::SeqCst)
+        );
+        info!(
+            "  Execution Count: {}",
+            self.execution_count.load(Ordering::SeqCst)
+        );
+        info!(
+            "  Total Execution Time (ms): {}",
+            self.total_execution_ms.load(Ordering::SeqCst)
+        );
+        info!(
+            "  Dynamic Threshold Updates: {}",
+            self.dynamic_threshold_updates.load(Ordering::SeqCst)
+        );
         let total_profit = self.total_profit.lock().unwrap();
         info!("  Total Profit: {}", *total_profit);
     }
@@ -416,9 +446,12 @@ impl MetricsCollector {
     /// Record an operation with its duration and success status
     pub fn record_operation(&mut self, operation_name: &str, duration: Duration, success: bool) {
         // Update operation-specific metrics
-        let metrics = self.operation_metrics.entry(operation_name.to_string()).or_default();
+        let metrics = self
+            .operation_metrics
+            .entry(operation_name.to_string())
+            .or_default();
         metrics.total_operations += 1;
-        
+
         if success {
             metrics.successful_operations += 1;
         } else {
@@ -438,14 +471,17 @@ impl MetricsCollector {
 
         // Update latency tracking
         self.latency_tracker.record(duration);
-        
+
         // Update throughput tracking
         self.throughput_tracker.record_operation();
 
         // Update error tracking
         self.error_tracker.record_operation(success);
 
-        debug!("Recorded operation '{}': duration={:?}, success={}", operation_name, duration, success);
+        debug!(
+            "Recorded operation '{}': duration={:?}, success={}",
+            operation_name, duration, success
+        );
     }
 
     /// Update system metrics
@@ -454,7 +490,8 @@ impl MetricsCollector {
 
         self.system_metrics.cpu_usage = self.system_info.global_cpu_info().cpu_usage();
         self.system_metrics.memory_usage_mb = self.system_info.used_memory() as f64 / 1_024_000.0;
-        self.system_metrics.memory_available_mb = self.system_info.available_memory() as f64 / 1_024_000.0;
+        self.system_metrics.memory_available_mb =
+            self.system_info.available_memory() as f64 / 1_024_000.0;
         self.system_metrics.memory_total_mb = self.system_info.total_memory() as f64 / 1_024_000.0;
         self.system_metrics.uptime_seconds = self.start_time.elapsed().as_secs();
     }
@@ -487,12 +524,16 @@ impl MetricsCollector {
         }
 
         MetricsSummary {
-            timestamp: SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
+            timestamp: SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs(),
             system_metrics: SystemMetricsSummary {
                 cpu_usage: self.system_metrics.cpu_usage,
                 memory_usage_mb: self.system_metrics.memory_usage_mb,
                 memory_usage_percent: if self.system_metrics.memory_total_mb > 0.0 {
-                    self.system_metrics.memory_usage_mb / self.system_metrics.memory_total_mb * 100.0
+                    self.system_metrics.memory_usage_mb / self.system_metrics.memory_total_mb
+                        * 100.0
                 } else {
                     0.0
                 },
@@ -540,18 +581,34 @@ impl LatencyTracker {
         let mut sorted_samples: Vec<_> = self.samples.iter().collect();
         sorted_samples.sort();
 
-        let avg = self.samples.iter().sum::<Duration>().as_millis() as f64 / self.samples.len() as f64;
+        let avg =
+            self.samples.iter().sum::<Duration>().as_millis() as f64 / self.samples.len() as f64;
         let p50_idx = (sorted_samples.len() as f64 * 0.50) as usize;
         let p95_idx = (sorted_samples.len() as f64 * 0.95) as usize;
         let p99_idx = (sorted_samples.len() as f64 * 0.99) as usize;
 
         LatencySummary {
             avg_latency_ms: avg,
-            p50_latency_ms: sorted_samples.get(p50_idx).unwrap_or(&&Duration::ZERO).as_millis() as f64,
-            p95_latency_ms: sorted_samples.get(p95_idx).unwrap_or(&&Duration::ZERO).as_millis() as f64,
-            p99_latency_ms: sorted_samples.get(p99_idx).unwrap_or(&&Duration::ZERO).as_millis() as f64,
-            min_latency_ms: sorted_samples.first().unwrap_or(&&Duration::ZERO).as_millis() as f64,
-            max_latency_ms: sorted_samples.last().unwrap_or(&&Duration::ZERO).as_millis() as f64,
+            p50_latency_ms: sorted_samples
+                .get(p50_idx)
+                .unwrap_or(&&Duration::ZERO)
+                .as_millis() as f64,
+            p95_latency_ms: sorted_samples
+                .get(p95_idx)
+                .unwrap_or(&&Duration::ZERO)
+                .as_millis() as f64,
+            p99_latency_ms: sorted_samples
+                .get(p99_idx)
+                .unwrap_or(&&Duration::ZERO)
+                .as_millis() as f64,
+            min_latency_ms: sorted_samples
+                .first()
+                .unwrap_or(&&Duration::ZERO)
+                .as_millis() as f64,
+            max_latency_ms: sorted_samples
+                .last()
+                .unwrap_or(&&Duration::ZERO)
+                .as_millis() as f64,
         }
     }
 }
@@ -567,7 +624,7 @@ impl ThroughputTracker {
     pub fn record_operation(&mut self) {
         let now = Instant::now();
         self.operations.push_back(now);
-        
+
         // Remove old operations outside the window
         let cutoff = now - self.window_duration;
         while let Some(&front) = self.operations.front() {
@@ -623,7 +680,11 @@ impl ErrorTracker {
             return 0.0;
         }
 
-        let errors = self.error_rate_window.iter().filter(|(_, success)| !*success).count();
+        let errors = self
+            .error_rate_window
+            .iter()
+            .filter(|(_, success)| !*success)
+            .count();
         errors as f64 / self.error_rate_window.len() as f64 * 100.0
     }
 }

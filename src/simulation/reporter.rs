@@ -1,7 +1,7 @@
 // src/simulation/reporter.rs
 //! Reporting module for simulation analytics and trade logs.
 
-use super::{SimulationAnalytics, SafeVirtualPortfolio};
+use super::{SafeVirtualPortfolio, SimulationAnalytics};
 use crate::arbitrage::opportunity::MultiHopArbOpportunity;
 use anyhow::Result;
 use chrono::{DateTime, Utc};
@@ -88,22 +88,36 @@ impl SimulationReporter {
     }
 
     /// TODO: Replace stub with real live summary printing logic
-    pub fn print_live_trade_summary(&self, _summary: &crate::simulation::portfolio::PortfolioSummary) {
+    pub fn print_live_trade_summary(
+        &self,
+        _summary: &crate::simulation::portfolio::PortfolioSummary,
+    ) {
         // No-op stub
     }
 
     /// TODO: Replace stub with real analytics export logic
-    pub fn export_analytics(&self, _analytics: &crate::simulation::analytics::SimulationAnalytics, _portfolio_summary: &crate::simulation::portfolio::PortfolioSummary) -> Result<(), anyhow::Error> {
+    pub fn export_analytics(
+        &self,
+        _analytics: &crate::simulation::analytics::SimulationAnalytics,
+        _portfolio_summary: &crate::simulation::portfolio::PortfolioSummary,
+    ) -> Result<(), anyhow::Error> {
         Ok(())
     }
 
     /// TODO: Replace stub with real log path retrieval logic
     pub fn get_log_paths(&self) -> (String, String) {
-        ("./simulation_trades.jsonl".to_string(), "./simulation_analytics.json".to_string())
+        (
+            "./simulation_trades.jsonl".to_string(),
+            "./simulation_analytics.json".to_string(),
+        )
     }
 
     /// TODO: Replace stub with real performance summary printing logic
-    pub fn print_performance_summary(&self, _analytics: &crate::simulation::analytics::SimulationAnalytics, _portfolio_summary: &crate::simulation::portfolio::PortfolioSummary) {
+    pub fn print_performance_summary(
+        &self,
+        _analytics: &crate::simulation::analytics::SimulationAnalytics,
+        _portfolio_summary: &crate::simulation::portfolio::PortfolioSummary,
+    ) {
         // No-op stub
     }
 }

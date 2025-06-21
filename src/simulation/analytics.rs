@@ -1,7 +1,7 @@
 // src/simulation/analytics.rs
 //! Analytics and performance tracking for simulation
 
-use super::portfolio::{PortfolioSummary, DexPerformance};
+use super::portfolio::{DexPerformance, PortfolioSummary};
 use serde::{Deserialize, Serialize};
 use solana_sdk::pubkey::Pubkey;
 use std::collections::HashMap;
@@ -54,12 +54,27 @@ impl SimulationAnalytics {
     }
 
     /// TODO: Replace stub with real trade execution analytics logic
-    pub fn record_trade_execution(&mut self, _receipt: &crate::simulation::engine::SimulatedTradeResult, _dex_name: &str) {
+    pub fn record_trade_execution(
+        &mut self,
+        _receipt: &crate::simulation::engine::SimulatedTradeResult,
+        _dex_name: &str,
+    ) {
         // No-op stub
     }
 
     /// TODO: Replace stub with real successful execution recording logic
-    pub fn record_successful_execution(&mut self, _token_in: &str, _token_out: &str, _amount_in: u64, _amount_out: u64, _profit: i64, _execution_time_ms: f64, _slippage_bps: f64, _fees_paid: u64, _dex: &str) {
+    pub fn record_successful_execution(
+        &mut self,
+        _token_in: &str,
+        _token_out: &str,
+        _amount_in: u64,
+        _amount_out: u64,
+        _profit: i64,
+        _execution_time_ms: f64,
+        _slippage_bps: f64,
+        _fees_paid: u64,
+        _dex: &str,
+    ) {
         self.successful_executions += 1;
         self.opportunities_executed += 1;
         self.total_pnl += _profit;
@@ -67,7 +82,15 @@ impl SimulationAnalytics {
     }
 
     /// TODO: Replace stub with real failed execution recording logic
-    pub fn record_failed_execution(&mut self, _token_in: &str, _token_out: &str, _amount_in: u64, _error_message: &str, _execution_time_ms: f64, _dex: &str) {
+    pub fn record_failed_execution(
+        &mut self,
+        _token_in: &str,
+        _token_out: &str,
+        _amount_in: u64,
+        _error_message: &str,
+        _execution_time_ms: f64,
+        _dex: &str,
+    ) {
         self.failed_executions += 1;
         self.opportunities_executed += 1;
     }

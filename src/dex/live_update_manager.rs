@@ -6,12 +6,12 @@
 
 use crate::{
     config::Config,
-    dex::api::DexClient,
-    utils::{DexType, PoolInfo},
-    webhooks::{
+    data::{
         integration::WebhookIntegrationService, processor::PoolUpdateProcessor,
         types::PoolUpdateType,
     },
+    dex::api::DexClient,
+    utils::{DexType, PoolInfo},
 };
 
 use anyhow::{anyhow, Result};

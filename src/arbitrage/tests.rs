@@ -1,9 +1,9 @@
 use crate::arbitrage::ArbHop;
+use crate::arbitrage::OrchestratorDeps;
 use crate::config::Config;
 use crate::dex::api::CommonSwapInfo;
 use crate::dex::api::{Quote, SwapInfo};
 use crate::dex::{BannedPairsManager, DexClient};
-use crate::arbitrage::OrchestratorDeps;
 use crate::error::{self, ArbError};
 use crate::monitoring::metrics::Metrics;
 use crate::utils::{DexType, PoolInfo, PoolToken};
@@ -279,8 +279,8 @@ impl DexClient for MockDexClient {
 
 #[tokio::test]
 async fn test_multihop_opportunity_detection_and_ban_logic() {
-    use crate::arbitrage::{ArbitrageOrchestrator, MultiHopArbOpportunity};
     use crate::arbitrage::orchestrator::core::OrchestratorDeps;
+    use crate::arbitrage::{ArbitrageOrchestrator, MultiHopArbOpportunity};
     use std::fs;
     use std::time::Duration;
 
@@ -382,8 +382,8 @@ async fn test_multihop_opportunity_detection_and_ban_logic() {
 
 #[tokio::test]
 async fn test_resolve_pools_for_opportunity_missing_pool() {
-    use crate::arbitrage::{ArbitrageOrchestrator, MultiHopArbOpportunity};
     use crate::arbitrage::orchestrator::core::OrchestratorDeps;
+    use crate::arbitrage::{ArbitrageOrchestrator, MultiHopArbOpportunity};
     use solana_sdk::pubkey::Pubkey;
 
     let pools_map = create_dummy_pools_map();

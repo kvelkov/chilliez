@@ -55,19 +55,18 @@ pub mod strategy; // Opportunity detection and path finding // Advanced multi-ho
 pub use self::analysis::ArbitragePath;
 pub use self::analysis::{
     ArbitrageAnalyzer, ContractSelector, ExecutionStrategy, FeeBreakdown,
-    OpportunityCalculationResult, OptimalArbitrageResult,
-    XYKSlippageModel, SlippageModel,
+    OpportunityCalculationResult, OptimalArbitrageResult, SlippageModel, XYKSlippageModel,
 };
 pub use self::jito_client::{
     BundleBuilder, BundleStats, JitoClient, JitoConfig as JitoClientConfig,
 };
+pub use self::opportunity::ArbHop;
+pub use self::orchestrator::core::OrchestratorDeps;
 pub use self::orchestrator::ArbitrageOrchestrator;
 pub use self::price_aggregator::{
     AggregatedQuote, PriceAggregator, PriceAggregatorConfig, QuoteSource,
 };
 pub use self::strategy::ArbitrageStrategy;
-pub use self::opportunity::ArbHop;
-pub use self::orchestrator::core::OrchestratorDeps;
 
 // New modular components (temporarily disabled)
 // pub use self::types::{ExecutionStrategy as TypesExecutionStrategy, CompetitivenessAnalysis, ExecutionRecommendation, DetectionMetrics};
@@ -78,9 +77,7 @@ pub use self::mev::{
     GasOptimizationMetrics, JitoBundleResult, JitoConfig, JitoHandler, MevProtectionConfig,
     MevProtectionStatus, MevProtectionStrategy, NetworkConditions,
 };
-pub use self::opportunity::{
-    AdvancedMultiHopOpportunity, EnhancedArbHop, MultiHopArbOpportunity,
-};
+pub use self::opportunity::{AdvancedMultiHopOpportunity, EnhancedArbHop, MultiHopArbOpportunity};
 pub use self::safety::{
     BalanceValidationConfig, ConfirmationConfig, FailureRecoveryStrategy,
     MevProtectionConfig as SafetyMevConfig, RetryPolicy, SafeTransactionHandler, SafetyConfig,

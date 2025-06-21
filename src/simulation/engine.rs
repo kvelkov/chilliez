@@ -32,13 +32,23 @@ pub struct SimulatedExecutionEngine {
 
 impl SimulatedExecutionEngine {
     /// Create a new `SimulatedExecutionEngine`
-    pub fn new(config: SimulationConfig, portfolio: Arc<SafeVirtualPortfolio>, sol_mint: Pubkey) -> Self {
-        Self { config, portfolio, sol_mint }
+    pub fn new(
+        config: SimulationConfig,
+        portfolio: Arc<SafeVirtualPortfolio>,
+        sol_mint: Pubkey,
+    ) -> Self {
+        Self {
+            config,
+            portfolio,
+            sol_mint,
+        }
     }
 
     /// TODO: Replace stub with real trade simulation logic
     /// Simulate executing a trade
-    pub async fn simulate_trade(&self, /* trade parameters */) -> Result<SimulatedTradeResult, anyhow::Error> {
+    pub async fn simulate_trade(
+        &self, /* trade parameters */
+    ) -> Result<SimulatedTradeResult, anyhow::Error> {
         Ok(SimulatedTradeResult {
             success: true,
             input_amount: 0,
@@ -53,7 +63,11 @@ impl SimulatedExecutionEngine {
 
     /// TODO: Replace stub with real arbitrage simulation logic
     /// Simulate arbitrage execution (stub for orchestrator compatibility)
-    pub async fn simulate_arbitrage_execution(&self, _opportunity: &crate::arbitrage::opportunity::MultiHopArbOpportunity, _dex_providers: &std::collections::HashMap<String, Arc<dyn crate::dex::api::DexClient>>) -> Result<SimulatedTradeResult, anyhow::Error> {
+    pub async fn simulate_arbitrage_execution(
+        &self,
+        _opportunity: &crate::arbitrage::opportunity::MultiHopArbOpportunity,
+        _dex_providers: &std::collections::HashMap<String, Arc<dyn crate::dex::api::DexClient>>,
+    ) -> Result<SimulatedTradeResult, anyhow::Error> {
         // For now, just call simulate_trade or return a dummy result
         Ok(SimulatedTradeResult {
             success: true,

@@ -9,7 +9,7 @@
 
 use anyhow::Result;
 use async_trait::async_trait;
-use log::{debug, warn, error};
+use log::{debug, error, warn};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::{Duration, Instant, SystemTime};
@@ -156,40 +156,43 @@ impl HealthMonitor {
         let mut total_score = 0.0;
         let mut component_count = 0;
 
-        debug!("Starting health checks for {} components", self.component_checks.len());
+        debug!(
+            "Starting health checks for {} components",
+            self.component_checks.len()
+        );
 
         // Run health checks for all components
         for (component_name, checker) in &self.component_checks {
-            let result = match tokio::time::timeout(
-                self.config.component_timeout,
-                checker.check_health()
-            ).await {
-                Ok(Ok(result)) => result,
-                Ok(Err(e)) => {
-                    warn!("Health check failed for {}: {}", component_name, e);
-                    HealthCheckResult {
-                        component: component_name.clone(),
-                        status: HealthStatus::Critical,
-                        score: 0.0,
-                        message: format!("Health check failed: {}", e),
-                        last_check: SystemTime::now(),
-                        response_time: check_start.elapsed(),
-                        details: HashMap::new(),
+            let result =
+                match tokio::time::timeout(self.config.component_timeout, checker.check_health())
+                    .await
+                {
+                    Ok(Ok(result)) => result,
+                    Ok(Err(e)) => {
+                        warn!("Health check failed for {}: {}", component_name, e);
+                        HealthCheckResult {
+                            component: component_name.clone(),
+                            status: HealthStatus::Critical,
+                            score: 0.0,
+                            message: format!("Health check failed: {}", e),
+                            last_check: SystemTime::now(),
+                            response_time: check_start.elapsed(),
+                            details: HashMap::new(),
+                        }
                     }
-                },
-                Err(_) => {
-                    warn!("Health check timeout for {}", component_name);
-                    HealthCheckResult {
-                        component: component_name.clone(),
-                        status: HealthStatus::Critical,
-                        score: 0.0,
-                        message: "Health check timeout".to_string(),
-                        last_check: SystemTime::now(),
-                        response_time: self.config.component_timeout,
-                        details: HashMap::new(),
+                    Err(_) => {
+                        warn!("Health check timeout for {}", component_name);
+                        HealthCheckResult {
+                            component: component_name.clone(),
+                            status: HealthStatus::Critical,
+                            score: 0.0,
+                            message: "Health check timeout".to_string(),
+                            last_check: SystemTime::now(),
+                            response_time: self.config.component_timeout,
+                            details: HashMap::new(),
+                        }
                     }
-                }
-            };
+                };
 
             total_score += result.score;
             component_count += 1;
@@ -229,8 +232,11 @@ impl HealthMonitor {
             history.remove(0);
         }
 
-        debug!("Health checks completed in {:?}. Overall status: {}", 
-               check_start.elapsed(), overall_status.as_str());
+        debug!(
+            "Health checks completed in {:?}. Overall status: {}",
+            check_start.elapsed(),
+            overall_status.as_str()
+        );
 
         Ok(report)
     }
@@ -257,25 +263,23 @@ impl HealthMonitor {
     /// Start continuous health monitoring
     pub async fn start_monitoring(&self) -> Result<()> {
         let mut interval = tokio::time::interval(self.config.check_interval);
-        
+
         loop {
             interval.tick().await;
-            
+
             match self.run_health_checks().await {
-                Ok(report) => {
-                    match report.overall_status {
-                        HealthStatus::Critical => {
-                            error!("CRITICAL HEALTH STATUS: {}", report.summary);
-                        },
-                        HealthStatus::Warning => {
-                            warn!("System health warning: {}", report.summary);
-                        },
-                        HealthStatus::Healthy => {
-                            debug!("System health check passed");
-                        },
-                        HealthStatus::Unknown => {
-                            warn!("Unknown system health status");
-                        }
+                Ok(report) => match report.overall_status {
+                    HealthStatus::Critical => {
+                        error!("CRITICAL HEALTH STATUS: {}", report.summary);
+                    }
+                    HealthStatus::Warning => {
+                        warn!("System health warning: {}", report.summary);
+                    }
+                    HealthStatus::Healthy => {
+                        debug!("System health check passed");
+                    }
+                    HealthStatus::Unknown => {
+                        warn!("Unknown system health status");
                     }
                 },
                 Err(e) => {
@@ -292,13 +296,16 @@ impl HealthMonitor {
         overall_status: HealthStatus,
         overall_score: f64,
     ) -> String {
-        let healthy_count = results.values()
+        let healthy_count = results
+            .values()
             .filter(|r| matches!(r.status, HealthStatus::Healthy))
             .count();
-        let warning_count = results.values()
+        let warning_count = results
+            .values()
             .filter(|r| matches!(r.status, HealthStatus::Warning))
             .count();
-        let critical_count = results.values()
+        let critical_count = results
+            .values()
             .filter(|r| matches!(r.status, HealthStatus::Critical))
             .count();
 
@@ -322,7 +329,8 @@ impl HealthMonitor {
         // Add details for non-healthy components
         if warning_count > 0 || critical_count > 0 {
             summary.push_str(". Issues: ");
-            let issues: Vec<String> = results.values()
+            let issues: Vec<String> = results
+                .values()
                 .filter(|r| !matches!(r.status, HealthStatus::Healthy))
                 .map(|r| format!("{}: {}", r.component, r.message))
                 .collect();
@@ -343,22 +351,33 @@ impl DatabaseHealthChecker {
 impl HealthChecker for DatabaseHealthChecker {
     async fn check_health(&self) -> Result<HealthCheckResult> {
         let start_time = Instant::now();
-        
+
         // TODO: Implement actual database connectivity check
         // This is a placeholder implementation
         tokio::time::sleep(Duration::from_millis(10)).await;
-        
+
         let response_time = start_time.elapsed();
         let is_healthy = response_time < Duration::from_secs(1);
-        
+
         let (status, score, message) = if is_healthy {
-            (HealthStatus::Healthy, 1.0, "Database connection healthy".to_string())
+            (
+                HealthStatus::Healthy,
+                1.0,
+                "Database connection healthy".to_string(),
+            )
         } else {
-            (HealthStatus::Warning, 0.5, "Database response slow".to_string())
+            (
+                HealthStatus::Warning,
+                0.5,
+                "Database response slow".to_string(),
+            )
         };
 
         let mut details = HashMap::new();
-        details.insert("response_time_ms".to_string(), response_time.as_millis().to_string());
+        details.insert(
+            "response_time_ms".to_string(),
+            response_time.as_millis().to_string(),
+        );
         details.insert("connection_pool_size".to_string(), "10".to_string()); // TODO: Get actual value
 
         Ok(HealthCheckResult {
@@ -387,25 +406,40 @@ impl CacheHealthChecker {
 impl HealthChecker for CacheHealthChecker {
     async fn check_health(&self) -> Result<HealthCheckResult> {
         let start_time = Instant::now();
-        
+
         // TODO: Implement actual cache health check
         // This is a placeholder implementation
         tokio::time::sleep(Duration::from_millis(5)).await;
-        
+
         let response_time = start_time.elapsed();
         let cache_hit_rate = 0.85; // TODO: Get actual cache hit rate
-        
+
         let (status, score, message) = if cache_hit_rate > 0.8 {
-            (HealthStatus::Healthy, 1.0, "Cache performing well".to_string())
+            (
+                HealthStatus::Healthy,
+                1.0,
+                "Cache performing well".to_string(),
+            )
         } else if cache_hit_rate > 0.6 {
-            (HealthStatus::Warning, 0.7, "Cache hit rate below optimal".to_string())
+            (
+                HealthStatus::Warning,
+                0.7,
+                "Cache hit rate below optimal".to_string(),
+            )
         } else {
-            (HealthStatus::Critical, 0.3, "Poor cache performance".to_string())
+            (
+                HealthStatus::Critical,
+                0.3,
+                "Poor cache performance".to_string(),
+            )
         };
 
         let mut details = HashMap::new();
         details.insert("hit_rate".to_string(), format!("{:.2}", cache_hit_rate));
-        details.insert("response_time_ms".to_string(), response_time.as_millis().to_string());
+        details.insert(
+            "response_time_ms".to_string(),
+            response_time.as_millis().to_string(),
+        );
         details.insert("cache_size".to_string(), "1024".to_string()); // TODO: Get actual value
 
         Ok(HealthCheckResult {
@@ -426,7 +460,10 @@ impl HealthChecker for CacheHealthChecker {
 
 impl NetworkHealthChecker {
     pub fn new(component_name: String, endpoints: Vec<String>) -> Self {
-        Self { component_name, endpoints }
+        Self {
+            component_name,
+            endpoints,
+        }
     }
 }
 
@@ -455,18 +492,36 @@ impl HealthChecker for NetworkHealthChecker {
         };
 
         let (status, score, message) = if success_rate >= 0.9 {
-            (HealthStatus::Healthy, 1.0, "All network endpoints healthy".to_string())
+            (
+                HealthStatus::Healthy,
+                1.0,
+                "All network endpoints healthy".to_string(),
+            )
         } else if success_rate >= 0.7 {
-            (HealthStatus::Warning, 0.7, "Some network endpoints experiencing issues".to_string())
+            (
+                HealthStatus::Warning,
+                0.7,
+                "Some network endpoints experiencing issues".to_string(),
+            )
         } else {
-            (HealthStatus::Critical, 0.3, "Multiple network endpoints failing".to_string())
+            (
+                HealthStatus::Critical,
+                0.3,
+                "Multiple network endpoints failing".to_string(),
+            )
         };
 
         let mut details = HashMap::new();
         details.insert("success_rate".to_string(), format!("{:.2}", success_rate));
-        details.insert("successful_endpoints".to_string(), successful_checks.to_string());
+        details.insert(
+            "successful_endpoints".to_string(),
+            successful_checks.to_string(),
+        );
         details.insert("total_endpoints".to_string(), total_checks.to_string());
-        details.insert("response_time_ms".to_string(), response_time.as_millis().to_string());
+        details.insert(
+            "response_time_ms".to_string(),
+            response_time.as_millis().to_string(),
+        );
 
         Ok(HealthCheckResult {
             component: self.component_name.clone(),
@@ -494,20 +549,38 @@ impl SystemResourcesHealthChecker {
 impl HealthChecker for SystemResourcesHealthChecker {
     async fn check_health(&self) -> Result<HealthCheckResult> {
         let start_time = Instant::now();
-        
+
         // TODO: Implement actual system resource monitoring
         // This is a placeholder implementation using random values
         let cpu_usage = rand::random::<f64>() * 100.0;
         let memory_usage = rand::random::<f64>() * 100.0;
         let disk_usage = rand::random::<f64>() * 100.0;
-        
+
         let response_time = start_time.elapsed();
 
         // Calculate health score based on resource usage
-        let cpu_score = if cpu_usage < 80.0 { 1.0 } else if cpu_usage < 95.0 { 0.5 } else { 0.0 };
-        let memory_score = if memory_usage < 85.0 { 1.0 } else if memory_usage < 95.0 { 0.5 } else { 0.0 };
-        let disk_score = if disk_usage < 90.0 { 1.0 } else if disk_usage < 98.0 { 0.5 } else { 0.0 };
-        
+        let cpu_score = if cpu_usage < 80.0 {
+            1.0
+        } else if cpu_usage < 95.0 {
+            0.5
+        } else {
+            0.0
+        };
+        let memory_score = if memory_usage < 85.0 {
+            1.0
+        } else if memory_usage < 95.0 {
+            0.5
+        } else {
+            0.0
+        };
+        let disk_score = if disk_usage < 90.0 {
+            1.0
+        } else if disk_usage < 98.0 {
+            0.5
+        } else {
+            0.0
+        };
+
         let score = (cpu_score + memory_score + disk_score) / 3.0;
         let status = HealthStatus::from_score(score);
 
@@ -522,7 +595,10 @@ impl HealthChecker for SystemResourcesHealthChecker {
         details.insert("cpu_usage".to_string(), format!("{:.1}%", cpu_usage));
         details.insert("memory_usage".to_string(), format!("{:.1}%", memory_usage));
         details.insert("disk_usage".to_string(), format!("{:.1}%", disk_usage));
-        details.insert("response_time_ms".to_string(), response_time.as_millis().to_string());
+        details.insert(
+            "response_time_ms".to_string(),
+            response_time.as_millis().to_string(),
+        );
 
         Ok(HealthCheckResult {
             component: self.component_name.clone(),
@@ -542,7 +618,10 @@ impl HealthChecker for SystemResourcesHealthChecker {
 
 impl DexHealthChecker {
     pub fn new(component_name: String, dex_name: String) -> Self {
-        Self { component_name, dex_name }
+        Self {
+            component_name,
+            dex_name,
+        }
     }
 }
 
@@ -550,26 +629,41 @@ impl DexHealthChecker {
 impl HealthChecker for DexHealthChecker {
     async fn check_health(&self) -> Result<HealthCheckResult> {
         let start_time = Instant::now();
-        
+
         // TODO: Implement actual DEX connectivity check
         // This is a placeholder implementation
         tokio::time::sleep(Duration::from_millis(100)).await;
-        
+
         let response_time = start_time.elapsed();
         let is_responsive = response_time < Duration::from_secs(2);
         let api_available = rand::random::<f64>() < 0.95; // 95% uptime simulation
-        
+
         let (status, score, message) = if is_responsive && api_available {
-            (HealthStatus::Healthy, 1.0, format!("{} DEX healthy", self.dex_name))
+            (
+                HealthStatus::Healthy,
+                1.0,
+                format!("{} DEX healthy", self.dex_name),
+            )
         } else if api_available {
-            (HealthStatus::Warning, 0.6, format!("{} DEX slow response", self.dex_name))
+            (
+                HealthStatus::Warning,
+                0.6,
+                format!("{} DEX slow response", self.dex_name),
+            )
         } else {
-            (HealthStatus::Critical, 0.0, format!("{} DEX unavailable", self.dex_name))
+            (
+                HealthStatus::Critical,
+                0.0,
+                format!("{} DEX unavailable", self.dex_name),
+            )
         };
 
         let mut details = HashMap::new();
         details.insert("dex_name".to_string(), self.dex_name.clone());
-        details.insert("response_time_ms".to_string(), response_time.as_millis().to_string());
+        details.insert(
+            "response_time_ms".to_string(),
+            response_time.as_millis().to_string(),
+        );
         details.insert("api_available".to_string(), api_available.to_string());
         details.insert("pool_count".to_string(), "150".to_string()); // TODO: Get actual pool count
 

@@ -13,12 +13,13 @@ pub mod clients;
 pub mod discovery;
 pub mod live_update_manager;
 pub mod math;
+pub mod protocols;
 
 // Test modules
 #[cfg(test)]
 pub mod dex_tests;
 
-// Re-export core API types
+// --- Public Re-exports ---
 pub use api::{CommonSwapInfo, DexClient, DexHealthStatus, PoolDiscoverable, Quote, SwapInfo};
 
 // Re-export discovery functionality (actively used items)
@@ -48,17 +49,20 @@ pub use discovery::{
 // };
 
 // Imports for client aggregation
-use crate::cache::Cache;
+use crate::data::cache::Cache;
 use crate::config::Config;
 use log::info;
 use std::sync::Arc;
 
-/// Initializes and returns all supported DEX client instances.
+/// Initializes and returns all supported DEX API client instances.
 ///
 /// Enhanced to include Meteora, Lifinity, and Phoenix clients with
 /// proper configuration and caching support.
-pub fn get_all_clients(_cache: Arc<Cache>, _app_config: Arc<Config>) -> Vec<Box<dyn DexClient>> {
-    info!("Initializing enhanced DEX clients...");
+pub fn get_all_clients(
+    _cache: Arc<Cache>,
+    _app_config: Arc<Config>,
+) -> Vec<Box<dyn DexClient>> {
+    info!("Initializing all DEX clients...");
 
     let clients: Vec<Box<dyn DexClient>> = vec![
         Box::new(clients::OrcaClient::new()),

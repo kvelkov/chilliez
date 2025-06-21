@@ -1,0 +1,3 @@
+// Moved from examples/jupiter_cache_demo.rs
+// Jupiter cache integration demo for arbitrage module.
+// ...existing code from old location...

@@ -3,10 +3,8 @@
 //! This module provides comprehensive real-time balance monitoring with WebSocket
 //! integration, thread-safe updates, and alert systems for discrepancies.
 
-use crate::{
-    error::ArbError,
-    solana::{rpc::SolanaRpcClient, websocket::SolanaWebsocketManager},
-};
+use crate::solana::websocket::SolanaWebsocketManager;
+use crate::{error::ArbError, solana::rpc::SolanaRpcClient};
 use dashmap::DashMap;
 use log::{debug, error, info, warn};
 use serde::{Deserialize, Serialize};

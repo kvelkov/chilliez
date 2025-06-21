@@ -1,0 +1,3 @@
+// Moved from examples/microsecond_trading_example.cpp
+// This file demonstrates microsecond-level trading simulation for arbitrage.
+// ...existing code from old location...

@@ -1,17 +1,14 @@
 // src/main.rs
 pub mod arbitrage;
-mod cache;
 mod config;
+pub mod data;
 mod dex;
 mod error;
-pub mod jito_bundle;
 pub mod monitoring;
 pub mod quicknode;
 pub mod simulation;
 mod solana;
 mod utils;
-pub mod webhooks;
-pub mod websocket;
 
 use crate::arbitrage::analysis::EnhancedSlippageModel;
 use crate::arbitrage::orchestrator::core::OrchestratorDeps;
@@ -19,8 +16,9 @@ use crate::arbitrage::orchestrator::core::TradingPairLocks;
 use crate::arbitrage::strategy::ArbitrageStrategy;
 use crate::{
     arbitrage::orchestrator::{ArbitrageOrchestrator, PriceDataProvider},
-    cache::Cache,
     config::Config,
+    data::cache::Cache,
+    data::integration::WebhookIntegrationService,
     dex::{
         discovery::{BannedPairsManager, PoolDiscoveryService, PoolValidationConfig},
         get_all_clients_arc, get_all_discoverable_clients,
@@ -30,7 +28,6 @@ use crate::{
     monitoring::LocalMetrics as Metrics,
     solana::rpc::SolanaRpcClient,
     utils::{setup_logging, PoolInfo},
-    webhooks::integration::WebhookIntegrationService,
 };
 use clap::{Arg, Command};
 use dashmap::DashMap;
@@ -240,7 +237,9 @@ async fn main() -> Result<(), ArbError> {
                 max_price_impact_bps: 500,
                 require_balanced_reserves: false,
             },
-            banned_pairs_manager: Arc::new(BannedPairsManager::new("config/banned_pairs_log.csv".to_string()).unwrap()),
+            banned_pairs_manager: Arc::new(
+                BannedPairsManager::new("config/banned_pairs_log.csv".to_string()).unwrap(),
+            ),
             degradation_mode: Arc::new(AtomicBool::new(false)),
             execution_enabled: Arc::new(AtomicBool::new(true)),
             last_health_check: Arc::new(tokio::sync::RwLock::new(Instant::now())),
@@ -459,9 +458,8 @@ async fn main() -> Result<(), ArbError> {
     };
 
     // Create banned pairs manager
-    let banned_pairs_manager = Arc::new(
-        BannedPairsManager::new("config/banned_pairs_log.csv".to_string()).unwrap()
-    );
+    let banned_pairs_manager =
+        Arc::new(BannedPairsManager::new("config/banned_pairs_log.csv".to_string()).unwrap());
 
     // --- QuickNode Opportunity Channel Initialization ---
     // NOTE: `opportunity_sender` is intentionally kept in scope for future event-driven integrations.

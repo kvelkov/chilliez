@@ -1,0 +1,336 @@
+
+** Persistent Instructions **
+
+* Files: List all the files for the service that we are building and the directories where it will be coded
+* Functions: For each function related to the service or functionality we are building, provide the following:
+    * Purpose: A clear and concise description of what the function does.
+    * Dependencies: A list of other functions, modules, or external crates that this function depends on.
+2. Code Analysis and Cleanup:
+* Existing Code: For each of the identified files, capture all existing functions and code blocks that can be reused, refactored, or repurposed for the  service or functionality we are building.
+* Dead Code Removal: Identify any dead code, commented-out code, or unused functions within these files that can be safely removed. At the end we must not have unused code that clutter the bot.
+3. Additional Services and Enhancements:
+* New Features: Brainstorm and suggest any additional services or enhancements that could be added to the  service or functionality we are building to improve its performance, profitability, or reliability.
+* Plan of Action: For each suggested enhancement, create a high-level plan of action for its implementation.
+By the end of this process, we should have a clear and comprehensive plan for building a new and improved  service or functionality.
+
+** End of Persistent Instructions **
+
+
+# Arbitrage Engine: Comprehensive Module/Function/Struct Map
+
+This section provides a full, up-to-date mapping of all modules, structs, enums, traits, and public functions in the `solana_arb_bot` crate, with a focus on the arbitrage engine. This map is intended as the authoritative reference for maintainers and should be updated after major refactors.
+
+---
+
+## How this map was generated
+- Generated using code analysis tools (e.g., `cargo-modules`, `cargo doc`, and custom scripts).
+- To update: run `cargo modules structure --lib` or use similar tools after structural changes.
+
+---
+
+<details>
+<summary>Click to expand full module/function/struct map</summary>
+
+```
+crate solana_arb_bot
+├── mod arbitrage: pub
+│   ├── struct ArbitrageCoordinator: pub
+│   │   ├── async fn execute_single_opportunity: pub
+│   │   ├── fn get_instruction_sender: pub
+│   │   ├── fn new: pub
+│   │   └── async fn run: pub
+│   ├── enum TradeInstruction: pub
+│   ├── mod calculator_tests: pub
+│   ├── mod jito_client: pub
+│   │   ├── struct BundleBuilder: pub
+│   │   │   ├── fn add_transaction: pub
+│   │   │   ├── fn add_transactions: pub
+│   │   │   ├── fn build: pub
+│   │   │   ├── fn is_empty: pub
+│   │   │   ├── fn new: pub
+│   │   │   └── fn size: pub
+│   │   ├── struct BundleStats: pub
+│   │   ├── struct JitoClient: pub
+│   │   │   ├── async fn calculate_optimal_tip: pub
+│   │   │   ├── fn create_tip_transaction: pub
+│   │   │   ├── fn get_stats: pub
+│   │   │   ├── fn get_success_rate: pub
+│   │   │   ├── fn is_healthy: pub
+│   │   │   ├── fn new: pub
+│   │   │   ├── fn new_with_defaults: pub
+│   │   │   ├── async fn simulate_bundle_submission: pub(self)
+│   │   │   ├── async fn submit_bundle: pub
+│   │   │   ├── async fn submit_bundle_with_tip: pub
+│   │   │   ├── async fn submit_transaction_with_retry: pub(self)
+│   │   │   ├── fn update_config: pub
+│   │   │   └── fn update_stats: pub(self)
+│   │   ├── struct JitoConfig: pub
+│   │   └── type Result: pub(self)
+│   ├── mod jupiter: pub
+│   │   ├── mod cache: pub
+│   │   │   ├── struct CacheConfig: pub
+│   │   │   ├── struct CacheEntry: pub
+│   │   │   │   ├── fn age_ms: pub
+│   │   │   │   ├── fn is_valid: pub
+│   │   │   │   ├── fn mark_accessed: pub
+│   │   │   │   └── fn new: pub
+│   │   │   ├── struct CacheKey: pub
+│   │   │   │   ├── fn bucket_amount: pub(self)
+│   │   │   │   └── fn from_params: pub
+│   │   │   ├── struct CacheMetrics: pub
+│   │   │   │   ├── fn hit_rate: pub
+│   │   │   │   └── fn reset: pub
+│   │   │   ├── struct CacheStats: pub
+│   │   │   │   ├── fn is_healthy: pub
+│   │   │   │   └── fn summary: pub
+│   │   │   ├── struct CacheStorage: pub(self)
+│   │   │   ├── struct JupiterQuoteCache: pub
+│   │   │   │   ├── async fn clear_volatile_cache: pub
+│   │   │   │   ├── async fn evict_lru: pub(self)
+│   │   │   │   ├── async fn get_cache_stats: pub
+│   │   │   │   ├── async fn get_market_conditions_hash: pub(self)
+│   │   │   │   ├── async fn get_metrics: pub
+│   │   │   │   ├── async fn get_quote: pub
+│   │   │   │   ├── fn new: pub
+│   │   │   │   ├── async fn should_invalidate_for_volatility: pub
+│   │   │   │   └── async fn store_quote: pub
+│   │   │   └── struct MarketSnapshot: pub(self)
+│   │   ├── mod integration: pub
+│   │   │   ├── enum CacheEfficiency: pub
+│   │   │   ├── struct CacheStatistics: pub
+│   │   │   │   ├── fn efficiency_rating: pub
+│   │   │   │   └── fn summary: pub
+│   │   │   ├── struct JupiterFallbackManager: pub
+│   │   │   │   ├── async fn clear_cache: pub
+│   │   │   │   ├── async fn create_route_evaluation_from_quote: pub(self)
+│   │   │   │   ├── async fn get_cache_statistics: pub
+│   │   │   │   ├── fn get_config: pub
+│   │   │   │   ├── async fn get_optimal_route: pub
+│   │   │   │   ├── async fn get_quote_with_cache: pub
+│   │   │   │   ├── async fn get_route_optimization_stats: pub
+│   │   │   │   ├── fn is_route_optimization_enabled: pub
+│   │   │   │   ├── async fn log_performance_stats: pub(self)
+│   │   │   │   ├── fn meets_profit_threshold: pub
+│   │   │   │   ├── fn new: pub
+│   │   │   │   ├── async fn record_metrics: pub(self)
+│   │   │   │   └── async fn update_cache_config: pub
+│   │   │   ├── struct JupiterIntegrationConfig: pub
+│   │   │   └── struct MonitoringConfig: pub
+│   │   └── mod routes: pub
+│   │       ├── struct CachedRouteSet: pub
+│   │       ├── struct JupiterRouteOptimizer: pub
+│   │       │   ├── fn are_market_conditions_stable: pub(self)
+│   │       │   ├── fn bucket_amount_for_routes: pub(self)
+│   │       │   ├── async fn cache_routes: pub(self)
+│   │       │   ├── fn calculate_complexity_score: pub(self)
+│   │       │   ├── fn calculate_market_conditions_hash: pub(self)
+│   │       │   ├── fn capture_market_conditions: pub(self)
+│   │       │   ├── fn cleanup_old_cache_entries: pub(self)
+│   │       │   ├── fn create_route_pattern: pub(self)
+│   │       │   ├── fn deduplicate_routes: pub(self)
+│   │       │   ├── async fn discover_routes: pub(self)
+│   │       │   ├── fn estimate_gas_cost_score: pub(self)
+│   │       │   ├── async fn evaluate_cached_routes: pub(self)
+│   │       │   ├── async fn evaluate_routes_parallel: pub(self)
+│   │       │   ├── async fn evaluate_single_route: pub(self)
+│   │       │   ├── async fn find_optimal_route: pub
+│   │       │   ├── fn generate_selection_reason: pub(self)
+│   │       │   ├── async fn get_cached_routes: pub(self)
+│   │       │   ├── fn new: pub
+│   │       │   ├── fn normalize_hop_count: pub(self)
+│   │       │   ├── fn normalize_output_amount: pub(self)
+│   │       │   ├── fn normalize_price_impact: pub(self)
+│   │       │   ├── fn select_best_route: pub(self)
+│   │       │   ├── async fn single_route_fallback: pub(self)
+│   │       │   └── async fn update_metrics: pub(self)
+│   │       ├── struct MarketConditions: pub
+│   │       ├── struct MultiRouteResult: pub
+│   │       ├── struct RouteCacheConfig: pub
+│   │       ├── struct RouteCacheKey: pub
+│   │       ├── struct RouteEvaluation: pub
+│   │       ├── struct RouteOptimizationConfig: pub
+│   │       ├── struct RouteReliability: pub
+│   │       ├── struct RouteScoreComponents: pub
+│   │       └── struct RouteScoringConfig: pub
+│   ├── mod mev: pub
+│   │   ├── struct BundleConfirmationResult: pub(self)
+│   │   ├── struct BundleParams: pub
+│   │   ├── struct BundleStatus: pub
+│   │   ├── struct BundleSubmissionRequest: pub
+│   │   ├── struct BundleSubmissionResponse: pub
+│   │   ├── struct BundleTransaction: pub
+│   │   ├── struct GasOptimizationMetrics: pub
+│   │   ├── struct JitoBundleResult: pub
+│   │   ├── struct JitoConfig: pub
+│   │   ├── struct JitoError: pub
+│   │   ├── struct JitoHandler: pub
+│   │   │   ├── async fn analyze_mev_risk: pub
+│   │   │   ├── async fn apply_dynamic_fee_adjustment: pub(self)
+│   │   │   ├── async fn calculate_optimal_priority_fee: pub
+│   │   │   ├── async fn create_flashloan_protection_instructions: pub(self)
+│   │   │   ├── async fn create_mev_protected_bundle: pub
+│   │   │   ├── async fn create_timing_randomization_instructions: pub(self)
+│   │   │   ├── async fn create_tip_transaction: pub(self)
+│   │   │   ├── fn encode_transactions: pub(self)
+│   │   │   ├── async fn estimate_compute_units: pub(self)
+│   │   │   ├── async fn get_bundle_status: pub(self)
+│   │   │   ├── async fn get_metrics: pub
+│   │   │   ├── async fn get_network_conditions: pub
+│   │   │   ├── async fn get_optimal_tip: pub
+│   │   │   ├── async fn get_protection_status: pub
+│   │   │   ├── async fn get_recent_blockhash: pub(self)
+│   │   │   ├── fn get_tip_accounts: pub
+│   │   │   ├── async fn get_transaction_bundles: pub
+│   │   │   ├── fn new: pub
+│   │   │   ├── async fn recommend_protection_strategy: pub
+│   │   │   ├── async fn record_transaction_result: pub
+│   │   │   ├── async fn store_transaction_bundle: pub
+│   │   │   ├── async fn submit_bundle: pub
+│   │   │   ├── async fn submit_bundle_request: pub(self)
+│   │   │   ├── async fn submit_protected_bundle: pub
+│   │   │   ├── async fn update_network_conditions: pub
+│   │   │   ├── fn validate_bundle: pub(self)
+│   │   │   └── async fn wait_for_bundle_confirmation: pub(self)
+│   │   ├── struct MevProtectionConfig: pub
+│   │   ├── struct MevProtectionStatus: pub
+│   │   ├── struct MevProtectionStrategy: pub
+│   │   └── struct NetworkConditions: pub
+│   │       └── fn new: pub
+│   ├── mod opportunity: pub
+│   │   ├── struct AdvancedMultiHopOpportunity: pub
+│   │   │   ├── fn execution_urgency: pub
+│   │   │   ├── fn is_profitable: pub
+│   │   │   ├── fn log_summary: pub
+│   │   │   └── fn to_legacy: pub
+│   │   ├── struct ArbHop: pub
+│   │   ├── struct EnhancedArbHop: pub
+│   │   ├── struct LegacyArbHop: pub
+│   │   └── struct MultiHopArbOpportunity: pub
+│   │       ├── fn calculate_risk_score: pub
+│   │       ├── fn is_profitable: pub
+│   │       ├── fn is_profitable_by_pct: pub
+│   │       ├── fn is_profitable_by_usd: pub
+│   │       ├── fn log_hop_details: pub
+│   │       ├── fn log_summary: pub
+│   │       ├── fn simulate_execution: pub
+│   │       ├── fn update_estimated_usd_profit: pub
+│   │       └── fn validate: pub
+│   ├── mod price_aggregator: pub
+│   │   ├── struct AggregatedQuote: pub
+│   │   ├── struct CrossValidationConfig: pub
+│   │   ├── struct CrossValidationResult: pub
+│   │   ├── struct PriceAggregator: pub
+│   │   │   ├── fn calculate_confidence_for_dex_quote: pub(self)
+│   │   │   ├── async fn cross_validate_quotes: pub(self)
+│   │   │   ├── async fn get_best_quote: pub
+│   │   │   ├── async fn get_jupiter_quote: pub(self)
+│   │   │   ├── async fn get_primary_quotes: pub(self)
+│   │   │   ├── fn has_high_price_deviation: pub(self)
+│   │   │   ├── async fn log_cross_validation_result: pub(self)
+│   │   │   ├── fn new: pub
+│   │   │   ├── async fn record_aggregation_metrics: pub(self)
+│   │   │   ├── async fn select_best_quote: pub(self)
+│   │   │   └── async fn should_use_jupiter_fallback: pub(self)
+│   │   ├── struct PriceAggregatorConfig: pub
+│   │   ├── trait PriceAggregatorMetrics: pub(self)
+│   │   └── enum QuoteSource: pub
+│   ├── mod safety: pub
+│   │   ├── struct BalanceSnapshot: pub
+│   │   ├── struct BalanceValidationConfig: pub
+│   │   ├── struct ConfirmationConfig: pub
+│   │   ├── enum FailureRecoveryStrategy: pub
+│   │   ├── struct MevProtectionConfig: pub
+│   │   ├── struct NetworkStatus: pub
+│   │   ├── struct RetryPolicy: pub
+│   │   ├── struct SafeTransactionHandler: pub
+│   │   │   ├── async fn analyze_failure_and_recover: pub(self)
+│   │   │   ├── async fn apply_mev_protection: pub(self)
+│   │   │   ├── async fn apply_recovery_strategy: pub(self)
+│   │   │   ├── async fn assess_mev_risk: pub(self)
+│   │   │   ├── async fn attempt_execution: pub(self)
+│   │   │   ├── fn calculate_anti_mev_delay: pub(self)
+│   │   │   ├── async fn calculate_jito_tip: pub(self)
+│   │   │   ├── async fn calculate_priority_fee: pub(self)
+│   │   │   ├── fn calculate_retry_delay: pub(self)
+│   │   │   ├── fn calculate_slippage_experienced: pub(self)
+│   │   │   ├── async fn check_network_congestion: pub(self)
+│   │   │   ├── async fn create_priority_fee_instruction: pub(self)
+│   │   │   ├── fn determine_recovery_strategy: pub(self)
+│   │   │   ├── async fn estimate_actual_output: pub(self)
+│   │   │   ├── fn estimate_transaction_fee: pub(self)
+│   │   │   ├── async fn execute_safe_arbitrage: pub
+│   │   │   ├── async fn execute_transaction_attempt: pub(self)
+│   │   │   ├── async fn execute_transaction_with_monitoring: pub(self)
+│   │   │   ├── async fn execute_with_advanced_recovery: pub
+│   │   │   ├── async fn execute_with_safety_checks: pub
+│   │   │   ├── async fn get_current_balance_snapshot: pub(self)
+│   │   │   ├── async fn get_network_congestion_factor: pub(self)
+│   │   │   ├── fn new: pub
+│   │   │   ├── async fn perform_pre_execution_checks: pub(self)
+│   │   │   ├── async fn record_execution: pub(self)
+│   │   │   ├── async fn record_successful_transaction: pub(self)
+│   │   │   ├── fn should_retry: pub(self)
+│   │   │   ├── async fn validate_pool_liquidity: pub(self)
+│   │   │   ├── async fn validate_post_execution: pub(self)
+│   │   │   ├── async fn validate_pre_execution: pub(self)
+│   │   │   └── async fn validate_sufficient_balance: pub(self)
+│   │   ├── struct SafetyConfig: pub
+│   │   ├── enum SafetyViolation: pub
+│   │   ├── struct SlippageProtectionConfig: pub
+│   │   ├── struct TransactionRecord: pub
+│   │   ├── struct TransactionResult: pub
+│   │   └── struct TransactionSafetyConfig: pub
+│   ├── mod strategy: pub
+│   │   ├── struct ArbitrageStrategy: pub
+│   │   │   ├── fn add_to_blacklist: pub
+│   │   │   ├── async fn detect_all_opportunities: pub
+│   │   │   ├── fn detect_cycles_from_token: pub(self)
+│   │   │   ├── fn extract_cycle_from_node: pub(self)
+│   │   │   ├── fn filter_opportunities: pub(self)
+│   │   │   ├── fn get_blacklist: pub
+│   │   │   ├── fn get_blacklist_reasons: pub
+│   │   │   ├── fn get_dex_type_for_pool: pub(self)
+│   │   │   ├── fn get_major_tokens: pub(self)
+│   │   │   ├── fn get_min_profit_threshold_pct: pub
+│   │   │   ├── fn get_token_mint_from_symbol: pub(self)
+│   │   │   ├── fn get_token_symbol: pub(self)
+│   │   │   ├── fn is_blacklisted: pub
+│   │   │   ├── fn new_from_config: pub
+│   │   │   └── fn set_min_profit_threshold: pub
+│   │   ├── struct EdgeWeight: pub(self)
+│   │   └── struct MarketGraph: pub(self)
+│   │       ├── fn add_pool: pub(self)
+│   │       ├── fn add_pool_with_overflow_tracking: pub(self)
+│   │       ├── fn calculate_exchange_rate: pub(self)
+│   │       ├── fn calculate_exchange_rate_with_overflow: pub(self)
+│   │       ├── fn edge_count: pub(self)
+│   │       ├── fn get_or_create_node: pub(self)
+│   │       ├── fn new: pub(self)
+│   │       └── fn node_count: pub(self)
+│   └── mod tests: pub
+│       ├── struct MockDexClient: pub(self)
+│       │   ├── fn calculate_onchain_quote: pub(self)
+│       │   ├── async fn discover_pools: pub(self)
+│       │   ├── fn get_name: pub(self)
+│       │   ├── fn get_swap_instruction: pub(self)
+│       │   ├── async fn get_swap_instruction_enhanced: pub(self)
+│       │   ├── async fn health_check: pub(self)
+│       │   └── fn new: pub
+│       ├── fn create_dummy_pools_map: pub(self)
+│       ├── fn dummy_banned_pairs_manager: pub(self)
+│       ├── fn dummy_config: pub(self)
+│       ├── fn dummy_config_for_multihop_test: pub(self)
+│       ├── fn dummy_metrics: pub(self)
+│       ├── async fn test_engine_all_fields_and_methods_referenced: pub(self)
+│       ├── async fn test_engine_initialization_and_threshold: pub(self)
+│       ├── async fn test_engine_initialization_with_dex_clients: pub(self)
+│       ├── async fn test_exercise_all_fee_manager_functions: pub(self)
+│       ├── async fn test_multihop_opportunity_detection_and_ban_logic: pub(self)
+│       └── async fn test_resolve_pools_for_opportunity_missing_pool: pub(self)
+```
+
+</details>
+
+---
+
+For more details on each module, see the code or run `cargo doc --open`.

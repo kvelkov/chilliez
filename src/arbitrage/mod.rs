@@ -30,13 +30,13 @@ pub mod tests; // Jito bundle client for MEV protection
 pub mod jupiter; // Jupiter-specific arbitrage components (cache, integration)
 
 // Modular orchestrator (replaces the monolithic orchestrator.rs)
-pub mod orchestrator; // Modular central controller with focused components
+// pub mod orchestrator; // Modular central controller with focused components (REMOVED: file does not exist)
 
 // Specialized modules
-pub mod analysis; // Mathematical analysis, fees, thresholds
+// pub mod analysis; // Mathematical analysis, fees, thresholds (REMOVED: file does not exist)
 pub mod mev; // MEV protection and Jito integration
 pub mod price_aggregator; // Price aggregation with Jupiter fallback
-pub mod routing;
+// pub mod routing; (REMOVED: file does not exist)
 pub mod safety; // Transaction safety, retry logic, and recovery
 pub mod strategy; // Opportunity detection and path finding // Advanced multi-hop and smart order routing
 
@@ -52,17 +52,17 @@ pub mod strategy; // Opportunity detection and path finding // Advanced multi-ho
 // =============================================================================
 
 // Primary exports from new consolidated modules
-pub use self::analysis::ArbitragePath;
-pub use self::analysis::{
-    ArbitrageAnalyzer, ContractSelector, ExecutionStrategy, FeeBreakdown,
-    OpportunityCalculationResult, OptimalArbitrageResult, SlippageModel, XYKSlippageModel,
-};
+// pub use self::analysis::ArbitragePath; // REMOVED: analysis module does not exist
+// pub use self::analysis::{
+//     ArbitrageAnalyzer, ContractSelector, ExecutionStrategy, FeeBreakdown,
+//     OpportunityCalculationResult, OptimalArbitrageResult, SlippageModel, XYKSlippageModel,
+// };
+// pub use self::orchestrator::core::OrchestratorDeps; // REMOVED: orchestrator module does not exist
+// pub use self::orchestrator::ArbitrageOrchestrator; // REMOVED: orchestrator module does not exist
 pub use self::jito_client::{
     BundleBuilder, BundleStats, JitoClient, JitoConfig as JitoClientConfig,
 };
 pub use self::opportunity::ArbHop;
-pub use self::orchestrator::core::OrchestratorDeps;
-pub use self::orchestrator::ArbitrageOrchestrator;
 pub use self::price_aggregator::{
     AggregatedQuote, PriceAggregator, PriceAggregatorConfig, QuoteSource,
 };

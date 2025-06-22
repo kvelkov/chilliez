@@ -43,15 +43,6 @@ use num_traits::ToPrimitive;
 use rust_decimal::Decimal;
 use std::str::FromStr;
 
-/// Orca Whirlpools CLMM math implementation
-pub mod orca;
-
-/// Raydium V4 AMM math implementation  
-pub mod raydium;
-
-/// Phoenix order book DEX math implementation
-pub mod phoenix;
-
 /// High-precision CLMM calculations for concentrated liquidity pools
 pub mod clmm {
     use super::*;

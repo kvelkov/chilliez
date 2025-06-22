@@ -3,7 +3,7 @@
 //! Intelligent caching for Jupiter API responses to reduce external API calls by 60-80%.
 //! Implements time-based TTL, amount bucketing, volatility-based invalidation, and LRU eviction.
 
-use crate::dex::clients::jupiter_api::QuoteResponse;
+use crate::dex::protocols::jupiter_api::QuoteResponse;
 use log::{debug, info, warn};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -434,7 +434,7 @@ impl CacheStats {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dex::clients::jupiter_api::QuoteResponse;
+    use crate::dex::protocols::jupiter_api::QuoteResponse;
 
     fn create_test_quote_response(out_amount: u64) -> QuoteResponse {
         QuoteResponse {

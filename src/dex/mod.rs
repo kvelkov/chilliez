@@ -9,8 +9,6 @@
 
 // Core modules
 pub mod api;
-pub mod clients;
-pub mod discovery;
 pub mod live_update_manager;
 pub mod math;
 pub mod protocols;
@@ -21,16 +19,6 @@ pub mod dex_tests;
 
 // --- Public Re-exports ---
 pub use api::{CommonSwapInfo, DexClient, DexHealthStatus, PoolDiscoverable, Quote, SwapInfo};
-
-// Re-export discovery functionality (actively used items)
-pub use discovery::{
-    validate_single_pool,
-    // Note: PoolDiscoveryService, find_dex_client_for_pool, POOL_PARSER_REGISTRY
-    // are imported directly from discovery in main.rs and other places
-    BannedPairsManager,
-    // Used in orchestrator.rs and webhooks:
-    PoolValidationConfig,
-};
 
 // Re-export live update management (items used in main.rs)
 // Note: These are imported directly in main.rs from dex::live_update_manager
